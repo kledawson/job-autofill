@@ -57,6 +57,14 @@ export function BasicsSection({ profile: p, onChange }: SectionProps) {
           <Field label="Phone" required>
             <Input type="tel" value={p.phone} onChange={(e) => set({ phone: e.target.value })} autoComplete="tel" />
           </Field>
+          <Field label="Current position" hint="Your job title now. Leave blank if you’re not currently working." className="sm:col-span-2">
+            <Input
+              value={p.currentTitle}
+              onChange={(e) => set({ currentTitle: e.target.value })}
+              placeholder="Software Engineering Intern"
+              autoComplete="organization-title"
+            />
+          </Field>
         </Grid>
         <Field label="Street address">
           <Input value={p.address} onChange={(e) => set({ address: e.target.value })} autoComplete="street-address" />

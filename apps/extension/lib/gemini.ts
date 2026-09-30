@@ -60,14 +60,13 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 
-export function generateText(apiKey: string, model: string, prompt: string): Promise<string> {
+type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
+
+function generate(apiKey: string, model: string, parts: Part[], generationConfig: object): Promise<string> {
   return enqueue(async () => {
     const body = await call(apiKey, model, ':generateContent', {
       method: 'POST',
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.7 },
-      }),
+      body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig }),
     });
     const candidate = body?.candidates?.[0];
     const text = (candidate?.content?.parts ?? [])
@@ -81,6 +80,40 @@ export function generateText(apiKey: string, model: string, prompt: string): Pro
     }
     return text;
   });
+}
+
+export function generateText(apiKey: string, model: string, prompt: string): Promise<string> {
+  return generate(apiKey, model, [{ text: prompt }], { temperature: 0.7 });
+}
+
+/**
+ * Returns the parsed JSON reply (unvalidated) for a text or PDF input. Asks for low "thinking" to keep it
+ * fast, and retries without that setting if the configured model does not accept it.
+ */
+export async function generateJson(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  input: { text: string } | { pdfBase64: string },
+  responseSchema: object,
+): Promise<unknown> {
+  const parts: Part[] =
+    'text' in input
+      ? [{ text: `${prompt}\n\nResume text:\n${input.text}` }]
+      : [{ inline_data: { mime_type: 'application/pdf', data: input.pdfBase64 } }, { text: prompt }];
+  const config = { temperature: 0, responseMimeType: 'application/json', responseSchema };
+  let text: string;
+  try {
+    text = await generate(apiKey, model, parts, { ...config, thinkingConfig: { thinkingLevel: 'low' } });
+  } catch (err) {
+    if (!(err instanceof GeminiError && err.status === 400 && /thinking/i.test(err.message))) throw err;
+    text = await generate(apiKey, model, parts, config);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new GeminiError('Gemini returned something that was not valid JSON. Try again.');
+  }
 }
 
 /** Cheap key check: fetch the model's metadata. */

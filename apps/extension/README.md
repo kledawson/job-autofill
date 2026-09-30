@@ -14,7 +14,7 @@ npm run build
 ```
 
 In Chrome, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and pick
-`apps/extension/.output/chrome-mv3`. Onboarding opens automatically. For live reload while developing,
+`apps/extension/dist/chrome-mv3`. Onboarding opens automatically. For live reload while developing,
 run `npm run dev`.
 
 The manifest includes a public key, so the extension ID is always `kjepjmmbimmbpdfinkippakkmhbglccc`.
@@ -36,6 +36,13 @@ Then use **Sign in with Google and create sheet** in onboarding or Settings → 
 Create a free key at [Google AI Studio](https://aistudio.google.com/app/apikey) without enabling billing,
 and paste it into onboarding or Settings → Connections. The default model is `gemini-flash-latest`;
 you can change it there. Without a key, free-response questions are outlined for you to answer.
+
+Setup can fill empty profile fields from your PDF resume (**Fill my profile from resume**). The resume
+is read on your computer with [pdf.js](https://mozilla.github.io/pdf.js/): name, contact details, links,
+current position, education, experience, and skills. Contact details are reliable; the other sections are
+best-effort because layouts vary. If a section isn't found (or the PDF is a scan), you can have Gemini read
+just that part, which sends the resume text to Gemini. Work authorization, preferences, and
+self-identification are never inferred.
 
 ## How it works
 
@@ -66,6 +73,6 @@ npm run test:e2e  # builds, then drives the real extension in Chromium (hermetic
 
 ## Not in the MVP yet
 
-Resume parsing with Gemini, generic fallback for unknown sites, Workday, Gemini classification of
+Generic fallback for unknown sites, Workday, Gemini classification of
 unrecognized labels, saved-answer reuse and a Regenerate button, passive submit detection and
 auto-marking Abandoned, an offline Sheets write queue, and multiple profiles.

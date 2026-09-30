@@ -11,6 +11,7 @@ import {
 } from '@/components/ProfileSections';
 import { DataSection, DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
 import { Button, cx } from '@/components/ui';
+import { mergeResumeDraft } from '@/lib/resume';
 
 const NAV = [
   ['profile', 'Profile'],
@@ -23,7 +24,7 @@ type Tab = (typeof NAV)[number][0];
 
 export default function Settings() {
   const [tab, setTab] = useState<Tab>(() => (location.hash.slice(1) as Tab) || 'profile');
-  const { profile, update, save, dirty, savedAt, reload } = useProfile();
+  const { profile, update, save, replace, dirty, savedAt, reload } = useProfile();
   const { settings } = usePublicSettings();
   const [version, setVersion] = useState(0);
 
@@ -90,7 +91,18 @@ export default function Settings() {
             <EeoSection {...sectionProps} />
           </div>
         )}
-        {tab === 'documents' && <DocumentsSection />}
+        {tab === 'documents' && (
+          <DocumentsSection
+            hasGeminiKey={settings?.hasGeminiKey}
+            onNeedKey={() => setTab('connections')}
+            onResumeDraft={async (draft) => {
+              const merged = mergeResumeDraft(profile, draft);
+              await replace(merged.profile);
+              setVersion((v) => v + 1);
+              return merged.filled;
+            }}
+          />
+        )}
         {tab === 'connections' && settings && (
           <>
             <GeminiSection settings={settings} />

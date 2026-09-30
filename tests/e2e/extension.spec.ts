@@ -8,8 +8,8 @@ import { join, resolve } from 'node:path';
 
 declare const chrome: any;
 
-// `npm run test:e2e` builds first. The extension is loaded from apps/extension/.output/chrome-mv3.
-const EXTENSION = resolve(import.meta.dirname, '../../apps/extension/.output/chrome-mv3');
+// `npm run test:e2e` builds first. The extension is loaded from apps/extension/dist/chrome-mv3.
+const EXTENSION = resolve(import.meta.dirname, '../../apps/extension/dist/chrome-mv3');
 const LEVER_URL = 'https://jobs.lever.co/contoso/6ed76ce8-4156-4b60-b120-403538bd66cd';
 const LEVER_FIXTURE = readFileSync(resolve(import.meta.dirname, '../fixtures/lever.html'), 'utf8');
 
@@ -18,6 +18,69 @@ let server: Server;
 let worker: Worker;
 let extensionId: string;
 const geminiPrompts: string[] = [];
+let resumeUploads = 0;
+
+/** A one-page text PDF. Each row is [left text, right-aligned text?], like a typical resume. */
+function makeResumePdf(rows: [string, string?][]): Buffer {
+  const esc = (t: string) => t.replace(/[\\()]/g, (c) => `\\${c}`);
+  let y = 760;
+  const ops = rows
+    .map(([left, right]) => {
+      const out = [`BT /F1 11 Tf 50 ${y} Td (${esc(left)}) Tj ET`];
+      if (right) out.push(`BT /F1 11 Tf 430 ${y} Td (${esc(right)}) Tj ET`);
+      y -= 16;
+      return out.join('\n');
+    })
+    .join('\n');
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${Buffer.byteLength(ops)} >>\nstream\n${ops}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objects.forEach((body, i) => {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('');
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf, 'latin1');
+}
+
+// Fictional resume used for setup.
+const RESUME_PDF = makeResumePdf([
+  ['Jordan Rivera'],
+  ['San Francisco, CA | 415-555-0100 | jordan@example.com | github.com/jordanrivera'],
+  ['EDUCATION'],
+  ['University of California, Berkeley', 'Berkeley, CA'],
+  ['Bachelor of Science in Computer Science', 'Aug 2022 - May 2026'],
+  ['EXPERIENCE'],
+  ['Software Engineering Intern', 'Jun 2025 - Present'],
+  ['Acme Corp', 'San Francisco, CA'],
+  ['- Built a billing dashboard in React used by 40 support agents.'],
+  ['SKILLS'],
+  ['Languages: TypeScript, React, Python'],
+]);
+// What the mocked Gemini "reads" from the uploaded resume.
+const RESUME_REPLY = {
+  firstName: 'Jordan',
+  lastName: 'Rivera',
+  email: 'jordan@example.com',
+  phone: '415-555-0100',
+  city: 'San Francisco',
+  state: 'CA',
+  country: 'United States',
+  github: 'github.com/jordanrivera',
+  currentTitle: 'Software Engineering Intern',
+  education: [{ school: 'University of California, Berkeley', degree: 'Bachelor of Science', major: 'Computer Science', startDate: '2022-08', endDate: '2026' }],
+  experience: [{ title: 'Software Engineering Intern', company: 'Acme Corp', current: true, bullets: '• Built a billing dashboard in React' }],
+  skills: ['TypeScript', 'React'],
+};
 // Set SCREENSHOTS=<dir> to save screenshots of each screen.
 const shot = async (page: Page, name: string) => {
   if (process.env.SCREENSHOTS) await page.screenshot({ path: join(process.env.SCREENSHOTS, `${name}.png`), fullPage: true });
@@ -61,16 +124,17 @@ test.beforeAll(async () => {
   );
   await context.route('https://generativelanguage.googleapis.com/**', async (route) => {
     const body = route.request().postDataJSON();
-    if (body) geminiPrompts.push(body.contents[0].parts[0].text);
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(
-        body
-          ? { candidates: [{ content: { parts: [{ text: 'I led the Acme billing dashboard project and loved it.' }] } }] }
-          : { name: 'models/gemini-flash-latest' },
-      ),
-    });
+    const parts = body?.contents?.[0]?.parts ?? [];
+    const isResume = parts.some((p: any) => p.inline_data?.mime_type === 'application/pdf');
+    let reply: object = { name: 'models/gemini-flash-latest' };
+    if (isResume) {
+      resumeUploads++;
+      reply = { candidates: [{ content: { parts: [{ text: JSON.stringify(RESUME_REPLY) }] } }] };
+    } else if (body) {
+      geminiPrompts.push(parts[0].text);
+      reply = { candidates: [{ content: { parts: [{ text: 'I led the Acme billing dashboard project and loved it.' }] } }] };
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) });
   });
   worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
   extensionId = new URL(worker.url()).host;
@@ -92,7 +156,7 @@ test('pins the extension ID used for the Google OAuth client', () => {
   expect(extensionId).toBe('kjepjmmbimmbpdfinkippakkmhbglccc');
 });
 
-test('onboarding collects the profile, resume, and Gemini key', async () => {
+test('onboarding reads the resume into the profile, then collects the rest', async () => {
   const page = await onboardingPage();
   await page.setViewportSize({ width: 900, height: 900 });
   await expect(page.getByText('Apply faster, stay in control.')).toBeVisible();
@@ -103,34 +167,40 @@ test('onboarding collects the profile, resume, and Gemini key', async () => {
   await page.locator('input[type=file]').first().setInputFiles({
     name: 'Jordan Rivera Resume.pdf',
     mimeType: 'application/pdf',
-    buffer: Buffer.from('%PDF-1.4\n% test resume\n'),
+    buffer: RESUME_PDF,
   });
   await expect(page.getByText('Jordan Rivera Resume.pdf')).toBeVisible();
+
+  // The resume is read on this computer: no Gemini key needed, nothing sent anywhere.
+  const started = Date.now();
+  await page.getByRole('button', { name: 'Fill my profile from resume' }).click();
+  await expect(page.getByText(/Filled from your resume: first name, last name, email/)).toBeVisible();
+  expect(Date.now() - started).toBeLessThan(5000);
+  expect(resumeUploads).toBe(0);
+  await expect(page.getByText(/Couldn’t find your/)).toHaveCount(0);
+  await shot(page, 'onboarding-resume');
   await page.getByRole('button', { name: 'Continue' }).click();
 
-  // About you: Continue is blocked until required fields are present.
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByText(/Please add your first name/)).toBeVisible();
-  await page.getByLabel('First name').fill('Jordan');
-  await page.getByLabel('Last name').fill('Rivera');
-  await page.getByLabel('Email').fill('jordan@example.com');
-  await page.getByLabel('Phone').fill('415-555-0100');
-  await page.getByLabel('City').fill('San Francisco');
-  await page.getByLabel('State').fill('CA');
-  await page.getByLabel('GitHub').fill('https://github.com/jordanrivera');
+  // About you arrives pre-filled from the resume.
+  await expect(page.getByLabel('First name')).toHaveValue('Jordan');
+  await expect(page.getByLabel('Last name')).toHaveValue('Rivera');
+  await expect(page.getByLabel('Email')).toHaveValue('jordan@example.com');
+  await expect(page.getByLabel('Phone')).toHaveValue('415-555-0100');
+  await expect(page.getByLabel('City')).toHaveValue('San Francisco');
+  await expect(page.getByLabel('State')).toHaveValue('CA');
+  await expect(page.getByLabel('Current position')).toHaveValue('Software Engineering Intern');
+  await expect(page.getByLabel('GitHub')).toHaveValue('https://github.com/jordanrivera');
   await shot(page, 'onboarding-about');
   await page.getByRole('button', { name: 'Continue' }).click();
 
-  // Education
-  await page.getByLabel('School', { exact: false }).first().fill('University of California, Berkeley');
-  await page.getByLabel('Degree').fill('Bachelor of Science');
-  await page.getByLabel('Major').fill('Computer Science');
+  // Education, experience, and skills too.
+  await expect(page.getByLabel('School', { exact: false }).first()).toHaveValue('University of California, Berkeley');
+  await expect(page.getByLabel('Degree')).toHaveValue('Bachelor of Science');
+  await expect(page.getByLabel('End (or expected)')).toHaveValue('2026-05');
   await page.getByRole('button', { name: 'Continue' }).click();
-
-  // Experience
-  await page.getByLabel('Title').fill('Software Engineering Intern');
-  await page.getByLabel('Company').fill('Acme Corp');
-  await page.getByLabel('What you did').fill('Built a billing dashboard in React');
+  await expect(page.getByLabel('Title')).toHaveValue('Software Engineering Intern');
+  await expect(page.getByLabel('Company')).toHaveValue('Acme Corp');
+  await expect(page.getByLabel('Skills')).toHaveValue('TypeScript, React, Python');
   await page.getByRole('button', { name: 'Continue' }).click();
 
   // Common questions

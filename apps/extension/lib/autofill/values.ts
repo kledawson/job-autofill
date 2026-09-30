@@ -119,7 +119,7 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
     case 'currentCompany':
       return nonEmpty(job?.company);
     case 'currentTitle':
-      return nonEmpty(job?.title);
+      return nonEmpty(p.currentTitle || job?.title);
     case 'school':
       return nonEmpty(edu?.school);
     case 'degree':

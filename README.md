@@ -48,10 +48,10 @@ Then install and build the extension:
 
 ```sh
 npm install
-npm run build        # outputs apps/extension/.output/chrome-mv3
+npm run build        # outputs apps/extension/dist/chrome-mv3
 ```
 
-Load it in Chrome from `chrome://extensions` (Developer mode → **Load unpacked**). The `.output` folder is hidden in macOS file pickers; press Cmd+Shift+. to show it.
+Load it in Chrome from `chrome://extensions` (Developer mode → **Load unpacked**).
 
 | Command | What it does |
 | --- | --- |

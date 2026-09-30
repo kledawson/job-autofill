@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { clampToLimit, DEFAULT_PROMPT_TEMPLATE, profileForPrompt, renderPrompt } from '../lib/prompt';
 import { jobKey, toApplicationUrl } from '../lib/platforms';
 import { sampleProfile } from './helpers';
+import { valueFor } from '../lib/autofill/values';
 
 describe('prompt', () => {
   it('fills every placeholder and leaves out voluntary disclosures and contact details', () => {
@@ -26,6 +27,17 @@ describe('prompt', () => {
     const text = 'First sentence here. Second sentence is longer and goes on. Third.';
     expect(clampToLimit(text, 40)).toBe('First sentence here.');
     expect(clampToLimit('Answer: Short.', 100)).toBe('Short.');
+  });
+});
+
+describe('current position', () => {
+  it('prefers the Current position field over the current job', () => {
+    const p = sampleProfile();
+    p.experience[0]!.current = true;
+    expect(valueFor('currentTitle', p)).toEqual(['Software Engineering Intern']);
+    p.currentTitle = 'Teaching Assistant';
+    expect(valueFor('currentTitle', p)).toEqual(['Teaching Assistant']);
+    expect(profileForPrompt(p)).toContain('Current position: Teaching Assistant');
   });
 });
 

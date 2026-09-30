@@ -43,7 +43,15 @@ export function useProfile() {
     setSavedAt(Date.now());
   }, [profile]);
 
-  return { profile, update, save, dirty, savedAt, reload };
+  /** Replaces and saves in one step (used when merging resume data). */
+  const replace = useCallback(async (next: Profile) => {
+    setProfile(next);
+    await saveProfile(next);
+    setDirty(false);
+    setSavedAt(Date.now());
+  }, []);
+
+  return { profile, update, save, replace, dirty, savedAt, reload };
 }
 
 export function usePublicSettings() {

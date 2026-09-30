@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import type { Platform, Profile } from './types';
 import type { PublicSettings } from './settings';
+import type { ResumeDraft } from './resume';
 
 export interface FilePayload {
   name: string;
@@ -58,6 +59,12 @@ export interface BackgroundMessages {
   markSubmitted: { req: { applicationId: number }; res: Result };
   setGeminiKey: { req: { apiKey: string }; res: {} };
   testGemini: { req: { apiKey?: string; model?: string }; res: Result };
+  /** Reads the uploaded resume with Gemini. Returns validated draft fields; the caller merges them. */
+  parseResume: {
+    /** Text read locally from the PDF (faster); omit to send the PDF itself, e.g. for scanned resumes. */
+    req: { text?: string; sections?: ('education' | 'experience' | 'skills')[] };
+    res: Result<{ draft: ResumeDraft }>;
+  };
   connectSheets: { req: {}; res: Result<{ sheetUrl: string }> };
   getPublicSettings: { req: {}; res: PublicSettings };
   deleteAllData: { req: {}; res: {} };

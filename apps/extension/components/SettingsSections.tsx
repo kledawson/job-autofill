@@ -1,5 +1,8 @@
 import { useRef, useState } from 'react';
 import { db, getProfile, saveProfile } from '@/lib/db';
+import type { ResumeDraft } from '@/lib/resume';
+import { extractPdfText } from '@/lib/resume-pdf';
+import { missingSections, parseResumeText, type ResumeSection } from '@/lib/resume-text';
 import { sendToBackground } from '@/lib/messages';
 import { DEFAULT_PROMPT_TEMPLATE, PROMPT_PLACEHOLDERS } from '@/lib/prompt';
 import { DEFAULT_GEMINI_MODEL, updateSettings, type PublicSettings } from '@/lib/settings';
@@ -62,14 +65,146 @@ function FileSlot({ kind, label, hint }: { kind: StoredFile['kind']; label: stri
   );
 }
 
-export function DocumentsSection() {
+export function DocumentsSection({
+  onResumeDraft,
+  hasGeminiKey,
+  onNeedKey,
+}: {
+  /** Merges parsed resume fields into the profile and returns what was filled. Omit to hide the option. */
+  onResumeDraft?: (draft: ResumeDraft) => Promise<string[]>;
+  hasGeminiKey?: boolean;
+  /** Shows where to add a Gemini key (only needed for sections the local reader misses). */
+  onNeedKey?: () => void;
+}) {
   return (
     <Card title="Documents" description="Attached to the resume and cover letter upload fields. Stored only on this computer.">
       <div className="space-y-3">
         <FileSlot kind="resume" label="Resume (PDF)" hint="Required by almost every application." />
+        {onResumeDraft && <ResumeImport onResumeDraft={onResumeDraft} hasGeminiKey={!!hasGeminiKey} onNeedKey={onNeedKey} />}
         <FileSlot kind="coverLetter" label="Cover letter" hint="Optional. Attached when a form has a cover letter upload." />
       </div>
     </Card>
+  );
+}
+
+const SECTION_NAMES: Record<ResumeSection, string> = { education: 'education', experience: 'work experience', skills: 'skills' };
+const listText = (items: string[]) =>
+  items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+
+function ResumeImport({
+  onResumeDraft,
+  hasGeminiKey,
+  onNeedKey,
+}: {
+  onResumeDraft: (draft: ResumeDraft) => Promise<string[]>;
+  hasGeminiKey: boolean;
+  onNeedKey?: () => void;
+}) {
+  const resume = useLiveQuery(() => db.files.get('resume'));
+  const [busy, setBusy] = useState<'local' | 'gemini' | null>(null);
+  const [status, setStatus] = useState<{ tone: 'success' | 'error' | 'info' | 'warn'; text: string } | null>(null);
+  // What the local reader could not find, and the text Gemini can use for it.
+  const [leftover, setLeftover] = useState<{ sections: ResumeSection[]; text: string } | null>(null);
+  if (!resume) return null;
+  const isPdf = /pdf$/i.test(resume.type) || /\.pdf$/i.test(resume.name);
+
+  async function readLocally() {
+    setBusy('local');
+    setStatus(null);
+    setLeftover(null);
+    try {
+      const { lines, links } = await extractPdfText(await resume!.blob.arrayBuffer());
+      const text = lines.join('\n');
+      if (text.replace(/\s/g, '').length < 40) {
+        setStatus({ tone: 'warn', text: 'This PDF has no selectable text (it may be a scanned image), so it can’t be read on this computer.' });
+        setLeftover({ sections: [], text: '' });
+        return;
+      }
+      const draft = parseResumeText(lines, links);
+      const filled = await onResumeDraft(draft);
+      const missing = missingSections(draft);
+      setStatus(
+        filled.length
+          ? { tone: 'success', text: `Filled from your resume: ${filled.join(', ')}. Check each one as you continue.` }
+          : { tone: 'info', text: 'Nothing new to fill. Your profile already has what this resume covers.' },
+      );
+      if (missing.length) setLeftover({ sections: missing, text });
+    } catch (err) {
+      setStatus({ tone: 'error', text: `Could not read this PDF: ${(err as Error).message}` });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function readWithGemini() {
+    if (!leftover) return;
+    setBusy('gemini');
+    const res = await sendToBackground('parseResume', {
+      text: leftover.text || undefined,
+      sections: leftover.sections.length ? leftover.sections : undefined,
+    });
+    if (!res.ok) {
+      setStatus({ tone: 'error', text: res.error });
+    } else {
+      const filled = await onResumeDraft(res.draft);
+      setStatus(
+        filled.length
+          ? { tone: 'success', text: `Gemini filled: ${filled.join(', ')}. Check each one as you continue.` }
+          : { tone: 'info', text: 'Gemini didn’t find anything new either. Add the rest in the next steps.' },
+      );
+      setLeftover(null);
+    }
+    setBusy(null);
+  }
+
+  const missingText = leftover?.sections.length ? listText(leftover.sections.map((s) => SECTION_NAMES[s])) : 'your details';
+
+  return (
+    <div className="rounded-lg bg-indigo-50/60 p-4">
+      <p className="text-sm font-medium text-slate-800">Fill your profile from this resume</p>
+      <p className="mt-0.5 text-sm text-slate-600">
+        Reads your resume on this computer and fills your name, contact details, links, current position, education,
+        experience, and skills. Only empty fields are filled.
+      </p>
+      {!isPdf ? (
+        <p className="mt-2 text-sm text-amber-800">This works with PDF resumes. Upload a PDF to use it.</p>
+      ) : (
+        <Button className="mt-3" onClick={readLocally} disabled={!!busy}>
+          {busy === 'local' ? 'Reading resume…' : 'Fill my profile from resume'}
+        </Button>
+      )}
+      {status && (
+        <div className="mt-3">
+          <Notice tone={status.tone}>{status.text}</Notice>
+        </div>
+      )}
+      {leftover && (
+        <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+          <p className="text-sm text-slate-700">
+            {leftover.sections.length
+              ? `Couldn’t find your ${missingText} automatically. You can add ${leftover.sections.length > 1 ? 'them' : 'it'} in the next steps, or have Gemini read ${leftover.sections.length > 1 ? 'them' : 'it'}.`
+              : 'Gemini can read scanned resumes.'}
+          </p>
+          {hasGeminiKey ? (
+            <>
+              <Button variant="secondary" className="mt-2" onClick={readWithGemini} disabled={!!busy}>
+                {busy === 'gemini' ? 'Gemini is reading…' : `Read ${missingText} with Gemini`}
+              </Button>
+              <p className="mt-2 text-xs text-slate-500">
+                Sends your resume{leftover.text ? '’s text' : ''}, including contact details, to Google Gemini. Google’s free tier may use it to
+                improve its models.
+              </p>
+            </>
+          ) : (
+            onNeedKey && (
+              <Button variant="ghost" className="mt-1 px-0 text-indigo-700 underline" onClick={onNeedKey}>
+                Add a Gemini key to use this
+              </Button>
+            )
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -139,9 +274,9 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
         </div>
         {status && <Notice tone={status.tone}>{status.text}</Notice>}
         <p className="text-xs text-slate-500">
-          Gemini receives each question, the job description, and your education, experience, and skills. It never
-          receives your contact details or voluntary self-identification answers. Google’s free tier may use prompts to
-          improve its models.
+          For free responses, Gemini receives each question, the job description, and your education, experience, and
+          skills, never your contact details or self-identification answers. Your resume is read on this computer; it
+          goes to Gemini only if you click “Read … with Gemini.” Google’s free tier may use prompts to improve its models.
         </p>
       </div>
     </Card>

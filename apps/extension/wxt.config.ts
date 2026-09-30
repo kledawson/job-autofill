@@ -12,6 +12,8 @@ const EXTENSION_KEY =
 const GOOGLE_CLIENT_ID = process.env.WXT_GOOGLE_CLIENT_ID ?? '';
 
 export default defineConfig({
+  // Visible folder (not the default .output) so it is easy to pick in Chrome's Load unpacked dialog.
+  outDir: 'dist',
   modules: ['@wxt-dev/module-react'],
   vite: () => ({ plugins: [tailwindcss()] }),
   manifest: {

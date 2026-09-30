@@ -14,14 +14,17 @@ import {
 import { DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
 import { Button, Card, Notice } from '@/components/ui';
 import { updateSettings } from '@/lib/settings';
+import { mergeResumeDraft } from '@/lib/resume';
 
 const STEPS = ['Welcome', 'Resume', 'About you', 'Education', 'Experience', 'Common questions', 'Connect', 'Prompt', 'Done'] as const;
 
 export default function Onboarding() {
   const [step, setStep] = useState(0);
-  const { profile, update, save } = useProfile();
+  const { profile, update, save, replace } = useProfile();
   const { settings } = usePublicSettings();
   const [warning, setWarning] = useState('');
+  // Shown on the resume step only if the user asks to add a key for sections the local reader missed.
+  const [showResumeKey, setShowResumeKey] = useState(false);
 
   if (!profile) return null;
   const sectionProps = {
@@ -74,7 +77,20 @@ export default function Onboarding() {
       );
       break;
     case 'Resume':
-      body = <DocumentsSection />;
+      body = (
+        <div className="space-y-4">
+          <DocumentsSection
+            hasGeminiKey={settings?.hasGeminiKey}
+            onNeedKey={() => setShowResumeKey(true)}
+            onResumeDraft={async (draft) => {
+              const merged = mergeResumeDraft(profile, draft);
+              await replace(merged.profile);
+              return merged.filled;
+            }}
+          />
+          {settings && showResumeKey && <GeminiSection settings={settings} />}
+        </div>
+      );
       break;
     case 'About you':
       body = (

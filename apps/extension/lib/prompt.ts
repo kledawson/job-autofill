@@ -59,6 +59,7 @@ export function profileForPrompt(p: Profile): string {
   const lines: string[] = [];
   const name = [p.preferredName || p.firstName, p.lastName].filter(Boolean).join(' ');
   if (name) lines.push(`Name: ${name}`);
+  if (p.currentTitle) lines.push(`Current position: ${p.currentTitle}`);
   const location = [p.city, p.state, p.country].filter(Boolean).join(', ');
   if (location) lines.push(`Location: ${location}`);
 

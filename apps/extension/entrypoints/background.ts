@@ -1,6 +1,7 @@
 import { browser, type Browser } from 'wxt/browser';
 import { db, getProfile } from '@/lib/db';
-import { generateText, testKey } from '@/lib/gemini';
+import { generateJson, generateText, testKey } from '@/lib/gemini';
+import { sanitizeDraft, sectionRequest } from '@/lib/resume';
 import {
   fileToPayload,
   type BackgroundMessage,
@@ -280,6 +281,26 @@ const handlers: Handlers = {
     try {
       await testKey(key, model || settings.geminiModel);
       return { ok: true };
+    } catch (err) {
+      return { ok: false, error: errorText(err) };
+    }
+  },
+
+  async parseResume({ text, sections }) {
+    const settings = await getSettings();
+    if (!settings.geminiApiKey) return { ok: false, error: 'Add a Gemini API key first.' };
+    const file = await db.files.get('resume');
+    if (!file) return { ok: false, error: 'Upload your resume first.' };
+    if (!/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) {
+      return { ok: false, error: 'Reading a resume works with PDF files. Upload a PDF to use it.' };
+    }
+    try {
+      const { prompt, schema } = sectionRequest(sections);
+      const input = text?.trim()
+        ? { text: text.slice(0, 30000) }
+        : { pdfBase64: fileToPayload(file, await file.blob.arrayBuffer()).base64 };
+      const raw = await generateJson(settings.geminiApiKey, settings.geminiModel, prompt, input, schema);
+      return { ok: true, draft: sanitizeDraft(raw) };
     } catch (err) {
       return { ok: false, error: errorText(err) };
     }

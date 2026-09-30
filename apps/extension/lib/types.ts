@@ -31,6 +31,8 @@ export interface Profile {
   lastName: string;
   preferredName: string;
   pronouns: string;
+  /** Job title held now, e.g. "Software Engineering Intern". Empty if not working. */
+  currentTitle: string;
 
   email: string;
   phone: string;
@@ -100,6 +102,7 @@ export function emptyProfile(): Profile {
     lastName: '',
     preferredName: '',
     pronouns: '',
+    currentTitle: '',
     email: '',
     phone: '',
     address: '',
