@@ -1,0 +1,31 @@
+# Dependencies and builds
+node_modules/
+.output/
+.wxt/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+# Credentials and personal applicant data
+.env
+.env.*
+!.env.example
+local-data/
+profiles/
+resumes/
+exports/
+*.pem
+*.key
+
+# Local assistant/session state and worktrees
+.claude/worktrees/
+.claude/settings.local.json
+CLAUDE.local.md
+AGENTS.override.md
+.worktrees/
+
+# Editor/OS files
+.DS_Store
+Thumbs.db
+*.log
