@@ -2,7 +2,9 @@
 
 A local-first Chrome extension for assisted job application autofill and application tracking.
 
-**Status:** collaboration and repository foundation. The extension is not implemented yet.
+**Status:** working MVP in [`apps/extension`](apps/extension/README.md): fills Greenhouse, Lever, and Ashby applications from a saved profile, writes free responses with Gemini (optional), tracks applications in Google Sheets (optional), and never submits for you.
+
+> The MVP follows the product design doc, which includes Gemini free responses, Google Sheets tracking, and resume upload. `AGENTS.md` and `docs/` still describe the narrower original scope and need to be reconciled.
 
 ## Start here
 
@@ -24,7 +26,7 @@ MVP: profile editor, JSON import/export, semantic matching, one adapter, fill ve
 apps/extension/      Extension entry points, UI, storage, and DOM adapters
 packages/shared/    Schemas, types, matching, and message contracts
 tests/fixtures/     Synthetic profiles and controlled forms
-tests/e2e/          Future extension integration tests
+tests/e2e/          Extension browser tests (Playwright)
 scripts/            Repository checks
 docs/               Design, roadmap, contracts, and decisions
 .github/            CI and issue/PR templates
@@ -42,7 +44,24 @@ cd job-autofill
 npm run check
 ```
 
-The current check requires no dependency installation. The WXT/React implementation and its commands are the first development milestone. Do not expect an extension build from this baseline.
+Then install and build the extension:
+
+```sh
+npm install
+npm run build        # outputs apps/extension/.output/chrome-mv3
+```
+
+Load it in Chrome from `chrome://extensions` (Developer mode → **Load unpacked**). The `.output` folder is hidden in macOS file pickers; press Cmd+Shift+. to show it.
+
+| Command | What it does |
+| --- | --- |
+| `npm run check` | Repository and documentation checks |
+| `npm run typecheck` | TypeScript type check |
+| `npm test` | Unit tests against saved application forms |
+| `npm run test:e2e` | Builds, then drives the real extension in Chromium (run `npx playwright install chromium` once) |
+| `npm run dev` | Development build with live reload |
+
+See [the extension README](apps/extension/README.md) for Gemini and Google Sheets setup.
 
 ## Collaboration
 

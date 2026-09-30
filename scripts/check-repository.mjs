@@ -57,5 +57,5 @@ if (failures.length) {
   process.exitCode = 1;
 } else {
   console.log(`Repository checks passed: ${required.length} required files, shared Claude import, ${documents} Markdown documents and their local links.`);
-  console.log('Application build, type checks, and browser tests will be added with the extension scaffold.');
+  console.log('Application checks: npm run typecheck, npm test, npm run build, npm run test:e2e.');
 }

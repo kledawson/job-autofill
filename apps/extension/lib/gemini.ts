@@ -1,0 +1,89 @@
+// Background worker only. The API key never leaves this module's callers.
+
+const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
+const MAX_ATTEMPTS = 4;
+
+export class GeminiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Delay Gemini asks for on 429 ("retryDelay": "23s"), capped so a fill never hangs for long. */
+function retryDelay(body: any, attempt: number): number {
+  const hint = body?.error?.details?.find?.((d: any) => d?.retryDelay)?.retryDelay as string | undefined;
+  const hinted = hint ? parseFloat(hint) * 1000 : 0;
+  const backoff = 1500 * 2 ** attempt + Math.random() * 500;
+  return Math.min(Math.max(hinted, backoff), 30000);
+}
+
+async function call(apiKey: string, model: string, path: string, init: RequestInit): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(`${ENDPOINT}/${encodeURIComponent(model)}${path}`, {
+        ...init,
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey, ...(init.headers ?? {}) },
+      });
+    } catch {
+      if (attempt + 1 >= MAX_ATTEMPTS) throw new GeminiError('Could not reach Gemini. Check your connection.');
+      await sleep(retryDelay(null, attempt));
+      continue;
+    }
+    const body = await res.json().catch(() => null);
+    if (res.ok) return body;
+
+    const retryable = res.status === 429 || res.status === 500 || res.status === 503;
+    if (retryable && attempt + 1 < MAX_ATTEMPTS) {
+      await sleep(retryDelay(body, attempt));
+      continue;
+    }
+    const detail = body?.error?.message ?? res.statusText;
+    if (res.status === 400 && /api key/i.test(detail)) throw new GeminiError('Your Gemini API key is invalid.', 400);
+    if (res.status === 403) throw new GeminiError('Your Gemini API key was rejected. Check it in settings.', 403);
+    if (res.status === 404) throw new GeminiError(`Gemini model "${model}" was not found. Change it in settings.`, 404);
+    if (res.status === 429) throw new GeminiError('Gemini free-tier rate limit reached. Try again in a minute.', 429);
+    throw new GeminiError(`Gemini error ${res.status}: ${detail}`, res.status);
+  }
+}
+
+// One request at a time keeps us inside free-tier per-minute limits.
+let queue: Promise<unknown> = Promise.resolve();
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = queue.then(task, task);
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+export function generateText(apiKey: string, model: string, prompt: string): Promise<string> {
+  return enqueue(async () => {
+    const body = await call(apiKey, model, ':generateContent', {
+      method: 'POST',
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.7 },
+      }),
+    });
+    const candidate = body?.candidates?.[0];
+    const text = (candidate?.content?.parts ?? [])
+      .filter((p: any) => !p.thought)
+      .map((p: any) => p.text ?? '')
+      .join('')
+      .trim();
+    if (!text) {
+      const reason = candidate?.finishReason ?? body?.promptFeedback?.blockReason ?? 'no text';
+      throw new GeminiError(`Gemini returned no answer (${reason}).`);
+    }
+    return text;
+  });
+}
+
+/** Cheap key check: fetch the model's metadata. */
+export async function testKey(apiKey: string, model: string): Promise<void> {
+  await call(apiKey, model, '', { method: 'GET' });
+}
