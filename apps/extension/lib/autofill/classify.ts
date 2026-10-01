@@ -9,6 +9,8 @@ export type ProfileKey =
   | 'email'
   | 'phone'
   | 'phoneCountryCode'
+  | 'textConsent'
+  | 'acknowledge'
   | 'age'
   | 'ageAtLeast'
   | 'address'
@@ -36,6 +38,7 @@ export type ProfileKey =
   | 'gradDate'
   | 'authorized'
   | 'sponsorship'
+  | 'visaStatus'
   | 'inUS'
   | 'livesIn'
   | 'authorizedNoSponsor'
@@ -71,6 +74,8 @@ export const WITH_CODE_RE = /(includ\w*|with|plus|add)\s+(the\s+|your\s+)?(count
 const RULES: Rule[] = [
   // One question that covers both: authorized to work without needing sponsorship.
   ['authorizedNoSponsor', /^(?=.*(authori[sz]ed|eligible|legally|permitted|right) .*work)(?=.*(without|not (be )?requir|no (need|requirement)|not need).*sponsor)/],
+  // "What is your current visa status?" asks for a status, not whether you need sponsorship.
+  ['visaStatus', /^(what (is|are) )?(your )?(current )?(visa|immigration|work authori[sz]ation) status\??$/],
   ['sponsorship', /sponsor|visa (status|support)|require.*visa/],
   ['authorized', /authori[sz]ed to work|legally (able|authori[sz]ed|eligible|permitted)|work authori[sz]ation|eligib(le|ility) to work|right to work|permitted to work/],
   ['hispanic', /hispanic|latin[oax]/],
@@ -127,6 +132,11 @@ const RULES: Rule[] = [
 const OTHER_PERSON_RE =
   /\b(employee|referr(er|al)|friend|reference|supervisor|manager|recruiter|relative|emergency contact|spouse|colleague|coworker)'?s?\b.*\bname\b|\bname\b.*\b(of|for) (the|your|a|an) (employee|referr(er|al)|friend|reference|supervisor|manager|recruiter|relative|colleague)/;
 const CONSENT_RE = /\b(i )?(agree|acknowledge|consent|certify|attest|confirm that|understand that)\b|privacy (policy|notice)|terms (of|and)|text messages|sms/;
+/** Asks about receiving text messages. A checkbox that also bundles terms or certifications stays manual. */
+const TEXT_CONSENT_RE = /text message|\bsms\b|text updates|receive texts/;
+const BUNDLED_CONSENT_RE = /terms|privacy|certify|attest/;
+/** "Acknowledge, confirm, and agree to the following statements": always answered Yes, as the user asked. */
+const ACKNOWLEDGE_RE = /acknowledge,?\s+confirm,?\s+(and|&)\s+agree/;
 const CHALLENGE_RE = /not a (bot|robot)|prove (that )?you('| a)re (human|not)|figure out the (correct )?secret|captcha/;
 const BLOB_RE = /[A-Za-z0-9+/=]{80,}/;
 const FREE_TEXT_INPUT_RE = /^(why|describe|tell us|explain|please (describe|explain|share|tell)|what (interests|excites|motivates|draws))|why do you want|why are you interested/;
@@ -157,6 +167,12 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
   if (OTHER_PERSON_RE.test(label)) return { kind: 'unknown' };
 
   if (CHALLENGE_RE.test(label) || BLOB_RE.test(field.label) || field.label.length > 700) return { kind: 'challenge' };
+
+  if (ACKNOWLEDGE_RE.test(label)) return { kind: 'profile', key: 'acknowledge', source: 'rule' };
+
+  if (TEXT_CONSENT_RE.test(label) && !(field.kind === 'checkbox' && BUNDLED_CONSENT_RE.test(label))) {
+    return { kind: 'profile', key: 'textConsent', source: 'rule' };
+  }
 
   if (field.kind === 'checkbox' && CONSENT_RE.test(label)) return { kind: 'consent' };
 
