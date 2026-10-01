@@ -5,9 +5,10 @@
   "description": "Local-first Chrome extension that fills job applications from a saved profile and stops for review",
   "type": "module",
   "engines": {
-    "node": ">=22 <23"
+    "node": ">=22.13.0"
   },
   "scripts": {
+    "setup": "npm install && playwright install chromium",
     "check": "node scripts/check-repository.mjs",
     "dev": "npm run dev -w apps/extension",
     "build": "npm run build -w apps/extension",
