@@ -288,6 +288,22 @@ describe('Ashby EEO section outside the first container', () => {
   });
 });
 
+describe('open dropdowns', () => {
+  it('closes a dropdown left open after a question it could not answer', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/abc/apply');
+    doc.body.innerHTML = '<form><label for="q">Are you open to working 4 days onsite in one of our offices?</label><input id="q" role="combobox" aria-expanded="false" type="text"></form>';
+    const input = doc.getElementById('q') as HTMLInputElement;
+    // Opens on focus and only closes on Escape, like a react-select menu.
+    input.addEventListener('focus', () => input.setAttribute('aria-expanded', 'true'));
+    input.addEventListener('keydown', (e) => e.key === 'Escape' && input.setAttribute('aria-expanded', 'false'));
+    input.addEventListener('mousedown', () => input.setAttribute('aria-expanded', 'true'));
+    const profile = { ...sampleProfile(), preferences: { ...sampleProfile().preferences, workMode: 'onsite' as const } };
+    const { d } = deps({ context: { profile, resume: RESUME, coverLetter: null, transcript: null, hasGeminiKey: false } });
+    await new FillSession(doc, ADAPTERS.lever, d).run();
+    expect(input.getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
 describe('conditional questions', () => {
   it('fills a race question that only appears after Hispanic/Latino is answered', async () => {
     const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/abc/apply');
