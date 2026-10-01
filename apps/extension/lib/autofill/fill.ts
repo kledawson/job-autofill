@@ -246,10 +246,28 @@ export async function fillCombobox(
   });
 
   // Static lists open immediately; pick from them without typing so option wording can differ.
-  let options = (await waitFor(() => {
-    const o = comboboxOptions(input);
-    return o.length ? o : null;
-  }, timing.menuOpen)) ?? [];
+  const waitOptions = async (ms: number) =>
+    (await waitFor(() => {
+      const o = comboboxOptions(input);
+      return o.length ? o : null;
+    }, ms)) ?? [];
+  let options = await waitOptions(timing.menuOpen);
+  const trace: string[] = [`focus+arrow=${options.length}`];
+  // Some forms ignore clicks on the text box and only open from the arrow button, like a person would use.
+  if (!options.length) {
+    const arrow = indicatorFor(field);
+    if (arrow) {
+      withGuard(arrow, () => {
+        mouse(arrow, 'pointerdown');
+        mouse(arrow, 'mousedown');
+        mouse(arrow, 'pointerup');
+        mouse(arrow, 'mouseup');
+        arrow.click();
+      });
+      options = await waitOptions(timing.menuOpen);
+    }
+    trace.push(`arrow${arrow ? '' : '(none)'}=${options.length}`);
+  }
   let idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
   // A static list with no close match: take its first real option.
   const firstReal = (list: HTMLElement[]) => list.findIndex((o) => !isPlaceholderOption(o.textContent ?? ''));
@@ -264,6 +282,7 @@ export async function fillCombobox(
         const o = comboboxOptions(input).filter((o) => !/^(loading|searching|no (results|options))/i.test(o.textContent?.trim() ?? ''));
         return o.length ? o : null;
       }, timing.search)) ?? [];
+    trace.push(`typed=${options.length}`);
     idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
     const firstWord = normalize(query).split(' ')[0] ?? '';
     if (idx < 0 && opts.acceptFirstResult && firstWord && normalize(options[0]?.textContent ?? '').includes(firstWord)) {
@@ -275,6 +294,7 @@ export async function fillCombobox(
   if (idx < 0 && opts.topOption && !query) idx = firstReal(staticOptions);
 
   const choice = options[idx];
+  console.warn(`[Job Autofill] dropdown "${field.label.slice(0, 40)}": ${trace.join(' ')} -> ${choice ? 'picked an option' : 'no match'}`);
   if (!choice) {
     if (input.value) setNativeValueKeepFocus(input, '');
     closeMenu(input);
@@ -287,6 +307,15 @@ export async function fillCombobox(
   // Give the page time to commit the choice to its own state before the next field is touched.
   await sleep(timing.settle);
   return comboboxHasValue(field) || !input.isConnected ? 'filled' : 'failed';
+}
+
+/** The arrow/toggle button of a custom dropdown, if it has one. */
+function indicatorFor(field: ScannedField): HTMLElement | null {
+  const scope = field.outlineTarget;
+  return (
+    scope.querySelector<HTMLElement>('button[aria-label*="toggle" i], button[aria-label*="flyout" i], button[aria-label*="open" i]') ??
+    scope.querySelector<HTMLElement>('[class*="dropdown-indicator"], [class*="dropdownIndicator"], [class*="indicatorContainer"]:not([class*="separator"])')
+  );
 }
 
 function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
