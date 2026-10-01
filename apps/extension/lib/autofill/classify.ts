@@ -8,6 +8,8 @@ export type ProfileKey =
   | 'pronouns'
   | 'email'
   | 'phone'
+  | 'phoneCountryCode'
+  | 'age'
   | 'address'
   | 'city'
   | 'state'
@@ -36,7 +38,6 @@ export type ProfileKey =
   | 'salary'
   | 'startDate'
   | 'workMode'
-  | 'howHeard'
   | 'gender'
   | 'race'
   | 'hispanic'
@@ -44,7 +45,8 @@ export type ProfileKey =
   | 'disability'
   | 'declineOnly'
   | 'resume'
-  | 'coverLetter';
+  | 'coverLetter'
+  | 'transcript';
 
 export type Classification =
   | { kind: 'profile'; key: ProfileKey; source: 'adapter' | 'rule' }
@@ -56,6 +58,9 @@ export type Classification =
   | { kind: 'unknown' };
 
 type Rule = [ProfileKey, RegExp];
+
+/** A phone field that wants the dialing code typed into the number itself. */
+export const WITH_CODE_RE = /(includ\w*|with|plus|add)\s+(the\s+|your\s+)?(country|international|dial\w*)\s*code|international (format|number)|e\.?164/;
 
 // Order matters: specific phrases come before the generic ones they contain.
 const RULES: Rule[] = [
@@ -73,7 +78,10 @@ const RULES: Rule[] = [
   ['lastName', /last name|surname|family name/],
   ['fullName', /^((your|full|legal|candidate|applicant)\s+)*name$|full (legal )?name|legal name/],
   ['email', /e-?mail/],
+  ['phone', WITH_CODE_RE],
+  ['phoneCountryCode', /country code|calling code|dial(l?ing)? code|phone code|(phone|mobile) country/],
   ['phone', /phone|mobile|cell\b/],
+  ['age', /^(what is |enter )?(your )?age\b(?! range)(?!.*(least|over|older|18|21))|how old are you/],
   ['linkedin', /linkedin/],
   ['github', /github/],
   ['portfolio', /portfolio/],
@@ -86,7 +94,7 @@ const RULES: Rule[] = [
   ['city', /^city\b/],
   ['state', /^(state|province|state\/province|region)\b/],
   ['country', /^country\b|country of residence/],
-  ['currentTitle', /current (job )?(title|role|position)|^(job )?title$/],
+  ['currentTitle', /current (job )?(title|role|position|occupation)|^(job )?title$/],
   ['currentCompany', /current (company|employer|organization)|most recent (company|employer)|^(company|employer|organization)$/],
   ['gpa', /\bgpa\b|grade point/],
   ['eduStartMonth', /start (date )?month/],
@@ -100,7 +108,6 @@ const RULES: Rule[] = [
   ['salary', /salary|compensation|pay (range|expectation)|desired pay/],
   ['startDate', /start date|available to start|earliest (start|available)|when (can|could|would) you (start|begin)|notice period/],
   ['workMode', /remote|on-?site|hybrid|in[- ]office|work arrangement/],
-  ['howHeard', /how did you (hear|find|learn)|where did you (hear|find|learn)|how you heard|referral source|^source$/],
 ];
 
 const CONSENT_RE = /\b(i )?(agree|acknowledge|consent|certify|attest|confirm that|understand that)\b|privacy (policy|notice)|terms (of|and)|text messages|sms/;
@@ -122,6 +129,7 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
   const label = field.label.toLowerCase();
 
   if (field.kind === 'file') {
+    if (/transcript/.test(label) || /transcript/i.test(field.id + field.name)) return { kind: 'profile', key: 'transcript', source: 'rule' };
     if (/cover/.test(label) || /cover/.test(field.id + field.name)) return { kind: 'profile', key: 'coverLetter', source: 'rule' };
     if (/resume|\bcv\b|résumé/.test(label) || /resume|cv/i.test(field.id + field.name)) {
       return { kind: 'profile', key: 'resume', source: 'rule' };
@@ -144,6 +152,8 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
       return { kind: 'profile', key: 'email', source: 'rule' };
     case 'tel':
       return { kind: 'profile', key: 'phone', source: 'rule' };
+    case 'tel-country-code':
+      return { kind: 'profile', key: 'phoneCountryCode', source: 'rule' };
     case 'postal-code':
       return { kind: 'profile', key: 'zip', source: 'rule' };
   }

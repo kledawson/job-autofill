@@ -116,4 +116,23 @@ describe('local resume reader', () => {
     expect(toMonth('3/2023')).toBe('2023-03');
     expect(toMonth('2021')).toBe('2021-01');
   });
+
+  it('keeps a location on the company line out of the company', () => {
+    const d = parseResumeText([
+      'Sam Lee',
+      'sam.lee@example.org',
+      'Experience',
+      'Data Analyst, Northwind Traders, Seattle, WA | Jun 2024 - Present',
+      '• Built weekly reports.',
+    ]);
+    expect(d.experience[0]).toMatchObject({ title: 'Data Analyst', company: 'Northwind Traders', location: 'Seattle, WA' });
+    const e = parseResumeText([
+      'Sam Lee',
+      'Experience',
+      'Data Analyst\tJun 2024 - Present',
+      'Northwind Traders, Seattle, WA',
+      '• Built weekly reports.',
+    ]).experience[0];
+    expect(e).toMatchObject({ company: 'Northwind Traders', location: 'Seattle, WA' });
+  });
 });

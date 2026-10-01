@@ -42,7 +42,7 @@ export function sampleProfile(): Profile {
       },
     ],
     skills: ['TypeScript', 'React', 'Python', 'SQL'],
-    preferences: { salary: '$120,000', startDate: 'June 2026', relocate: 'yes', workMode: 'hybrid', howHeard: 'LinkedIn' },
+    preferences: { salary: '$120,000', startDate: 'June 2026', relocate: 'yes', workMode: 'hybrid' },
     eeo: { gender: 'Female', race: 'Decline to answer', hispanic: 'Decline to answer', veteran: 'I am not a protected veteran', disability: 'Decline to answer' },
   };
 }

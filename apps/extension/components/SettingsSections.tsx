@@ -77,11 +77,12 @@ export function DocumentsSection({
   onNeedKey?: () => void;
 }) {
   return (
-    <Card title="Documents" description="Attached to the resume and cover letter upload fields. Stored only on this computer.">
+    <Card title="Documents" description="Attached to the resume, cover letter, and transcript upload fields. Stored only on this computer.">
       <div className="space-y-3">
         <FileSlot kind="resume" label="Resume (PDF)" hint="Required by almost every application." />
         {onResumeDraft && <ResumeImport onResumeDraft={onResumeDraft} hasGeminiKey={!!hasGeminiKey} onNeedKey={onNeedKey} />}
         <FileSlot kind="coverLetter" label="Cover letter" hint="Optional. Attached when a form has a cover letter upload." />
+        <FileSlot kind="transcript" label="Transcript" hint="Optional. Attached when a form has a transcript upload." />
       </div>
     </Card>
   );

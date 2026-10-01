@@ -117,13 +117,14 @@ async function activeTab(): Promise<Browser.tabs.Tab | undefined> {
 
 const handlers: Handlers = {
   async getFillContext() {
-    const [profile, resume, coverLetter, settings] = await Promise.all([
+    const [profile, resume, coverLetter, transcript, settings] = await Promise.all([
       getProfile(),
       filePayload('resume'),
       filePayload('coverLetter'),
+      filePayload('transcript'),
       getSettings(),
     ]);
-    return { profile, resume, coverLetter, hasGeminiKey: !!settings.geminiApiKey };
+    return { profile, resume, coverLetter, transcript, hasGeminiKey: !!settings.geminiApiKey };
   },
 
   async generateAnswer(req) {

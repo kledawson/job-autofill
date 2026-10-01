@@ -162,6 +162,8 @@ function parseEducation(lines: string[]): Education[] {
 const TITLE_RE =
   /\b(engineer|intern|developer|analyst|manager|assistant|associate|scientist|designer|researcher|lead|director|consultant|specialist|coordinator|founder|co-founder|president|officer|fellow|tutor|teacher|instructor|representative|administrator|architect|technician|programmer|strategist|head|member|volunteer|ambassador|captain|chair)\b/i;
 
+const TRAILING_LOCATION_RE = new RegExp(`^(.*?)[,\\s]+((?:[A-Z][A-Za-z.'-]+ ?){1,3}, *(?:${STATES})\\b(?: +\\d{5})?)$`);
+
 function isLocation(s: string): boolean {
   return LOCATION_RE.test(s) && s.replace(LOCATION_RE, '').replace(/[\s,]/g, '').length < 3 || /^(remote|hybrid|on-?site)$/i.test(s.trim());
 }
@@ -212,8 +214,17 @@ function parseExperience(lines: string[]): Experience[] {
         .flatMap((s) => s.split(/\s+at\s+/))
         .map((s) => s.trim().replace(/^[,\s]+|[,\s]+$/g, ''))
         .filter(Boolean);
-      const location = segments.find(isLocation) ?? '';
+      let location = segments.find(isLocation) ?? '';
       segments = segments.filter((s) => !isLocation(s));
+      // "Acme Corp, San Francisco, CA" in one segment: the location is the tail, not part of the company.
+      if (!location) {
+        segments = segments.map((s) => {
+          const m = TRAILING_LOCATION_RE.exec(s);
+          if (!m || !m[1]!.trim()) return s;
+          location = m[2]!.trim();
+          return m[1]!.replace(/[,\s-]+$/, '').trim();
+        });
+      }
       // "Software Engineer, Acme Corp" on one line
       if (segments.length === 1 && segments[0]!.includes(', ')) segments = segments[0]!.split(/,\s+/);
       const titleIdx = segments.findIndex((s) => TITLE_RE.test(s));

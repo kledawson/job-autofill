@@ -12,7 +12,7 @@ const RESUME = { name: 'resume.pdf', type: 'application/pdf', base64: btoa('%PDF
 function deps(overrides: Partial<EngineDeps> = {}) {
   const answers: AnswerRequest[] = [];
   const d: EngineDeps = {
-    context: { profile: sampleProfile(), resume: RESUME, coverLetter: null, hasGeminiKey: true },
+    context: { profile: sampleProfile(), resume: RESUME, coverLetter: null, transcript: null, hasGeminiKey: true },
     answer: vi.fn(async (req: AnswerRequest) => {
       answers.push(req);
       return { ok: true as const, answer: `Answer to: ${req.question.slice(0, 20)}` };
@@ -56,7 +56,7 @@ describe('Greenhouse', () => {
     expect(byLabel['Location (City)']).toBe('location');
     expect(byLabel['Why do you want to work at Northwind?']).toBe('free_response');
     expect(byLabel['LinkedIn Profile']).toBe('linkedin');
-    expect(byLabel['How did you hear about this job?']).toBe('howHeard');
+    expect(byLabel['How did you hear about this job?']).toBe('unknown');
     expect(byLabel['Are you legally authorized to work in the United States for our Company?']).toBe('authorized');
     expect(byLabel['Are you currently located in the US?']).toBe('inUS');
     expect(byLabel['Are you currently based in or willing to relocate to the Bay Area for this position?']).toBe('relocate');
@@ -147,7 +147,7 @@ describe('Lever', () => {
     expect(byLabel['Name Pronunciation | How do you pronounce your name?']).toBe('unknown');
     expect(byLabel['Are you legally authorized to work in the country for which you are applying?']).toBe('authorized');
     expect(byLabel['Will you now or in the future require sponsorship for employment visa status (e.g., H-1B, etc.)?']).toBe('sponsorship');
-    expect(byLabel['Please tell us how you heard about this opportunity.']).toBe('howHeard');
+    expect(byLabel['Please tell us how you heard about this opportunity.']).toBe('unknown');
     expect(byLabel['Why do you want to work at Contoso?']).toBe('free_response');
     const resume = fields.find((f) => f.kind === 'file');
     expect(resume?.cls).toBe('resume');

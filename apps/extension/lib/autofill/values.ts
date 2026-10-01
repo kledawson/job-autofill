@@ -60,6 +60,20 @@ function eeo(value: string): string[] {
   return v === DECLINE ? DECLINE_VARIANTS : [v];
 }
 
+function normalizeCode(code: string): string {
+  const digits = code.replace(/\D/g, '');
+  return digits ? `+${digits}` : '';
+}
+
+/** The phone number without a leading dialing code ("+1 (415) 555-0100" → "(415) 555-0100"). */
+function nationalNumber(phone: string, countryCode: string): string {
+  const t = phone.trim();
+  const digits = normalizeCode(countryCode).slice(1);
+  if (!t || !digits) return t;
+  const m = new RegExp(`^(?:\\+\\s*${digits}|${digits}(?=[\\s.-]?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}$))[\\s.-]*`).exec(t);
+  return m ? t.slice(m[0].length) : t;
+}
+
 function nonEmpty(...values: (string | undefined)[]): string[] | null {
   const out = values.map((v) => v?.trim() ?? '').filter(Boolean);
   return out.length ? Array.from(new Set(out)) : null;
@@ -74,7 +88,7 @@ function isUS(country: string): boolean | null {
  * Candidate values for a profile key, best first. Several candidates let option matching
  * handle "Bachelor's Degree" vs "BS", or "January" vs "01". Null when the profile has no value.
  */
-export function valueFor(key: ProfileKey, p: Profile): string[] | null {
+export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean } = {}): string[] | null {
   const edu = p.education.find((e) => e.school) ?? p.education[0];
   const job = p.experience.find((x) => x.current) ?? p.experience.find((x) => x.company);
   switch (key) {
@@ -90,8 +104,22 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
       return nonEmpty(p.pronouns);
     case 'email':
       return nonEmpty(p.email);
-    case 'phone':
-      return nonEmpty(p.phone);
+    case 'phone': {
+      const national = nationalNumber(p.phone, p.countryCode);
+      if (!opts.phoneWithCode || !national) return nonEmpty(national);
+      const code = normalizeCode(p.countryCode);
+      return nonEmpty(code ? `${code} ${national}` : national);
+    }
+    case 'phoneCountryCode': {
+      const code = normalizeCode(p.countryCode);
+      if (!code) return null;
+      const digits = code.slice(1);
+      return code === '+1'
+        ? ['+1', '1', 'United States (+1)', 'United States +1', 'United States', 'USA']
+        : [code, digits, `(${code})`];
+    }
+    case 'age':
+      return nonEmpty(p.age);
     case 'address':
       return nonEmpty(p.address);
     case 'city':
@@ -119,7 +147,7 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
     case 'currentCompany':
       return nonEmpty(job?.company);
     case 'currentTitle':
-      return nonEmpty(p.currentTitle || job?.title);
+      return [p.currentTitle.trim() || 'N/A'];
     case 'school':
       return nonEmpty(edu?.school);
     case 'degree':
@@ -164,8 +192,6 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
       };
       return (mode && labels[mode]) || null;
     }
-    case 'howHeard':
-      return nonEmpty(p.preferences.howHeard);
     case 'gender':
       return eeo(p.eeo.gender);
     case 'race':
@@ -180,6 +206,7 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
       return DECLINE_VARIANTS;
     case 'resume':
     case 'coverLetter':
+    case 'transcript':
       return null;
   }
 }

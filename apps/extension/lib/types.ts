@@ -35,6 +35,9 @@ export interface Profile {
   currentTitle: string;
 
   email: string;
+  age: string;
+  /** Dialing code with a leading +, e.g. "+1". */
+  countryCode: string;
   phone: string;
   address: string;
   city: string;
@@ -62,7 +65,6 @@ export interface Profile {
     startDate: string;
     relocate: YesNo;
     workMode: '' | 'remote' | 'hybrid' | 'onsite' | 'flexible';
-    howHeard: string;
   };
 
   /** Voluntary self-identification. Never sent to Gemini. */
@@ -104,6 +106,8 @@ export function emptyProfile(): Profile {
     pronouns: '',
     currentTitle: '',
     email: '',
+    age: '',
+    countryCode: '+1',
     phone: '',
     address: '',
     city: '',
@@ -118,14 +122,14 @@ export function emptyProfile(): Profile {
     education: [emptyEducation()],
     experience: [emptyExperience()],
     skills: [],
-    preferences: { salary: '', startDate: '', relocate: '', workMode: '', howHeard: 'LinkedIn' },
+    preferences: { salary: '', startDate: '', relocate: '', workMode: '' },
     eeo: { gender: DECLINE, race: DECLINE, hispanic: DECLINE, veteran: DECLINE, disability: DECLINE },
     updatedAt: 0,
   };
 }
 
 export interface StoredFile {
-  kind: 'resume' | 'coverLetter';
+  kind: 'resume' | 'coverLetter' | 'transcript';
   name: string;
   type: string;
   blob: Blob;

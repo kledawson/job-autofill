@@ -19,6 +19,7 @@ import {
 import { clearOutline, outline, type ReviewState } from './highlight';
 import { characterLimitFor } from './match';
 import { scanFields, type ScannedField } from './scan';
+import { WITH_CODE_RE } from './classify';
 import { SEARCH_FIRST_RESULT_KEYS, valueFor } from './values';
 
 export interface EngineDeps {
@@ -55,6 +56,7 @@ export class FillSession {
   private aiNote?: string;
   private resumeFile: File | null;
   private coverLetterFile: File | null;
+  private transcriptFile: File | null;
 
   constructor(
     private doc: Document,
@@ -64,6 +66,7 @@ export class FillSession {
     this.jobInfo = adapter.jobInfo(doc);
     this.resumeFile = deps.context.resume ? payloadToFile(deps.context.resume) : null;
     this.coverLetterFile = deps.context.coverLetter ? payloadToFile(deps.context.coverLetter) : null;
+    this.transcriptFile = deps.context.transcript ? payloadToFile(deps.context.transcript) : null;
   }
 
   get info(): JobInfo {
@@ -153,12 +156,12 @@ export class FillSession {
     const key = rec.cls.key;
     const profile = this.deps.context.profile;
     try {
-      if (key === 'resume' || key === 'coverLetter') {
-        const file = key === 'resume' ? this.resumeFile : this.coverLetterFile;
+      if (key === 'resume' || key === 'coverLetter' || key === 'transcript') {
+        const file = key === 'resume' ? this.resumeFile : key === 'coverLetter' ? this.coverLetterFile : this.transcriptFile;
         rec.outcome = field.kind === 'file' && file ? fillFile(field, file) : 'nomatch';
         return;
       }
-      const values = valueFor(key, profile);
+      const values = valueFor(key, profile, { phoneWithCode: WITH_CODE_RE.test(field.label.toLowerCase()) });
       const first = values?.[0];
       if (!values || !first) {
         rec.outcome = 'nomatch';

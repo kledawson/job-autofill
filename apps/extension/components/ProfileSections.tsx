@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DECLINE, emptyEducation, emptyExperience, type Education, type Experience, type Profile } from '@/lib/types';
 import { Button, Card, Field, Grid, Input, Select, Textarea } from './ui';
 
@@ -54,8 +54,16 @@ export function BasicsSection({ profile: p, onChange }: SectionProps) {
           <Field label="Email" required>
             <Input type="email" value={p.email} onChange={(e) => set({ email: e.target.value })} autoComplete="email" />
           </Field>
-          <Field label="Phone" required>
-            <Input type="tel" value={p.phone} onChange={(e) => set({ phone: e.target.value })} autoComplete="tel" />
+          <div className="grid grid-cols-[6rem_1fr] gap-3">
+            <Field label="Country code" hint="Default +1 (US).">
+              <Input value={p.countryCode} onChange={(e) => set({ countryCode: e.target.value })} placeholder="+1" inputMode="tel" />
+            </Field>
+            <Field label="Phone" required hint="Without the country code.">
+              <Input type="tel" value={p.phone} onChange={(e) => set({ phone: e.target.value })} autoComplete="tel-national" />
+            </Field>
+          </div>
+          <Field label="Age">
+            <Input value={p.age} onChange={(e) => set({ age: e.target.value.replace(/\D/g, '').slice(0, 3) })} inputMode="numeric" placeholder="25" />
           </Field>
           <Field label="Current position" hint="Your job title now. Leave blank if you’re not currently working." className="sm:col-span-2">
             <Input
@@ -204,6 +212,46 @@ export function EducationSection({ profile: p, onChange }: SectionProps) {
   );
 }
 
+const BULLET = '◦ ';
+const stripBullet = (l: string) => l.replace(/^\s*[◦•●▪‣⁃∙·*-]\s*/, '');
+const toStored = (text: string) => text.split('\n').map(stripBullet).map((l) => l.trim()).filter(Boolean).join('\n');
+const toDisplay = (stored: string) => (stored ? stored.split('\n').map((l) => BULLET + l).join('\n') : '');
+
+/** Shows each line as a "◦" bullet while the profile keeps plain lines. */
+function BulletsInput({ value, onChange }: { value: string; onChange: (bullets: string) => void }) {
+  const [text, setText] = useState(toDisplay(value));
+  // Pick up changes that did not come from typing here, e.g. a resume import.
+  useEffect(() => {
+    setText((t) => (toStored(t) === value ? t : toDisplay(value)));
+  }, [value]);
+  const edit = (next: string) => {
+    // Keep a bullet on every line, including freshly added ones.
+    const display = next.split('\n').map((l) => (l.trim() ? BULLET + stripBullet(l).replace(/^\s+/, '') : l)).join('\n');
+    setText(display);
+    onChange(toStored(display));
+  };
+  return (
+    <Textarea
+      rows={5}
+      value={text}
+      placeholder={'◦ Built …\n◦ Improved … by …%'}
+      onFocus={() => !text && setText(BULLET)}
+      onBlur={() => !toStored(text) && setText('')}
+      onChange={(e) => edit(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        e.preventDefault();
+        const el = e.currentTarget;
+        const { selectionStart: s, selectionEnd: end } = el;
+        const next = `${text.slice(0, s)}\n${BULLET}${text.slice(end)}`;
+        setText(next);
+        onChange(toStored(next));
+        requestAnimationFrame(() => el.setSelectionRange(s + 1 + BULLET.length, s + 1 + BULLET.length));
+      }}
+    />
+  );
+}
+
 export function ExperienceSection({ profile: p, onChange }: SectionProps) {
   const update = (i: number, patch: Partial<Experience>) =>
     onChange({ ...p, experience: p.experience.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
@@ -261,12 +309,7 @@ export function ExperienceSection({ profile: p, onChange }: SectionProps) {
                 I currently work here
               </label>
               <Field label="What you did" hint="One bullet per line." className="sm:col-span-2">
-                <Textarea
-                  rows={4}
-                  value={x.bullets}
-                  onChange={(e) => update(i, { bullets: e.target.value })}
-                  placeholder={'Built …\nImproved … by …%'}
-                />
+                <BulletsInput value={x.bullets} onChange={(bullets) => update(i, { bullets })} />
               </Field>
             </Grid>
           </div>
@@ -316,9 +359,6 @@ export function PreferencesSection({ profile: p, onChange }: SectionProps) {
             value={p.preferences.workMode}
             onChange={(e) => set({ workMode: e.target.value as Profile['preferences']['workMode'] })}
           />
-        </Field>
-        <Field label="How did you hear about us? (default answer)" className="sm:col-span-2">
-          <Input value={p.preferences.howHeard} onChange={(e) => set({ howHeard: e.target.value })} placeholder="LinkedIn" />
         </Field>
       </Grid>
     </Card>

@@ -50,7 +50,7 @@ function ensureHost(): ShadowRoot {
   document.documentElement.appendChild(host);
   shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `<style>
-    .tag{position:absolute;font:600 11px/1 system-ui,sans-serif;color:#fff;background:#2563eb;border-radius:4px;padding:3px 6px;pointer-events:none;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+    .tag{position:absolute;font:600 11px/1 system-ui,sans-serif;color:#fff;background:#2563eb;border-radius:4px;padding:3px 6px;pointer-events:none;white-space:nowrap;width:max-content;box-shadow:0 1px 2px rgba(0,0,0,.2)}
     .card{position:fixed;right:16px;bottom:16px;max-width:320px;font:13px/1.4 system-ui,sans-serif;color:#111827;background:#fff;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:12px 14px}
     .card h4{margin:0 0 6px;font-size:13px;font-weight:600;display:flex;gap:8px;align-items:center}
     .card p{margin:2px 0;color:#374151}

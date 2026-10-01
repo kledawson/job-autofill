@@ -31,10 +31,10 @@ describe('prompt', () => {
 });
 
 describe('current position', () => {
-  it('prefers the Current position field over the current job', () => {
+  it('answers N/A when Current position is empty', () => {
     const p = sampleProfile();
     p.experience[0]!.current = true;
-    expect(valueFor('currentTitle', p)).toEqual(['Software Engineering Intern']);
+    expect(valueFor('currentTitle', p)).toEqual(['N/A']);
     p.currentTitle = 'Teaching Assistant';
     expect(valueFor('currentTitle', p)).toEqual(['Teaching Assistant']);
     expect(profileForPrompt(p)).toContain('Current position: Teaching Assistant');
@@ -50,5 +50,19 @@ describe('links', () => {
 
   it('treats a posting and its form as the same job', () => {
     expect(jobKey('https://jobs.lever.co/acme/123/apply?lever-source=x')).toBe(jobKey('https://jobs.lever.co/acme/123'));
+  });
+});
+
+describe('phone and country code', () => {
+  it('leaves the code off unless the form asks for it', () => {
+    const p = sampleProfile();
+    p.phone = '+1 (415) 555-0100';
+    expect(valueFor('phone', p)).toEqual(['(415) 555-0100']);
+    expect(valueFor('phone', p, { phoneWithCode: true })).toEqual(['+1 (415) 555-0100']);
+    p.phone = '415-555-0100';
+    p.countryCode = '+44';
+    expect(valueFor('phone', p, { phoneWithCode: true })).toEqual(['+44 415-555-0100']);
+    expect(valueFor('phoneCountryCode', p)).toContain('+44');
+    expect(valueFor('age', { ...p, age: '24' })).toEqual(['24']);
   });
 });

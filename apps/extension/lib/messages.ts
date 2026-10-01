@@ -14,6 +14,7 @@ export interface FillContext {
   profile: Profile;
   resume: FilePayload | null;
   coverLetter: FilePayload | null;
+  transcript: FilePayload | null;
   hasGeminiKey: boolean;
 }
 
