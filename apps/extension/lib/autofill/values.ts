@@ -1,6 +1,7 @@
 import { DECLINE, type Profile, type YesNo } from '../types';
 import type { ProfileKey } from './classify';
 import { normalize } from './match';
+import { salaryAnswer } from './salary';
 
 const MONTHS = [
   'January',
@@ -135,7 +136,7 @@ function isUS(country: string): boolean | null {
  * Candidate values for a profile key, best first. Several candidates let option matching
  * handle "Bachelor's Degree" vs "BS", or "January" vs "01". Null when the profile has no value.
  */
-export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date; label?: string } = {}): string[] | null {
+export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date; label?: string; description?: string } = {}): string[] | null {
   const edu = p.education.find((e) => e.school) ?? p.education[0];
   const job = p.experience.find((x) => x.current) ?? p.experience.find((x) => x.company);
   switch (key) {
@@ -243,7 +244,7 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     case 'relocate':
       return yesNo(p.preferences.relocate);
     case 'salary':
-      return nonEmpty(p.preferences.salary);
+      return salaryAnswer(p.preferences.salary, opts.description ?? '', opts.label ?? '');
     case 'startDate':
       return p.preferences.startDate.trim() ? nonEmpty(p.preferences.startDate) : twoWeeksOut(opts.now ?? new Date());
     case 'workMode': {

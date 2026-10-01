@@ -81,6 +81,7 @@ const RULES: Rule[] = [
   ['disability', /disabilit/],
   ['pronouns', /\bpronouns?\b/],
   ['preferredName', /preferred (first )?name|nickname|what would you like us to call you|name you go by/],
+  ['fullName', /first (and|&) last name|first and surname/],
   ['firstName', /first name|given name|forename/],
   ['lastName', /last name|surname|family name/],
   ['fullName', /^((your|full|legal|candidate|applicant)\s+)*name$|full (legal )?name|legal name/],
@@ -123,6 +124,8 @@ const RULES: Rule[] = [
   ['workMode', /remote|on-?site|hybrid|in[- ]office|work arrangement/],
 ];
 
+const OTHER_PERSON_RE =
+  /\b(employee|referr(er|al)|friend|reference|supervisor|manager|recruiter|relative|emergency contact|spouse|colleague|coworker)'?s?\b.*\bname\b|\bname\b.*\b(of|for) (the|your|a|an) (employee|referr(er|al)|friend|reference|supervisor|manager|recruiter|relative|colleague)/;
 const CONSENT_RE = /\b(i )?(agree|acknowledge|consent|certify|attest|confirm that|understand that)\b|privacy (policy|notice)|terms (of|and)|text messages|sms/;
 const CHALLENGE_RE = /not a (bot|robot)|prove (that )?you('| a)re (human|not)|figure out the (correct )?secret|captcha/;
 const BLOB_RE = /[A-Za-z0-9+/=]{80,}/;
@@ -149,6 +152,9 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
     }
     return { kind: 'unknown' };
   }
+
+  // "...provide the employee's first and last name": a name, but not the applicant's.
+  if (OTHER_PERSON_RE.test(label)) return { kind: 'unknown' };
 
   if (CHALLENGE_RE.test(label) || BLOB_RE.test(field.label) || field.label.length > 700) return { kind: 'challenge' };
 

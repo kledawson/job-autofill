@@ -207,7 +207,12 @@ export class FillSession {
       const hasCodeField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && r.cls.key === 'phoneCountryCode');
       // react-select style dropdowns expose no options up front, so a question-shaped label stands in.
       const yesNo = isYesNo(field.options) || (!field.options.length && field.kind !== 'text' && QUESTION_RE.test(field.label.trim()));
+      // Salary answers follow the pay range posted in the job description when there is one.
+      if (key === 'salary' && this.description === null) {
+        this.description = this.jobInfo.description || (await this.deps.jobDescription(this.jobInfo).catch(() => ''));
+      }
       const values = valueFor(key, profile, {
+        description: key === 'salary' ? (this.description ?? '') : undefined,
         phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
         yesNo: key === 'workMode' && yesNo,
         label: field.label,
@@ -236,7 +241,9 @@ export class FillSession {
           const isTypeahead =
             key === 'location' &&
             (this.adapter.platform === 'lever' || /location/i.test((field.el as HTMLElement).className));
-          rec.outcome = isTypeahead ? await fillTypeahead(field, values) : fillText(field, first);
+          // A number box rejects "$115,000"; give it just the digits.
+          const typed = (field.el as HTMLInputElement).type === 'number' ? first.replace(/[^\d.]/g, '') : first;
+          rec.outcome = isTypeahead ? await fillTypeahead(field, values) : fillText(field, typed);
           break;
         }
         case 'textarea':

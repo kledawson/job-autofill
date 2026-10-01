@@ -1,3 +1,4 @@
+import { findPayRange, salaryAnswer } from '../lib/autofill/salary';
 import { classifyField } from '../lib/autofill/classify';
 import { describe, expect, it } from 'vitest';
 import { clampToLimit, DEFAULT_PROMPT_TEMPLATE, profileForPrompt, renderPrompt } from '../lib/prompt';
@@ -145,5 +146,27 @@ describe('combined address lines', () => {
     expect(k('ZIP')).toBe('zip');
     expect(valueFor('cityStateZip', p)![0]).toBe('San Francisco, CA 94158');
     expect(valueFor('cityState', p)![0]).toBe('San Francisco, CA');
+  });
+});
+
+describe('salary and other people names', () => {
+  const desc = 'The base salary range for this role is $100,000 - $120,000 per year.';
+  it('uses the posted range, a figure above the midpoint, or the saved amount', () => {
+    expect(salaryAnswer('$90,000', desc, 'Salary expectations')).toEqual(['$115,000']);
+    expect(salaryAnswer('$90,000', desc, 'What is your expected salary range?')).toEqual(['$100,000 - $120,000']);
+    expect(salaryAnswer('$90,000', 'No pay listed', 'Salary expectations')).toEqual(['$90,000']);
+    expect(salaryAnswer('$100k-$120k', 'No pay listed', 'Salary expectations')).toEqual(['$100,000']);
+    expect(salaryAnswer('$100k-$120k', '', 'Salary range')).toEqual(['$100k-$120k']);
+    expect(salaryAnswer('', '', 'Salary')).toBeNull();
+    expect(findPayRange('Pay is $100-120k depending on experience')).toMatchObject({ low: 100000, high: 120000 });
+    expect(findPayRange('Pay is $55 - $65 per hour')).toMatchObject({ low: 55, high: 65, hourly: true });
+  });
+  it('does not put your name in a question about someone else', () => {
+    const k = (label: string) =>
+      (classifyField({ kind: 'text', label, id: '', name: '', path: '', autocomplete: '', required: false, options: [], members: [] } as never) as { kind: string; key?: string });
+    expect(k("If you answered yes to the question above, please provide the Golden State Warriors employee's first and last name.").kind).toBe('unknown');
+    expect(k('Referral name').kind).toBe('unknown');
+    expect(k('Please enter your first and last name').key).toBe('fullName');
+    expect(k('Last Name').key).toBe('lastName');
   });
 });
