@@ -1,3 +1,5 @@
+import { standardDegree } from '../lib/degree';
+import { sanitizeDraft } from '../lib/resume';
 import { bestOption } from '../lib/autofill/match';
 import { searchQueries } from '../lib/autofill/fill';
 import { findPayRange, salaryAnswer } from '../lib/autofill/salary';
@@ -184,7 +186,8 @@ describe('degree and school wording', () => {
     expect(valueFor('degree', p)).toContain("Bachelor's Degree");
     expect(valueFor('major', p)).toEqual(['Computer Science']);
     p.education[0]!.degree = 'Bachelor of Science in Computer Science';
-    expect(valueFor('degree', p)![0]).toBe('Bachelor of Science');
+    expect(valueFor('degree', p)![0]).toBe("Bachelor's Degree");
+    expect(valueFor('degree', p)).toContain('Bachelor of Science');
     expect(valueFor('major', p)).toEqual(['Computer Science']);
   });
   it('matches schools despite commas and hyphens, and builds fallback searches', () => {
@@ -192,7 +195,22 @@ describe('degree and school wording', () => {
     expect(searchQueries(['University of California, Santa Cruz']).slice(0, 3)).toEqual([
       'University of California, Santa Cruz',
       'University of California Santa Cruz',
-      'University of California Santa',
+      'Santa Cruz',
     ]);
+  });
+});
+
+describe('degree type', () => {
+  it('maps wordings to a standard type', () => {
+    expect(standardDegree('B.S.')).toBe("Bachelor's Degree");
+    expect(standardDegree('Bachelor of Arts')).toBe("Bachelor's Degree");
+    expect(standardDegree("Master's")).toBe("Master's Degree");
+    expect(standardDegree('MBA')).toBe('MBA');
+    expect(standardDegree('Ph.D.')).toBe('Doctorate (Ph.D.)');
+    expect(standardDegree('Certificate')).toBe('');
+  });
+  it('keeps type and field apart when reading a resume', () => {
+    const d = sanitizeDraft({ education: [{ school: 'UCSC', degree: 'B.S. Computer Science', major: '' }] });
+    expect(d.education[0]).toMatchObject({ degree: "Bachelor's Degree", major: 'Computer Science' });
   });
 });

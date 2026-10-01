@@ -61,7 +61,7 @@ describe('local resume reader', () => {
     const [edu] = parseResumeText(RESUME_A).education;
     expect(edu).toMatchObject({
       school: 'University of California, Berkeley',
-      degree: 'Bachelor of Science',
+      degree: "Bachelor's Degree",
       major: 'Computer Science',
       gpa: '3.8',
       startDate: '2022-08',
@@ -99,7 +99,7 @@ describe('local resume reader', () => {
     expect(d.portfolio).toBe('https://samlee.dev');
     expect(d.experience[0]).toMatchObject({ title: 'Data Analyst', company: 'Northwind Traders', startDate: '2024-06', current: true });
     expect(d.experience[0]!.bullets.split('\n')).toHaveLength(2);
-    expect(d.education[0]).toMatchObject({ school: 'New York University', degree: 'B.A.', major: 'Economics', endDate: '2026-05' });
+    expect(d.education[0]).toMatchObject({ school: 'New York University', degree: "Bachelor's Degree", major: 'Economics', endDate: '2026-05' });
     expect(d.skills).toEqual(['Excel', 'SQL', 'Python', 'Tableau']);
     expect(missingSections(d)).toEqual([]);
   });

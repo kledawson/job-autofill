@@ -278,7 +278,7 @@ export async function fillCombobox(
   // Async search lists (locations, schools) need a query first.
   const query = candidates[0] ?? '';
   if (idx < 0 && query) {
-    let lastResults: HTMLElement[] = [];
+    let firstResults: HTMLElement[] = [];
     // The list may spell things differently ("University of California - Santa Cruz"), so try the
     // wording as given, then cleaner and shorter searches, until a result matches.
     const queries = searchQueries(candidates);
@@ -290,11 +290,12 @@ export async function fillCombobox(
           return o.length ? o : null;
         }, i === 0 ? timing.search : Math.min(timing.search, 1500))) ?? [];
       trace.push(`typed${i + 1}=${options.length}`);
-      if (options.length) lastResults = options;
+      if (options.length && !firstResults.length) firstResults = options;
       idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
       if (idx >= 0) break;
     }
-    if (idx < 0) options = lastResults;
+    // Only the most specific search that returned anything may supply a "top result" guess.
+    if (idx < 0) options = firstResults;
     const firstWord = normalize(query).split(' ')[0] ?? '';
     if (idx < 0 && opts.acceptFirstResult && firstWord && normalize(options[0]?.textContent ?? '').includes(firstWord)) {
       idx = 0;
@@ -325,7 +326,9 @@ export function searchQueries(candidates: string[]): string[] {
   const clean = (s: string) => s.replace(/[(),;:.\/-]+/g, ' ').replace(/\s+/g, ' ').trim();
   const words = (s: string, n: number) => clean(s).split(' ').slice(0, n).join(' ');
   const first = candidates[0] ?? '';
-  const all = [first, ...candidates.slice(1, 3), clean(first), words(first, 4), words(first, 3), words(first, 2)];
+  const tail = (n: number) => clean(first).split(' ').slice(-n).join(' ');
+  // The distinctive end of a name ("Santa Cruz") often finds it when the full wording does not.
+  const all = [first, ...candidates.slice(1, 3), clean(first), tail(2), words(first, 4), words(first, 3), words(first, 2)];
   return Array.from(new Set(all.map((q) => q.trim()).filter((q) => q.length >= 2)));
 }
 

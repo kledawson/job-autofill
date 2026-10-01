@@ -1,3 +1,4 @@
+import { splitDegree, standardDegree } from './degree';
 import { emptyProfile, type Education, type Experience, type Profile } from './types';
 
 /** Profile fields a resume can supply. Work authorization, preferences, and EEO answers are never inferred. */
@@ -125,15 +126,18 @@ export function sanitizeDraft(raw: unknown): ResumeDraft {
     website: url(r.website),
     currentTitle: text(r.currentTitle, 120),
     education: list(r.education, 8)
-      .map((e) => ({
+      .map((e) => {
+        const split = splitDegree({ degree: text(e.degree, 120), major: text(e.major, 120) });
+        return {
         school: text(e.school, 150),
-        degree: text(e.degree, 120),
-        major: text(e.major, 120),
+        degree: standardDegree(split.degree) || split.degree,
+        major: split.major,
         gpa: text(e.gpa, 20),
         startDate: month(e.startDate),
         endDate: month(e.endDate),
         honors: text(e.honors, 300),
-      }))
+      };
+      })
       .filter((e) => e.school),
     experience: list(r.experience, 12)
       .map((x) => {

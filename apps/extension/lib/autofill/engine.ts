@@ -22,7 +22,7 @@ import { clearOutline, outline, type ReviewState } from './highlight';
 import { characterLimitFor } from './match';
 import { scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE } from './classify';
-import { NO_TOP_OPTION_KEYS, SEARCH_FIRST_RESULT_KEYS, valueFor } from './values';
+import { SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
 import { isPlaceholderOption } from './match';
 
 export interface EngineDeps {
@@ -217,7 +217,7 @@ export class FillSession {
         yesNo: key === 'workMode' && yesNo,
         label: field.label,
       });
-      const topOption = !NO_TOP_OPTION_KEYS.has(key);
+      const topOption = TOP_OPTION_KEYS.has(key);
       // A multiple-choice list of arrangements: "Flexible" ticks every one.
       if (key === 'workMode' && field.kind === 'checkboxGroup' && profile.preferences.workMode === 'flexible') {
         const boxes = field.members as HTMLInputElement[];

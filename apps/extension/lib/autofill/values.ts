@@ -1,6 +1,7 @@
 import { DECLINE, type Profile, type YesNo } from '../types';
 import type { ProfileKey } from './classify';
 import { normalize } from './match';
+import { splitDegree, standardDegree } from '../degree';
 import { salaryAnswer } from './salary';
 
 const MONTHS = [
@@ -46,21 +47,9 @@ function year(yyyyMm: string): string[] | null {
   return yyyy ? [yyyy] : null;
 }
 
-const DEGREE_START =
-  /^((?:bachelor|master|doctor)s?(?:'s|’s)?(?: of (?:science|arts|engineering|business administration|fine arts))?|ph\.?\s?d\.?|associate(?:'s|’s)?(?: of (?:science|arts))?|b\.?\s?[sa]\.?(?:c\.?)?|m\.?\s?[sa]\.?(?:c\.?)?|mba|b\.?\s?eng\.?|m\.?\s?eng\.?)(?=[\s,:-])[\s,:-]*(?:in\s+)?(.+)$/i;
-
-/** A degree saved as "B.S. Computer Science" is the degree "B.S." and the major "Computer Science". */
-function splitDegree(e: { degree: string; major: string }): { degree: string; major: string } {
-  const degree = e.degree.trim();
-  const major = e.major.trim();
-  if (major) return { degree, major };
-  const m = DEGREE_START.exec(degree);
-  return m ? { degree: m[1]!.trim().replace(/[,:-]$/, ''), major: m[2]!.trim() } : { degree, major };
-}
-
-function degreeVariants(degree: string): string[] {
+function degreeVariants(degree: string, raw = degree): string[] {
   const d = degree.toLowerCase();
-  const out = [degree];
+  const out = Array.from(new Set([degree, raw]));
   if (/bachelor|\bb\.?s\.?\b|\bb\.?a\.?\b|\bbsc\b|undergrad/.test(d)) out.push("Bachelor's Degree", 'Bachelor', "Bachelor's");
   else if (/master|\bm\.?s\.?\b|\bm\.?a\.?\b|\bmsc\b|mba/.test(d)) out.push("Master's Degree", 'Master', "Master's");
   else if (/ph\.?d|doctor/.test(d)) out.push('Doctor of Philosophy (Ph.D.)', 'Ph.D.', 'Doctorate');
@@ -223,7 +212,8 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return nonEmpty(edu?.school);
     case 'degree': {
       const { degree } = edu ? splitDegree(edu) : { degree: '' };
-      return degree ? degreeVariants(degree) : null;
+      const type = standardDegree(degree);
+      return degree ? degreeVariants(type || degree, degree) : null;
     }
     case 'major':
       return nonEmpty(edu ? splitDegree(edu).major : '');
@@ -315,7 +305,9 @@ export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
 ]);
 
 /** Keys never guessed from the top dropdown option when nothing matches. */
-export const NO_TOP_OPTION_KEYS = new Set<ProfileKey>([...CHOICE_ONLY_KEYS, 'workMode', 'startDate', 'salary', 'phoneCountryCode', 'phone', 'age']);
+/** Keys where guessing the top search result beats leaving the field empty ("San Jose, CA, United States"). */
+export const TOP_OPTION_KEYS = new Set<ProfileKey>(['location', 'city']);
+
 
 /** Keys where the first search result is acceptable when no option matches by text. */
 export const SEARCH_FIRST_RESULT_KEYS = new Set<ProfileKey>(['location']);

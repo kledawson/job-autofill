@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { DECLINE, emptyEducation, emptyExperience, type Education, type Experience, type Profile } from '@/lib/types';
+import { DEGREE_TYPES, standardDegree } from '@/lib/degree';
 import { Button, Card, Field, Grid, Input, Select, Textarea } from './ui';
 
 export interface SectionProps {
@@ -159,6 +160,13 @@ function ListControls({ onRemove, canRemove }: { onRemove: () => void; canRemove
   ) : null;
 }
 
+/** Standard degree types, plus the saved value when it is something else so nothing is lost. */
+function degreeOptions(current: string): [string, string][] {
+  const types: [string, string][] = [['', 'Select…'], ...DEGREE_TYPES.map((t) => [t, t] as [string, string])];
+  const saved = standardDegree(current) || current;
+  return saved && !DEGREE_TYPES.includes(saved as (typeof DEGREE_TYPES)[number]) ? [...types, [saved, saved]] : types;
+}
+
 export function EducationSection({ profile: p, onChange }: SectionProps) {
   const update = (i: number, patch: Partial<Education>) =>
     onChange({ ...p, education: p.education.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
@@ -186,10 +194,14 @@ export function EducationSection({ profile: p, onChange }: SectionProps) {
               <Field label="School" required={i === 0} className="sm:col-span-2">
                 <Input value={e.school} onChange={(ev) => update(i, { school: ev.target.value })} placeholder="University of …" />
               </Field>
-              <Field label="Degree">
-                <Input value={e.degree} onChange={(ev) => update(i, { degree: ev.target.value })} placeholder="Bachelor of Science" />
+              <Field label="Degree type" hint="Fills the degree dropdown.">
+                <Select
+                  options={degreeOptions(e.degree)}
+                  value={standardDegree(e.degree) || e.degree}
+                  onChange={(ev) => update(i, { degree: ev.target.value })}
+                />
               </Field>
-              <Field label="Major">
+              <Field label="Field of study / discipline" hint="Fills the major or discipline field.">
                 <Input value={e.major} onChange={(ev) => update(i, { major: ev.target.value })} placeholder="Computer Science" />
               </Field>
               <Field label="Start">
