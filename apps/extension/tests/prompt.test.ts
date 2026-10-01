@@ -1,3 +1,5 @@
+import { bestOption } from '../lib/autofill/match';
+import { searchQueries } from '../lib/autofill/fill';
 import { findPayRange, salaryAnswer } from '../lib/autofill/salary';
 import { classifyField } from '../lib/autofill/classify';
 import { describe, expect, it } from 'vitest';
@@ -171,5 +173,26 @@ describe('salary and other people names', () => {
     expect(k('Referral name').kind).toBe('unknown');
     expect(k('Please enter your first and last name').key).toBe('fullName');
     expect(k('Last Name').key).toBe('lastName');
+  });
+});
+
+describe('degree and school wording', () => {
+  it('splits a degree that includes the major', () => {
+    const p = sampleProfile();
+    p.education[0]!.degree = 'B.S. Computer Science';
+    p.education[0]!.major = '';
+    expect(valueFor('degree', p)).toContain("Bachelor's Degree");
+    expect(valueFor('major', p)).toEqual(['Computer Science']);
+    p.education[0]!.degree = 'Bachelor of Science in Computer Science';
+    expect(valueFor('degree', p)![0]).toBe('Bachelor of Science');
+    expect(valueFor('major', p)).toEqual(['Computer Science']);
+  });
+  it('matches schools despite commas and hyphens, and builds fallback searches', () => {
+    expect(bestOption(['University of California, Santa Cruz'], ['University of California - Santa Cruz', 'University of California - Davis'])).toBe(0);
+    expect(searchQueries(['University of California, Santa Cruz']).slice(0, 3)).toEqual([
+      'University of California, Santa Cruz',
+      'University of California Santa Cruz',
+      'University of California Santa',
+    ]);
   });
 });

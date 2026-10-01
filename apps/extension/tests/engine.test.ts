@@ -38,7 +38,7 @@ const countSubmit = (e: Event) => {
 };
 
 beforeEach(() => {
-  Object.assign(timing, { menuOpen: 20, search: 30, typeahead: 30, afterUpload: 0 });
+  Object.assign(timing, { menuOpen: 20, search: 30, typeahead: 30, afterUpload: 0, settle: 0 });
   submits = 0;
   window.addEventListener('submit', countSubmit);
 });

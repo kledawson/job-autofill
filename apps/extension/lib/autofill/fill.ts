@@ -12,11 +12,13 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function waitFor<T>(fn: () => T | null | undefined | false, timeout: number, interval = 80): Promise<T | null> {
   const end = Date.now() + timeout;
+  // Short waits (tests, quick retries) poll proportionally so they do not overshoot their budget.
+  const step = Math.min(interval, Math.max(5, timeout / 3));
   for (;;) {
     const v = fn();
     if (v) return v;
     if (Date.now() > end) return null;
-    await sleep(interval);
+    await sleep(step);
   }
 }
 
@@ -276,14 +278,23 @@ export async function fillCombobox(
   // Async search lists (locations, schools) need a query first.
   const query = candidates[0] ?? '';
   if (idx < 0 && query) {
-    setNativeValueKeepFocus(input, query);
-    options =
-      (await waitFor(() => {
-        const o = comboboxOptions(input).filter((o) => !/^(loading|searching|no (results|options))/i.test(o.textContent?.trim() ?? ''));
-        return o.length ? o : null;
-      }, timing.search)) ?? [];
-    trace.push(`typed=${options.length}`);
-    idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
+    let lastResults: HTMLElement[] = [];
+    // The list may spell things differently ("University of California - Santa Cruz"), so try the
+    // wording as given, then cleaner and shorter searches, until a result matches.
+    const queries = searchQueries(candidates);
+    for (const [i, q] of queries.entries()) {
+      setNativeValueKeepFocus(input, q);
+      options =
+        (await waitFor(() => {
+          const o = comboboxOptions(input).filter((o) => !/^(loading|searching|no (results|options))/i.test(o.textContent?.trim() ?? ''));
+          return o.length ? o : null;
+        }, i === 0 ? timing.search : Math.min(timing.search, 1500))) ?? [];
+      trace.push(`typed${i + 1}=${options.length}`);
+      if (options.length) lastResults = options;
+      idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
+      if (idx >= 0) break;
+    }
+    if (idx < 0) options = lastResults;
     const firstWord = normalize(query).split(' ')[0] ?? '';
     if (idx < 0 && opts.acceptFirstResult && firstWord && normalize(options[0]?.textContent ?? '').includes(firstWord)) {
       idx = 0;
@@ -307,6 +318,15 @@ export async function fillCombobox(
   // Give the page time to commit the choice to its own state before the next field is touched.
   await sleep(timing.settle);
   return comboboxHasValue(field) || !input.isConnected ? 'filled' : 'failed';
+}
+
+/** Search texts to try in a type-ahead dropdown: each candidate as written, then punctuation-free and shortened forms of the first. */
+export function searchQueries(candidates: string[]): string[] {
+  const clean = (s: string) => s.replace(/[(),;:.\/-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = (s: string, n: number) => clean(s).split(' ').slice(0, n).join(' ');
+  const first = candidates[0] ?? '';
+  const all = [first, ...candidates.slice(1, 3), clean(first), words(first, 4), words(first, 3), words(first, 2)];
+  return Array.from(new Set(all.map((q) => q.trim()).filter((q) => q.length >= 2)));
 }
 
 /** The arrow/toggle button of a custom dropdown, if it has one. */

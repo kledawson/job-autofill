@@ -46,6 +46,18 @@ function year(yyyyMm: string): string[] | null {
   return yyyy ? [yyyy] : null;
 }
 
+const DEGREE_START =
+  /^((?:bachelor|master|doctor)s?(?:'s|’s)?(?: of (?:science|arts|engineering|business administration|fine arts))?|ph\.?\s?d\.?|associate(?:'s|’s)?(?: of (?:science|arts))?|b\.?\s?[sa]\.?(?:c\.?)?|m\.?\s?[sa]\.?(?:c\.?)?|mba|b\.?\s?eng\.?|m\.?\s?eng\.?)(?=[\s,:-])[\s,:-]*(?:in\s+)?(.+)$/i;
+
+/** A degree saved as "B.S. Computer Science" is the degree "B.S." and the major "Computer Science". */
+function splitDegree(e: { degree: string; major: string }): { degree: string; major: string } {
+  const degree = e.degree.trim();
+  const major = e.major.trim();
+  if (major) return { degree, major };
+  const m = DEGREE_START.exec(degree);
+  return m ? { degree: m[1]!.trim().replace(/[,:-]$/, ''), major: m[2]!.trim() } : { degree, major };
+}
+
 function degreeVariants(degree: string): string[] {
   const d = degree.toLowerCase();
   const out = [degree];
@@ -209,10 +221,12 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return [p.currentTitle.trim() || 'N/A'];
     case 'school':
       return nonEmpty(edu?.school);
-    case 'degree':
-      return edu?.degree ? degreeVariants(edu.degree) : null;
+    case 'degree': {
+      const { degree } = edu ? splitDegree(edu) : { degree: '' };
+      return degree ? degreeVariants(degree) : null;
+    }
     case 'major':
-      return nonEmpty(edu?.major);
+      return nonEmpty(edu ? splitDegree(edu).major : '');
     case 'gpa':
       return nonEmpty(edu?.gpa);
     case 'eduStartMonth':
