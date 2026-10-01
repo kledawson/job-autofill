@@ -1,3 +1,4 @@
+import { classifyField } from '../lib/autofill/classify';
 import { describe, expect, it } from 'vitest';
 import { clampToLimit, DEFAULT_PROMPT_TEMPLATE, profileForPrompt, renderPrompt } from '../lib/prompt';
 import { jobKey, toApplicationUrl } from '../lib/platforms';
@@ -87,5 +88,32 @@ describe('start date, work arrangement, survey answers', () => {
     const p = sampleProfile();
     p.eeo.gender = 'Male';
     expect(valueFor('gender', p)).toContain('Man');
+  });
+});
+
+describe('combined and location questions', () => {
+  it('answers authorized-without-sponsorship from both saved answers', () => {
+    const p = sampleProfile();
+    p.workAuth = { authorizedUS: 'yes', needsSponsorship: 'no', status: '' };
+    expect(valueFor('authorizedNoSponsor', p)).toEqual(['Yes']);
+    p.workAuth.needsSponsorship = 'yes';
+    expect(valueFor('authorizedNoSponsor', p)).toEqual(['No']);
+  });
+  it('recognizes Bay Area residence and onsite questions', () => {
+    const p = sampleProfile();
+    p.city = 'San Jose';
+    expect(valueFor('livesIn', p, { label: 'Are you currently living in the San Francisco Bay Area?' })).toEqual(['Yes']);
+    p.city = 'Austin';
+    expect(valueFor('livesIn', p, { label: 'Are you currently living in the San Francisco Bay Area?' })).toEqual(['No']);
+    p.preferences.workMode = 'onsite';
+    expect(valueFor('workMode', p, { yesNo: true, label: 'Are you able to work onsite in our Mountain View, CA office?' })).toEqual(['Yes']);
+    expect(valueFor('workMode', p, { yesNo: true, label: 'Are you open to remote work?' })).toBeNull();
+  });
+  it('classifies the three questions', () => {
+    const f = (label: string) => ({ kind: 'combobox', label, id: '', name: '', path: '', autocomplete: '', required: true, options: [], members: [] }) as never;
+    const k = (label: string) => (classifyField(f(label)) as { key?: string }).key;
+    expect(k('Are you legally authorized to work in the United States without requiring visa sponsorship now or in the future?*')).toBe('authorizedNoSponsor');
+    expect(k('Are you currently living in the San Francisco Bay Area?')).toBe('livesIn');
+    expect(k('Are you able to work onsite in our Mountain View, CA office? (5 days in-office required)')).toBe('workMode');
   });
 });

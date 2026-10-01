@@ -1,5 +1,6 @@
 import { DECLINE, type Profile, type YesNo } from '../types';
 import type { ProfileKey } from './classify';
+import { normalize } from './match';
 
 const MONTHS = [
   'January',
@@ -101,6 +102,25 @@ function nationalNumber(phone: string, countryCode: string): string {
   return m ? t.slice(m[0].length) : t;
 }
 
+const ARRANGEMENT_RE = {
+  remote: /remote|work from home|wfh/,
+  hybrid: /hybrid/,
+  onsite: /on-?site|in[- ]office|in[- ]person|\boffice\b/,
+};
+
+const BAY_AREA_CITIES = new Set(
+  `san francisco|san jose|oakland|berkeley|palo alto|mountain view|sunnyvale|santa clara|fremont|redwood city|san mateo|menlo park|cupertino|milpitas|hayward|los altos|foster city|south san francisco|daly city|walnut creek|emeryville|san rafael|pleasanton|livermore|campbell|los gatos|saratoga|san carlos|belmont|burlingame|union city|newark|dublin|concord|richmond|alameda|san leandro|sausalito|mill valley|atherton|east palo alto|millbrae|san bruno|pacifica|brisbane|san ramon|danville|novato|petaluma|santa rosa|napa|vallejo|half moon bay`.split('|'),
+);
+
+/** "Are you living in the Bay Area / in Austin?": Yes when the profile city fits, No only for a clear Bay Area miss. */
+function livesIn(label: string, p: Profile): string[] | null {
+  const city = normalize(p.city);
+  if (!city) return null;
+  const l = ` ${normalize(label)} `;
+  if (/\bbay area\b/.test(l)) return [BAY_AREA_CITIES.has(city) ? 'Yes' : 'No'];
+  return l.includes(` ${city} `) ? ['Yes'] : null;
+}
+
 function nonEmpty(...values: (string | undefined)[]): string[] | null {
   const out = values.map((v) => v?.trim() ?? '').filter(Boolean);
   return out.length ? Array.from(new Set(out)) : null;
@@ -115,7 +135,7 @@ function isUS(country: string): boolean | null {
  * Candidate values for a profile key, best first. Several candidates let option matching
  * handle "Bachelor's Degree" vs "BS", or "January" vs "01". Null when the profile has no value.
  */
-export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date } = {}): string[] | null {
+export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date; label?: string } = {}): string[] | null {
   const edu = p.education.find((e) => e.school) ?? p.education[0];
   const job = p.experience.find((x) => x.current) ?? p.experience.find((x) => x.company);
   switch (key) {
@@ -199,6 +219,12 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return yesNo(p.workAuth.authorizedUS);
     case 'sponsorship':
       return yesNo(p.workAuth.needsSponsorship);
+    case 'authorizedNoSponsor': {
+      if (p.workAuth.authorizedUS === 'no' || p.workAuth.needsSponsorship === 'yes') return ['No'];
+      return p.workAuth.authorizedUS === 'yes' && p.workAuth.needsSponsorship === 'no' ? ['Yes'] : null;
+    }
+    case 'livesIn':
+      return livesIn(opts.label ?? '', p);
     case 'inUS': {
       const us = isUS(p.country);
       return us === null ? null : [us ? 'Yes' : 'No'];
@@ -211,8 +237,13 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return p.preferences.startDate.trim() ? nonEmpty(p.preferences.startDate) : twoWeeksOut(opts.now ?? new Date());
     case 'workMode': {
       const mode = p.preferences.workMode;
-      // "Flexible" means willing to work any arrangement, so every yes/no question about one is Yes.
-      if (opts.yesNo) return mode === 'flexible' ? ['Yes'] : null;
+      if (opts.yesNo) {
+        // "Flexible" means willing to work any arrangement, so every yes/no question about one is Yes.
+        if (mode === 'flexible') return ['Yes'];
+        const l = (opts.label ?? '').toLowerCase();
+        const asked = (Object.keys(ARRANGEMENT_RE) as (keyof typeof ARRANGEMENT_RE)[]).filter((k) => ARRANGEMENT_RE[k].test(l));
+        return mode && asked.includes(mode as keyof typeof ARRANGEMENT_RE) ? ['Yes'] : null;
+      }
       const labels: Record<string, string[]> = {
         remote: ['Remote'],
         hybrid: ['Hybrid'],
@@ -242,6 +273,8 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
 
 /** Keys whose values are only safe to pick from a list, never typed free-form. */
 export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
+  'authorizedNoSponsor',
+  'livesIn',
   'authorized',
   'sponsorship',
   'inUS',

@@ -164,10 +164,12 @@ export class FillSession {
         return;
       }
       const hasCodeField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && r.cls.key === 'phoneCountryCode');
-      const yesNo = isYesNo(field.options);
+      // react-select style dropdowns expose no options up front, so a question-shaped label stands in.
+      const yesNo = isYesNo(field.options) || (!field.options.length && field.kind !== 'text' && QUESTION_RE.test(field.label.trim()));
       const values = valueFor(key, profile, {
         phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
         yesNo: key === 'workMode' && yesNo,
+        label: field.label,
       });
       const topOption = !NO_TOP_OPTION_KEYS.has(key);
       // A multiple-choice list of arrangements: "Flexible" ticks every one.
@@ -305,6 +307,8 @@ export async function waitForForm(doc: Document, adapter: Adapter, timeout = 150
   }
   return false;
 }
+
+const QUESTION_RE = /^(are|is|will|would|do|does|can|could|have|did)\b/i;
 
 /** True when the choices are just Yes and No ("Are you open to remote work?"). */
 function isYesNo(options: string[]): boolean {

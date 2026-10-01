@@ -34,6 +34,8 @@ export type ProfileKey =
   | 'authorized'
   | 'sponsorship'
   | 'inUS'
+  | 'livesIn'
+  | 'authorizedNoSponsor'
   | 'relocate'
   | 'salary'
   | 'startDate'
@@ -64,6 +66,8 @@ export const WITH_CODE_RE = /(includ\w*|with|plus|add)\s+(the\s+|your\s+)?(count
 
 // Order matters: specific phrases come before the generic ones they contain.
 const RULES: Rule[] = [
+  // One question that covers both: authorized to work without needing sponsorship.
+  ['authorizedNoSponsor', /^(?=.*(authori[sz]ed|eligible|legally|permitted|right) .*work)(?=.*(without|not (be )?requir|no (need|requirement)|not need).*sponsor)/],
   ['sponsorship', /sponsor|visa (status|support)|require.*visa/],
   ['authorized', /authori[sz]ed to work|legally (able|authori[sz]ed|eligible|permitted)|work authori[sz]ation|eligib(le|ility) to work|right to work|permitted to work/],
   ['hispanic', /hispanic|latin[oax]/],
@@ -88,6 +92,7 @@ const RULES: Rule[] = [
   ['website', /website|personal (site|url|page)|other (website|url|link)|^url$|blog/],
   ['inUS', /(currently |presently )?(located|based|live|living|reside|residing) in the (us|u\.s\.?|usa|united states)/],
   ['relocate', /relocat/],
+  ['livesIn', /(live|living|located|based|reside|residing) (in|within|near|around) /],
   ['zip', /zip|postal code|postcode/],
   ['address', /street|^address( line)?( 1)?$|mailing address|home address/],
   ['location', /location|where (are you|do you) (currently )?(based|located|live)|where do you plan (on|to) work|current city/],
