@@ -266,6 +266,28 @@ describe('Ashby', () => {
   });
 });
 
+describe('Ashby EEO section outside the first container', () => {
+  it('fills the multiple choice EEO questions', async () => {
+    const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    const group = (key: string, title: string, options: string[]) =>
+      `<fieldset class="ashby-application-form-input-radio-group"><label class="ashby-application-form-question-title" for="_systemfield_eeoc_${key}">${title}</label>${options
+        .map(
+          (o, i) =>
+            `<div class="opt"><span><input type="radio" id="u__systemfield_eeoc_${key}-${i}" name="u__systemfield_eeoc_${key}"></span><label for="u__systemfield_eeoc_${key}-${i}" class="opt-label">${o}</label></div>`,
+        )
+        .join('')}</fieldset>`;
+    doc.body.innerHTML = `<div class="ashby-application-form-container"><div class="ashby-application-form-section-container"><div class="ashby-application-form-field-entry"><label for="_systemfield_name">Name</label><input id="_systemfield_name" type="text"></div></div></div>
+      <div><div class="ashby-application-form-section-container">${group('gender', 'Gender', ['Male', 'Female', 'Decline to self-identify'])}${group('race', 'Race', ['Hispanic or Latino', 'White (Not Hispanic or Latino)', 'Decline to self-identify'])}${group('veteran_status', 'Veteran Status', ['I am not a protected veteran', 'I decline to self-identify for protected veteran status'])}</div></div>`;
+    const eeo = { gender: 'Decline to answer', race: 'Decline to answer', hispanic: 'Decline to answer', veteran: 'Decline to answer', disability: 'Decline to answer' };
+    const { d } = deps({ context: { profile: { ...sampleProfile(), eeo }, resume: RESUME, coverLetter: null, transcript: null, hasGeminiKey: false } });
+    await new FillSession(doc, ADAPTERS.ashby, d).run();
+    const picked = (n: string) => (doc.querySelector(`input[name="u__systemfield_eeoc_${n}"]:checked`)?.id ?? '');
+    expect(picked('gender')).toBe('u__systemfield_eeoc_gender-2');
+    expect(picked('race')).toBe('u__systemfield_eeoc_race-2');
+    expect(picked('veteran_status')).toBe('u__systemfield_eeoc_veteran_status-1');
+  });
+});
+
 describe('conditional questions', () => {
   it('fills a race question that only appears after Hispanic/Latino is answered', async () => {
     const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/abc/apply');
