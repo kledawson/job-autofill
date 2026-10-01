@@ -1,6 +1,6 @@
 import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
-import { ATS_MATCHES } from './lib/platforms';
+import { WEB_MATCHES } from './lib/platforms';
 
 // Public key that pins the unpacked extension ID to kjepjmmbimmbpdfinkippakkmhbglccc,
 // so a Google OAuth client created for that ID keeps working across reloads.
@@ -19,7 +19,7 @@ export default defineConfig({
   manifest: {
     name: 'Job Application Autofill',
     description:
-      'Fills Greenhouse, Lever, and Ashby applications from your saved profile and stops for your review. Never submits for you.',
+      'Fills job application forms from your saved profile and stops for your review. Never submits for you.',
     key: EXTENSION_KEY,
     permissions: [
       'storage',
@@ -31,7 +31,7 @@ export default defineConfig({
       'scripting',
     ],
     host_permissions: [
-      ...ATS_MATCHES,
+      ...WEB_MATCHES,
       'https://api.ashbyhq.com/*',
       'https://api.lever.co/*',
       'https://generativelanguage.googleapis.com/*',

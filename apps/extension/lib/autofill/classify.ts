@@ -13,6 +13,7 @@ export type ProfileKey =
   | 'state'
   | 'zip'
   | 'country'
+  | 'phoneCountryCode'
   | 'location'
   | 'linkedin'
   | 'github'
@@ -30,6 +31,11 @@ export type ProfileKey =
   | 'eduEndYear'
   | 'gradDate'
   | 'authorized'
+  | 'usCitizen'
+  | 'citizenshipCountry'
+  | 'exportStatus'
+  | 'activeClearance'
+  | 'clearanceEligible'
   | 'sponsorship'
   | 'inUS'
   | 'relocate'
@@ -49,6 +55,8 @@ export type ProfileKey =
 export type Classification =
   | { kind: 'profile'; key: ProfileKey; source: 'adapter' | 'rule' }
   | { kind: 'free_response' }
+  /** Self-identification stays manual unless supported saved-answer filling is enabled. */
+  | { kind: 'manual' }
   /** Terms, privacy, and certification checkboxes: always left to the user. */
   | { kind: 'consent' }
   /** Anti-bot puzzles and "prove you're human" prompts: always left to the user. */
@@ -59,6 +67,11 @@ type Rule = [ProfileKey, RegExp];
 
 // Order matters: specific phrases come before the generic ones they contain.
 const RULES: Rule[] = [
+  ['exportStatus', /export[- ]control|us person status|u\.s\. person/],
+  ['citizenshipCountry', /country of citizenship|citizenship country|nationality/],
+  ['usCitizen', /\b(us|u\.s\.?|united states|american)\s+citizen(ship)?\b|citizen(ship)?\s+(of|in)\s+(the\s+)?(us|u\.s\.?|united states)/],
+  ['clearanceEligible', /clearance eligibility|eligible.*clearance|eligibility.*clearance|able to (obtain|maintain).*clearance/],
+  ['activeClearance', /active.*clearance|current.*clearance|clearance.*(hold|held)|hold.*clearance/],
   ['sponsorship', /sponsor|visa (status|support)|require.*visa/],
   ['authorized', /authori[sz]ed to work|legally (able|authori[sz]ed|eligible|permitted)|work authori[sz]ation|eligib(le|ility) to work|right to work|permitted to work/],
   ['hispanic', /hispanic|latin[oax]/],
@@ -114,12 +127,37 @@ export interface AdapterKeys {
   [idOrName: string]: ProfileKey;
 }
 
-export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}): Classification {
-  for (const k of [field.id, field.name, field.path]) {
-    if (k && adapterKeys[k]) return { kind: 'profile', key: adapterKeys[k], source: 'adapter' };
+const MANUAL_ONLY_KEYS = new Set<ProfileKey>([
+  'gender', 'race', 'hispanic', 'veteran', 'disability', 'declineOnly',
+]);
+const MANUAL_ONLY_EEO_RE =
+  /\b(gender|race|ethnic|hispanic|latino|veteran|disability|sexual orientation|lgbtq?|transgender)\b|equal employment opportunity|self[- ]identification/i;
+
+export const SAVED_SELF_ID_KEYS = new Set<ProfileKey>(['gender', 'hispanic', 'race', 'veteran']);
+
+export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}, autofillSavedSelfId = false): Classification {
+  const label = field.label.toLowerCase();
+  if (MANUAL_ONLY_EEO_RE.test(label)) {
+    // Other identity questions and free responses remain manual; only these
+    // explicit choice fields use saved answers after the user's opt-in.
+    if (autofillSavedSelfId && ['select', 'combobox', 'radio', 'checkboxGroup', 'yesno'].includes(field.kind)) {
+      if (/gender identity|transgender|sexual orientation|lgbt|disabilit/.test(label)) return { kind: 'manual' };
+      const key = /hispanic|latin[oax]/.test(label) ? 'hispanic'
+        : /veteran|military (service|status)/.test(label) ? 'veteran'
+        : /\brace\b|ethnicit/.test(label) ? 'race'
+        : /^(gender|sex)$|^(what is |please (select|specify) )?(your )?gender\??$/.test(label.trim()) ? 'gender' : null;
+      if (key) return { kind: 'profile', key, source: 'rule' };
+    }
+    return { kind: 'manual' };
   }
 
-  const label = field.label.toLowerCase();
+  for (const k of [field.id, field.name, field.path]) {
+    if (k && adapterKeys[k]) {
+      if (MANUAL_ONLY_KEYS.has(adapterKeys[k]) && !(autofillSavedSelfId && SAVED_SELF_ID_KEYS.has(adapterKeys[k])
+        && ['select', 'combobox', 'radio', 'checkboxGroup', 'yesno'].includes(field.kind))) return { kind: 'manual' };
+      return { kind: 'profile', key: adapterKeys[k], source: 'adapter' };
+    }
+  }
 
   if (field.kind === 'file') {
     if (/cover/.test(label) || /cover/.test(field.id + field.name)) return { kind: 'profile', key: 'coverLetter', source: 'rule' };
@@ -132,6 +170,15 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
   if (CHALLENGE_RE.test(label) || BLOB_RE.test(field.label) || field.label.length > 700) return { kind: 'challenge' };
 
   if (field.kind === 'checkbox' && CONSENT_RE.test(label)) return { kind: 'consent' };
+
+  // A bare "Citizenship" can ask for a country or a yes/no fact. Only classify
+  // it when the visible options disambiguate it; do not infer nationality.
+  if (/^citizenship\s*\*?$/.test(label.trim())) {
+    if (field.options.some(o => /\bus citizen\b|\bunited states citizen\b/i.test(o))) {
+      return { kind: 'profile', key: 'usCitizen', source: 'rule' };
+    }
+    return { kind: 'unknown' };
+  }
 
   switch (field.autocomplete) {
     case 'given-name':

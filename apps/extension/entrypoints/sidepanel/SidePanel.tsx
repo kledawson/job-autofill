@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
 import { useLiveQuery, usePublicSettings } from '@/components/hooks';
 import { missingRequired } from '@/components/ProfileSections';
+import { EligibilityRecovery } from '@/components/EligibilityRecovery';
 import { Button, cx, Input, Notice } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { sendToBackground } from '@/lib/messages';
 import { PLATFORM_NAMES } from '@/lib/platforms';
-import type { Application, ApplicationStatus } from '@/lib/types';
+import { readFieldIssues, type Application, type ApplicationStatus } from '@/lib/types';
 
 const STATUS_STYLE: Record<ApplicationStatus, string> = {
   Filling: 'bg-blue-50 text-blue-700 ring-blue-200',
@@ -127,12 +128,15 @@ export default function SidePanel() {
             id="job-link"
             value={link}
             onChange={(e) => setLink(e.target.value)}
-            placeholder="Paste a Greenhouse, Lever, or Ashby link"
+            placeholder="Paste any job application link"
           />
           <Button type="submit" disabled={busy || !link.trim()} className="shrink-0">
             Open and fill
           </Button>
         </form>
+        <p className="text-xs text-slate-500">
+          Greenhouse, Lever, and Ashby have dedicated matching. Other sites use general field labels, so review every answer.
+        </p>
         <Button variant="secondary" className="w-full" onClick={fillThisPage}>
           Fill this page
         </Button>
@@ -147,7 +151,7 @@ export default function SidePanel() {
         )}
       </section>
 
-      {current && <CurrentApplication app={current} />}
+      {current && <CurrentApplication app={current} retry={fillThisPage} />}
 
       <section className="flex-1">
         <div className="mb-2 flex items-center justify-between">
@@ -182,9 +186,14 @@ export default function SidePanel() {
   );
 }
 
-function CurrentApplication({ app }: { app: Application }) {
+function CurrentApplication({ app, retry }: { app: Application; retry: () => Promise<void> }) {
   const [showMissing, setShowMissing] = useState(true);
   const [error, setError] = useState('');
+  const issues = readFieldIssues(app.missingFields);
+  const missingFields = app.missingLabels.map(label => ({
+    label, reason: issues.find(field => field.label === label)?.reason,
+  }));
+  const eligibilityNeedsUpdate = missingFields.some(f => /Work authorization|legally authorized|legally authorised|self-identification|hispanic|gender|veteran/i.test(`${f.label} ${f.reason ?? ''}`));
   return (
     <section className="space-y-3 rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-2">
@@ -204,17 +213,25 @@ function CurrentApplication({ app }: { app: Application }) {
         </div>
       )}
 
-      {app.missingLabels.length > 0 && (
+      {app.status !== 'Filling' && app.missingLabels.length > 0 && (
         <div>
+          <p className="mb-1 text-xs text-slate-500">Results from the last fill attempt ({when(app.filledAt)}).</p>
           <button className="text-xs font-medium text-slate-600 underline" onClick={() => setShowMissing((s) => !s)}>
             {showMissing ? 'Hide' : 'Show'} fields that need you
           </button>
           {showMissing && (
             <ul className="mt-1.5 space-y-1">
-              {app.missingLabels.map((l, i) => (
+              {missingFields.map((field, i) => (
                 <li key={i} className="flex gap-2 text-xs text-slate-700">
                   <span className="mt-1 size-1.5 shrink-0 rounded-full bg-red-600" />
-                  {l}
+                  <span>
+                    {field.label}
+                    {field.reason && (
+                      <span className="mt-0.5 block text-slate-500">
+                        {field.reason}
+                      </span>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -224,6 +241,7 @@ function CurrentApplication({ app }: { app: Application }) {
 
       {app.status === 'Ready for review' && (
         <>
+          {eligibilityNeedsUpdate && <EligibilityRecovery key={app.id} retry={retry} />}
           <p className="text-xs text-slate-500">Review every field, submit on the page yourself, then mark it here.</p>
           <Button
             className="w-full"

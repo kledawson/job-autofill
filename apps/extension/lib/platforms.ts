@@ -1,11 +1,6 @@
 import type { Platform } from './types';
 
-export const ATS_MATCHES = [
-  '*://*.greenhouse.io/*',
-  '*://jobs.lever.co/*',
-  '*://jobs.eu.lever.co/*',
-  '*://jobs.ashbyhq.com/*',
-];
+export const WEB_MATCHES = ['http://*/*', 'https://*/*'];
 
 export function detectPlatform(url: string): Platform | null {
   let host: string;
@@ -24,6 +19,7 @@ export const PLATFORM_NAMES: Record<Platform, string> = {
   greenhouse: 'Greenhouse',
   lever: 'Lever',
   ashby: 'Ashby',
+  generic: 'Other website',
 };
 
 /**

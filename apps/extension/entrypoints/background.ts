@@ -9,11 +9,11 @@ import {
   type ContentMessage,
   type FilePayload,
 } from '@/lib/messages';
-import { detectPlatform, jobKey, toApplicationUrl } from '@/lib/platforms';
+import { jobKey, toApplicationUrl } from '@/lib/platforms';
 import { clampToLimit, renderPrompt } from '@/lib/prompt';
 import { getSettings, updateSettings, type PublicSettings } from '@/lib/settings';
 import { appendApplication, createTrackingSheet, sheetsConfigured, updateApplication } from '@/lib/sheets';
-import type { Application, StoredFile } from '@/lib/types';
+import { readFieldIssues, type Application, type StoredFile } from '@/lib/types';
 
 type Sender = Browser.runtime.MessageSender;
 type Handlers = {
@@ -144,7 +144,15 @@ const handlers: Handlers = {
     const existing = await db.applications.where('jobKey').equals(key).last();
     const patch = { company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url };
     if (existing?.id && existing.status !== 'Submitted') {
-      await db.applications.update(existing.id, { ...patch, status: 'Filling' });
+      await db.applications.update(existing.id, {
+        ...patch,
+        status: 'Filling',
+        filledCount: 0,
+        aiAnswers: 0,
+        missingCount: 0,
+        missingLabels: [],
+        missingFields: [],
+      });
       return { applicationId: existing.id };
     }
     const id = await db.applications.add({
@@ -172,6 +180,7 @@ const handlers: Handlers = {
       aiAnswers: req.aiAnswers,
       missingCount: req.missingLabels.length,
       missingLabels: req.missingLabels,
+      missingFields: readFieldIssues(req.missingFields).filter(field => req.missingLabels.includes(field.label)),
       ...(first ? { status: 'Ready for review' as const, filledAt: Date.now() } : {}),
     });
     const updated = (await db.applications.get(app.id))!;
@@ -219,10 +228,6 @@ const handlers: Handlers = {
     } catch {
       return { ok: false, error: 'That does not look like a link. Paste the full job URL.' };
     }
-    const embeddedGreenhouse = parsed.searchParams.has('gh_jid');
-    if (!detectPlatform(parsed.href) && !embeddedGreenhouse) {
-      return { ok: false, error: 'This version supports Greenhouse, Lever, and Ashby links.' };
-    }
     const profile = await getProfile();
     if (!profile.firstName || !profile.email) {
       return { ok: false, error: 'Finish your profile first (at least your name and email).' };
@@ -247,8 +252,8 @@ const handlers: Handlers = {
       await sendToTab(tab.id, { type: 'ping' });
     } catch {
       // Tabs opened before the extension was installed have no content script yet.
-      if (!tab.url || !detectPlatform(tab.url)) {
-        return { ok: false, error: 'This page is not a Greenhouse, Lever, or Ashby application.' };
+      if (!tab.url || !/^https?:\/\//i.test(tab.url)) {
+        return { ok: false, error: 'Open a regular web page before using Fill this page.' };
       }
       await browser.scripting.executeScript({
         target: { tabId: tab.id, allFrames: true },

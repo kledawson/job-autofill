@@ -3,16 +3,14 @@ import { ADAPTERS } from '@/lib/autofill/adapters';
 import { FillSession, waitForForm, type FillSummary } from '@/lib/autofill/engine';
 import { showStatus } from '@/lib/autofill/highlight';
 import { sendToBackground, type ContentMessage } from '@/lib/messages';
-import { ATS_MATCHES, detectPlatform } from '@/lib/platforms';
+import { WEB_MATCHES, detectPlatform } from '@/lib/platforms';
 
 export default defineContentScript({
-  matches: ATS_MATCHES,
+  matches: WEB_MATCHES,
   allFrames: true,
   runAt: 'document_idle',
   main() {
-    const detected = detectPlatform(location.href);
-    if (!detected) return;
-    const platform = detected;
+    const platform = detectPlatform(location.href) ?? 'generic';
     const adapter = ADAPTERS[platform];
     let session: FillSession | null = null;
     let running = false;
@@ -83,6 +81,7 @@ export default defineContentScript({
         filledCount: summary.filledCount,
         aiAnswers: summary.aiAnswers,
         missingLabels: summary.missingLabels,
+        missingFields: summary.missingFields,
       });
     }
 

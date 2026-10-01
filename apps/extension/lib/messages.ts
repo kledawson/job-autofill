@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser';
-import type { Platform, Profile } from './types';
+import type { FieldIssue, Platform, Profile } from './types';
 import type { PublicSettings } from './settings';
 import type { ResumeDraft } from './resume';
 
@@ -44,6 +44,7 @@ export interface BackgroundMessages {
       filledCount: number;
       aiAnswers: number;
       missingLabels: string[];
+      missingFields?: FieldIssue[];
     };
     res: {};
   };

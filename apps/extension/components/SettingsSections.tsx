@@ -6,7 +6,8 @@ import { missingSections, parseResumeText, type ResumeSection } from '@/lib/resu
 import { sendToBackground } from '@/lib/messages';
 import { DEFAULT_PROMPT_TEMPLATE, PROMPT_PLACEHOLDERS } from '@/lib/prompt';
 import { DEFAULT_GEMINI_MODEL, updateSettings, type PublicSettings } from '@/lib/settings';
-import { emptyProfile, type Profile, type StoredFile } from '@/lib/types';
+import { type StoredFile } from '@/lib/types';
+import { importProfileData, parseProfileFile, PROFILE_VERSION } from '@/lib/profile-import';
 import { useLiveQuery } from './hooks';
 import { Button, Card, Field, Input, Notice, Textarea } from './ui';
 
@@ -274,9 +275,11 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
         </div>
         {status && <Notice tone={status.tone}>{status.text}</Notice>}
         <p className="text-xs text-slate-500">
-          For free responses, Gemini receives each question, the job description, and your education, experience, and
-          skills, never your contact details or self-identification answers. Your resume is read on this computer; it
-          goes to Gemini only if you click “Read … with Gemini.” Google’s free tier may use prompts to improve its models.
+          For free responses, Gemini receives each question and job details plus a filtered profile summary (name, current position, location, education,
+          experience and bullets, skills, work mode, GitHub, and portfolio links). It never receives your email, phone,
+          address, or voluntary self-identification answers in these draft requests. Resume parsing stays local unless
+          you click “Read … with Gemini,” which sends the resume text, including any contact details it contains.
+          Google’s free tier may use prompts to improve its models.
         </p>
       </div>
     </Card>
@@ -385,7 +388,7 @@ export function DataSection({ onImported }: { onImported: () => void }) {
 
   async function exportProfile() {
     const profile = await getProfile();
-    const blob = new Blob([JSON.stringify({ version: 1, profile }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ version: PROFILE_VERSION, profile }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'job-autofill-profile.json';
@@ -396,11 +399,10 @@ export function DataSection({ onImported }: { onImported: () => void }) {
   async function importProfile(file: File | undefined) {
     if (!file) return;
     try {
-      const data = JSON.parse(await file.text());
-      const incoming = (data.profile ?? data) as Partial<Profile>;
-      if (typeof incoming !== 'object' || !('firstName' in incoming)) throw new Error('Not a profile export.');
-      await saveProfile({ ...emptyProfile(), ...incoming, id: 'me' } as Profile);
-      setMessage({ tone: 'success', text: 'Profile imported.' });
+      const data = parseProfileFile(await file.text()) as { kind?: string };
+      const incoming = importProfileData(data, await getProfile());
+      await saveProfile(incoming);
+      setMessage({ tone: 'success', text: data.kind === 'profile-patch' ? 'Saved answers updated; other profile details preserved.' : 'Profile imported.' });
       onImported();
     } catch (err) {
       setMessage({ tone: 'error', text: `Could not import: ${(err as Error).message}` });

@@ -51,6 +51,12 @@ export interface Profile {
     authorizedUS: YesNo;
     needsSponsorship: YesNo;
     status: string;
+    authorizationScope: '' | 'any-employer' | 'specific-employer';
+    usCitizen: YesNo;
+    citizenshipCountry: string;
+    exportStatus: string;
+    activeClearance: string;
+    clearanceEligible: YesNo;
   };
 
   education: Education[];
@@ -67,6 +73,8 @@ export interface Profile {
 
   /** Voluntary self-identification. Never sent to Gemini. */
   eeo: {
+    /** Use explicitly saved gender/Hispanic/race/veteran answers when enabled. */
+    autofillSaved: boolean;
     gender: string;
     race: string;
     hispanic: string;
@@ -114,12 +122,12 @@ export function emptyProfile(): Profile {
     github: '',
     portfolio: '',
     website: '',
-    workAuth: { authorizedUS: '', needsSponsorship: '', status: '' },
+    workAuth: { authorizedUS: '', needsSponsorship: '', status: '', authorizationScope: '', usCitizen: '', citizenshipCountry: '', exportStatus: '', activeClearance: '', clearanceEligible: '' },
     education: [emptyEducation()],
     experience: [emptyExperience()],
     skills: [],
     preferences: { salary: '', startDate: '', relocate: '', workMode: '', howHeard: 'LinkedIn' },
-    eeo: { gender: DECLINE, race: DECLINE, hispanic: DECLINE, veteran: DECLINE, disability: DECLINE },
+    eeo: { autofillSaved: false, gender: DECLINE, race: DECLINE, hispanic: DECLINE, veteran: DECLINE, disability: DECLINE },
     updatedAt: 0,
   };
 }
@@ -134,7 +142,23 @@ export interface StoredFile {
 
 export type ApplicationStatus = 'Filling' | 'Ready for review' | 'Submitted' | 'Abandoned';
 
-export type Platform = 'greenhouse' | 'lever' | 'ashby';
+export type Platform = 'greenhouse' | 'lever' | 'ashby' | 'generic';
+
+export interface FieldIssue {
+  label: string;
+  /** A non-sensitive explanation; never include applicant answers. */
+  reason: string;
+}
+
+/** New message/record fields are optional; discard malformed or excessive diagnostics. */
+export function readFieldIssues(value: unknown): FieldIssue[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 500).flatMap(issue => {
+    if (!issue || typeof issue.label !== 'string' || typeof issue.reason !== 'string') return [];
+    if (issue.label.length > 90 || issue.reason.length > 600) return [];
+    return [{ label: issue.label, reason: issue.reason }];
+  });
+}
 
 export interface Application {
   id?: number;
@@ -152,6 +176,8 @@ export interface Application {
   filledCount: number;
   missingCount: number;
   missingLabels: string[];
+  /** Optional so previously stored application records remain readable. */
+  missingFields?: FieldIssue[];
   sheetRow?: number;
   sheetError?: string;
 }

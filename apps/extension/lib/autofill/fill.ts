@@ -1,4 +1,4 @@
-import { bestOption, normalize } from './match';
+import { bestOption, firstSearchResultIsRelevant } from './match';
 import type { ScannedField } from './scan';
 
 const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
@@ -6,7 +6,7 @@ const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
 export type FillOutcome = 'filled' | 'already' | 'nomatch' | 'failed';
 
 /** Waits used while dropdowns load; tests shorten these. */
-export const timing = { menuOpen: 700, search: 3000, typeahead: 2500, afterUpload: 2000 };
+export const timing = { menuOpen: 1000, search: 4000, selection: 1500, settle: 120, typeahead: 4000, afterUpload: 2000 };
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -96,7 +96,7 @@ export function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value
   const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
   withGuard(el, () => {
-    el.focus();
+    el.focus({ preventScroll: true });
     if (setter) setter.call(el, value);
     else el.value = value;
     fire(el, 'input');
@@ -125,7 +125,7 @@ export function fillSelect(field: ScannedField, candidates: string[]): FillOutco
   const option = options[idx];
   if (!option) return 'nomatch';
   withGuard(select, () => {
-    select.focus();
+    select.focus({ preventScroll: true });
     select.value = option.value;
     option.selected = true;
     fire(select, 'input');
@@ -218,7 +218,9 @@ function comboboxHasValue(field: ScannedField): boolean {
   const input = field.el as HTMLInputElement;
   const box = field.outlineTarget.closest('[class*="container"], [class*="select"]') ?? field.outlineTarget;
   const shown = box.querySelector('[class*="single-value"], [class*="singleValue"], [class*="multi-value"], [class*="multiValue"]');
-  return !!(shown && shown.textContent?.trim()) || !!input.value.trim();
+  if (shown?.textContent?.trim()) return true;
+  const hiddenValue = box.querySelector<HTMLInputElement>('input[type="hidden"]')?.value.trim();
+  return !!hiddenValue || !!input.getAttribute('aria-valuetext')?.trim();
 }
 
 function closeMenu(input: HTMLElement) {
@@ -231,16 +233,19 @@ function closeMenu(input: HTMLElement) {
 export async function fillCombobox(
   field: ScannedField,
   candidates: string[],
-  opts: { acceptFirstResult?: boolean } = {},
+  opts: { acceptFirstResult?: boolean; searchQueries?: string[] } = {},
 ): Promise<FillOutcome> {
   const input = field.el as HTMLInputElement;
   if (comboboxHasValue(field)) return 'already';
+  // An existing query or free-typed value belongs to the applicant; do not replace it.
+  if (input.value.trim()) return 'already';
 
-  withGuard(input, () => {
-    input.focus();
-    mouse(input, 'mousedown');
-    key(input, 'ArrowDown');
-  });
+  withGuard(input, () => input.focus({ preventScroll: true }));
+  // React batches focus and menu state. Yield before opening and reading options.
+  await sleep(0);
+  clickSafely(input);
+  await sleep(0);
+  withGuard(input, () => key(input, 'ArrowDown'));
 
   // Static lists open immediately; pick from them without typing so option wording can differ.
   let options = (await waitFor(() => {
@@ -250,17 +255,22 @@ export async function fillCombobox(
   let idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
 
   // Async search lists (locations, schools) need a query first.
-  const query = candidates[0] ?? '';
-  if (idx < 0 && query) {
+  const queries = opts.searchQueries ?? [candidates[0] ?? ''];
+  for (const [attempt, query] of queries.entries()) {
+    if (idx >= 0 || !query || !input.isConnected) break;
+    const previousOptions = options.map((option) => option.textContent?.trim() ?? '').join('\n');
     setNativeValueKeepFocus(input, query);
+    await sleep(0);
     options =
       (await waitFor(() => {
         const o = comboboxOptions(input).filter((o) => !/^(loading|searching|no (results|options))/i.test(o.textContent?.trim() ?? ''));
-        return o.length ? o : null;
+        const changed = o.map((option) => option.textContent?.trim() ?? '').join('\n') !== previousOptions;
+        const relevantFirstResult =
+          attempt === 0 && opts.acceptFirstResult && firstSearchResultIsRelevant(query, o[0]?.textContent ?? '');
+        return o.length && (changed || relevantFirstResult) ? o : null;
       }, timing.search)) ?? [];
     idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
-    const firstWord = normalize(query).split(' ')[0] ?? '';
-    if (idx < 0 && opts.acceptFirstResult && firstWord && normalize(options[0]?.textContent ?? '').includes(firstWord)) {
+    if (idx < 0 && attempt === 0 && opts.acceptFirstResult && firstSearchResultIsRelevant(query, options[0]?.textContent ?? '')) {
       idx = 0;
     }
   }
@@ -273,15 +283,20 @@ export async function fillCombobox(
   }
 
   clickSafely(choice);
-  await sleep(120);
+  const selected = await waitFor(() => comboboxHasValue(field), timing.selection);
   closeMenu(input);
-  return comboboxHasValue(field) || !input.isConnected ? 'filled' : 'failed';
+  if (!selected) {
+    if (input.value) setNativeValueKeepFocus(input, '');
+    closeMenu(input);
+    return 'failed';
+  }
+  return 'filled';
 }
 
 function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   withGuard(el, () => {
-    el.focus();
+    el.focus({ preventScroll: true });
     if (setter) setter.call(el, value);
     else el.value = value;
     fire(el, 'input');
@@ -289,26 +304,60 @@ function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
 }
 
 /** Lever-style location inputs: type, then pick the first suggestion that mentions the city. */
-export async function fillTypeahead(field: ScannedField, candidates: string[]): Promise<FillOutcome> {
+export async function fillTypeahead(
+  field: ScannedField,
+  candidates: string[],
+  opts: { requireSelection?: boolean } = {},
+): Promise<FillOutcome> {
   const input = field.el as HTMLInputElement;
   if (input.value.trim() || !candidates[0]) return input.value.trim() ? 'already' : 'nomatch';
-  setNativeValueKeepFocus(input, candidates[0]);
+  const query = candidates[0];
   const container = input.closest('li, [class*="field"], .application-question') ?? input.parentElement!;
+  const selector = '[role="option"], .dropdown-results > div, .dropdown-location, .pac-item';
+  const suggestions = () => {
+    const local = Array.from(container.querySelectorAll<HTMLElement>(selector)).filter((el) => el.textContent?.trim() && isVisible(el));
+    if (local.length) return local;
+    return Array.from(input.ownerDocument.querySelectorAll<HTMLElement>('.pac-container .pac-item, [role="listbox"] [role="option"]'))
+      .filter((el) => el.textContent?.trim() && isVisible(el));
+  };
+  setNativeValueKeepFocus(input, query);
   const suggestion = await waitFor(() => {
-    const items = Array.from(
-      container.querySelectorAll<HTMLElement>('[role="option"], .dropdown-results > div, .dropdown-location, .pac-item'),
-    ).filter((el) => el.textContent?.trim());
+    const items = suggestions();
     if (!items.length) return null;
     const idx = bestOption(candidates, items.map((i) => i.textContent ?? ''));
-    return items[Math.max(idx, 0)];
+    if (idx >= 0) return items[idx];
+    return firstSearchResultIsRelevant(query, items[0]?.textContent ?? '') ? items[0] : null;
   }, timing.typeahead);
-  if (suggestion) clickSafely(suggestion);
-  await sleep(100);
+  if (!suggestion) {
+    if (!opts.requireSelection && input.value.trim()) {
+      withGuard(input, () => {
+        fire(input, 'change');
+        input.blur();
+      });
+      return 'filled';
+    }
+    setNativeValueKeepFocus(input, '');
+    withGuard(input, () => {
+      fire(input, 'change');
+      input.blur();
+    });
+    return 'nomatch';
+  }
+  clickSafely(suggestion);
+  const selected = await waitFor(() => {
+    const value = input.value.trim();
+    return value && (value !== query || !suggestion.isConnected || !isVisible(suggestion));
+  }, timing.selection);
   withGuard(input, () => {
     fire(input, 'change');
     input.blur();
   });
-  return input.value.trim() ? 'filled' : 'failed';
+  if (!selected) {
+    if (!opts.requireSelection && input.value.trim()) return 'filled';
+    if (input.value) setNativeValueKeepFocus(input, '');
+    return 'failed';
+  }
+  return 'filled';
 }
 
 // ---------------------------------------------------------------------------

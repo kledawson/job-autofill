@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DECLINE, emptyEducation, emptyExperience, type Education, type Experience, type Profile } from '@/lib/types';
+import { DECLINE, emptyEducation, emptyExperience, type Education, type Experience, type Profile, type YesNo } from '@/lib/types';
 import { Button, Card, Field, Grid, Input, Select, Textarea } from './ui';
 
 export interface SectionProps {
@@ -113,7 +113,7 @@ export function LinksSection({ profile: p, onChange }: SectionProps) {
 export function WorkAuthSection({ profile: p, onChange }: SectionProps) {
   const set = (patch: Partial<Profile['workAuth']>) => onChange({ ...p, workAuth: { ...p.workAuth, ...patch } });
   return (
-    <Card title="Work authorization" description="Answers the standard yes/no eligibility questions.">
+    <Card title="Work authorization" description="Save explicit answers for eligibility questions. Citizenship, export status, and clearance eligibility are separate facts.">
       <Grid>
         <Field label="Authorized to work in the US?" required>
           <Select
@@ -137,6 +137,26 @@ export function WorkAuthSection({ profile: p, onChange }: SectionProps) {
             value={p.workAuth.status}
             onChange={(e) => set({ status: e.target.value })}
           />
+        </Field>
+        <Field label="Authorization scope" hint="Select only if you know whether your authorization covers any employer.">
+          <Select options={[["", "Select…"], ["any-employer", "Any employer"], ["specific-employer", "Specific employer"]]}
+            value={p.workAuth.authorizationScope} onChange={e => set({ authorizationScope: e.target.value as Profile['workAuth']['authorizationScope'] })} />
+        </Field>
+        <Field label="US citizen?" hint="An explicit US Citizen saved in Current status or Export-control status also answers this question.">
+          <Select options={YES_NO} value={p.workAuth.usCitizen} onChange={e => set({ usCitizen: e.target.value as YesNo })} />
+        </Field>
+        <Field label="Country of citizenship" hint="Separate from where you live.">
+          <Input value={p.workAuth.citizenshipCountry} onChange={e => set({ citizenshipCountry: e.target.value })} />
+        </Field>
+        <Field label="Export-control status" hint="Do not infer this from work authorization.">
+          <Select options={['', 'US Citizen', 'Lawful Permanent Resident', 'Qualifying Asylee', 'Other'].map(o => [o, o || 'Select…'] as [string, string])}
+            value={p.workAuth.exportStatus} onChange={e => set({ exportStatus: e.target.value })} />
+        </Field>
+        <Field label="Active security clearance / history" hint="Save one exact option, such as Never held a clearance. Multiple selections remain manual.">
+          <Input value={p.workAuth.activeClearance} onChange={e => set({ activeClearance: e.target.value })} />
+        </Field>
+        <Field label="Eligible to obtain and maintain a security clearance?" hint="A separate answer; citizenship does not establish eligibility.">
+          <Select options={YES_NO} value={p.workAuth.clearanceEligible} onChange={e => set({ clearanceEligible: e.target.value as YesNo })} />
         </Field>
       </Grid>
     </Card>
@@ -271,14 +291,15 @@ export function ExperienceSection({ profile: p, onChange }: SectionProps) {
             </Grid>
           </div>
         ))}
-        <Field label="Skills" hint="Comma-separated: languages, frameworks, tools." className="border-t border-slate-100 pt-5">
-          <Input
+        <Field label="Skills" hint="One skill per line or comma-separated." className="border-t border-slate-100 pt-5">
+          <Textarea
+            rows={4}
             value={skillsText}
             onChange={(e) => {
               setSkillsText(e.target.value);
-              onChange({ ...p, skills: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) });
+              onChange({ ...p, skills: e.target.value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean) });
             }}
-            placeholder="Python, TypeScript, React, SQL"
+            placeholder={'Python\nTypeScript\nReact\nSQL'}
           />
         </Field>
       </div>
@@ -295,7 +316,7 @@ export function PreferencesSection({ profile: p, onChange }: SectionProps) {
           <Input value={p.preferences.salary} onChange={(e) => set({ salary: e.target.value })} placeholder="$120,000" />
         </Field>
         <Field label="Earliest start date">
-          <Input value={p.preferences.startDate} onChange={(e) => set({ startDate: e.target.value })} placeholder="June 2026" />
+          <Input type="date" value={p.preferences.startDate} onChange={(e) => set({ startDate: e.target.value })} />
         </Field>
         <Field label="Willing to relocate?">
           <Select
@@ -331,8 +352,13 @@ export function EeoSection({ profile: p, onChange }: SectionProps) {
   return (
     <Card
       title="Voluntary self-identification"
-      description="Optional. Each defaults to “Decline to answer.” These answers only fill matching dropdowns and are never sent to Gemini."
+      description="Optional. Enable filling to reuse your saved gender, Hispanic/Latino, race, and veteran answers. Disability remains manual. These answers are never sent to Gemini."
     >
+      <label className="mb-4 flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1 accent-indigo-600" checked={p.eeo.autofillSaved}
+          onChange={e => set({ autofillSaved: e.target.checked })} />
+        Autofill my saved gender, Hispanic/Latino, race, and veteran answers
+      </label>
       <Grid>
         <Field label="Gender">
           <Select options={opts(EEO_OPTIONS.gender)} value={p.eeo.gender} onChange={(e) => set({ gender: e.target.value })} />

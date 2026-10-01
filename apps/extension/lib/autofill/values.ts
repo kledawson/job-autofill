@@ -55,14 +55,36 @@ function degreeVariants(degree: string): string[] {
   return out;
 }
 
-function eeo(value: string): string[] {
-  const v = value.trim() || DECLINE;
+function eeo(value: string): string[] | null {
+  const v = value.trim();
+  if (!v) return null;
   return v === DECLINE ? DECLINE_VARIANTS : [v];
+}
+
+/** Reuse an explicit US Citizen category, never infer from residence or work eligibility. */
+export function usCitizenshipAnswer(p: Profile): YesNo {
+  if (p.workAuth.usCitizen) return p.workAuth.usCitizen;
+  return [p.workAuth.status, p.workAuth.exportStatus].some(v => /^(us|u\.s\.?|united states) citizen$/i.test(v.trim())) ? 'yes' : '';
 }
 
 function nonEmpty(...values: (string | undefined)[]): string[] | null {
   const out = values.map((v) => v?.trim() ?? '').filter(Boolean);
   return out.length ? Array.from(new Set(out)) : null;
+}
+
+function schoolVariants(school: string): string[] | null {
+  const uc = /^uc\s+(.+)$/i.exec(school.trim());
+  const expanded = /^sjsu$/i.test(school.trim())
+    ? 'San Jose State University'
+    : uc ? `University of California, ${uc[1]}` : undefined;
+  return nonEmpty(school, expanded);
+}
+
+/** Search official names first; shorten queries only when no matching option returns. */
+export function schoolSearchQueries(candidates: string[]): string[] {
+  const official = candidates[1] ?? candidates[0] ?? '';
+  const shorter = official.replace(/\b(university|college|of|the)\b/gi, '').replace(/[,\s]+/g, ' ').trim();
+  return [...new Set([official, candidates[0] ?? '', shorter].filter(Boolean))];
 }
 
 function isUS(country: string): boolean | null {
@@ -102,6 +124,8 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
       return nonEmpty(p.zip);
     case 'country':
       return isUS(p.country) ? ['United States', 'United States of America', 'USA', 'US'] : nonEmpty(p.country);
+    case 'phoneCountryCode':
+      return isUS(p.country) ? ['+1', '1', 'United States (+1)', 'United States +1', 'US +1'] : null;
     case 'location':
       return nonEmpty(
         [p.city, p.state].filter(Boolean).join(', '),
@@ -121,7 +145,7 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
     case 'currentTitle':
       return nonEmpty(p.currentTitle || job?.title);
     case 'school':
-      return nonEmpty(edu?.school);
+      return edu?.school ? schoolVariants(edu.school) : null;
     case 'degree':
       return edu?.degree ? degreeVariants(edu.degree) : null;
     case 'major':
@@ -141,7 +165,23 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
       return m ? [`${m[2]}/${m[1]}`] : null;
     }
     case 'authorized':
+      if (p.workAuth.authorizedUS === 'yes' && p.workAuth.authorizationScope === 'any-employer') {
+        return ['I am authorized to work in the United States for any employer', 'Yes'];
+      }
+      if (p.workAuth.authorizedUS === 'no') return ['No', 'I am not authorized to work in the United States'];
       return yesNo(p.workAuth.authorizedUS);
+    case 'usCitizen':
+      return usCitizenshipAnswer(p) === 'yes'
+        ? ['Yes', 'US Citizen', 'Yes, I am currently a US Citizen']
+        : usCitizenshipAnswer(p) === 'no' ? ['No', 'Not a US Citizen', 'No, I am not a US Citizen'] : null;
+    case 'citizenshipCountry':
+      return nonEmpty(p.workAuth.citizenshipCountry);
+    case 'exportStatus':
+      return nonEmpty(p.workAuth.exportStatus);
+    case 'activeClearance':
+      return nonEmpty(p.workAuth.activeClearance);
+    case 'clearanceEligible':
+      return yesNo(p.workAuth.clearanceEligible);
     case 'sponsorship':
       return yesNo(p.workAuth.needsSponsorship);
     case 'inUS': {
@@ -186,9 +226,11 @@ export function valueFor(key: ProfileKey, p: Profile): string[] | null {
 
 /** Keys whose values are only safe to pick from a list, never typed free-form. */
 export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
+  'usCitizen', 'exportStatus', 'activeClearance', 'clearanceEligible',
   'authorized',
   'sponsorship',
   'inUS',
+  'phoneCountryCode',
   'relocate',
   'gender',
   'race',
@@ -199,4 +241,4 @@ export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
 ]);
 
 /** Keys where the first search result is acceptable when no option matches by text. */
-export const SEARCH_FIRST_RESULT_KEYS = new Set<ProfileKey>(['location']);
+export const SEARCH_FIRST_RESULT_KEYS = new Set<ProfileKey>(['location', 'school']);

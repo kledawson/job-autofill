@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser';
 import { liveQuery } from 'dexie';
-import { useCallback, useEffect, useState } from 'react';
-import { getProfile, saveProfile } from '@/lib/db';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { getProfile, saveProfileEdits } from '@/lib/db';
 import { sendToBackground } from '@/lib/messages';
 import type { PublicSettings } from '@/lib/settings';
 import type { Profile } from '@/lib/types';
@@ -19,11 +19,14 @@ export function useLiveQuery<T>(query: () => Promise<T>, deps: unknown[] = []): 
 
 export function useProfile() {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const baseline = useRef<Profile | null>(null);
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
-    setProfile(await getProfile());
+    const loaded = await getProfile();
+    baseline.current = loaded;
+    setProfile(loaded);
     setDirty(false);
   }, []);
 
@@ -37,16 +40,21 @@ export function useProfile() {
   }, []);
 
   const save = useCallback(async () => {
-    if (!profile) return;
-    await saveProfile(profile);
+    if (!profile || !baseline.current) return;
+    const stored = await saveProfileEdits(baseline.current, profile);
+    baseline.current = stored;
+    setProfile(stored);
     setDirty(false);
     setSavedAt(Date.now());
+    return stored;
   }, [profile]);
 
   /** Replaces and saves in one step (used when merging resume data). */
   const replace = useCallback(async (next: Profile) => {
-    setProfile(next);
-    await saveProfile(next);
+    if (!baseline.current) return;
+    const stored = await saveProfileEdits(baseline.current, next);
+    baseline.current = stored;
+    setProfile(stored);
     setDirty(false);
     setSavedAt(Date.now());
   }, []);

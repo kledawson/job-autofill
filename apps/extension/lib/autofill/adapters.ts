@@ -32,7 +32,7 @@ const greenhouse: Adapter = {
     preferred_name: 'preferredName',
     email: 'email',
     phone: 'phone',
-    country: 'country',
+    country: 'phoneCountryCode',
     'candidate-location': 'location',
     resume: 'resume',
     cover_letter: 'coverLetter',
@@ -142,4 +142,18 @@ const ashby: Adapter = {
   },
 };
 
-export const ADAPTERS: Record<Platform, Adapter> = { greenhouse, lever, ashby };
+const generic: Adapter = {
+  platform: 'generic',
+  keys: {},
+  formRoot: (doc) => doc.querySelector('form') ?? doc.querySelector('main') ?? doc.body,
+  jobInfo(doc) {
+    const company = doc.location.hostname.replace(/^www\./i, '');
+    return {
+      company,
+      role: text(doc, 'main h1, form h1, h1') || doc.title.trim(),
+      description: doc.querySelector<HTMLMetaElement>('meta[name="description"]')?.content ?? '',
+    };
+  },
+};
+
+export const ADAPTERS: Record<Platform, Adapter> = { greenhouse, lever, ashby, generic };

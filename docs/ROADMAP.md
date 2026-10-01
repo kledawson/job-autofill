@@ -1,36 +1,36 @@
 # Roadmap
 
-## Completed foundation
+## Current implementation
 
 - Shared instructions with Codex and Claude entry points.
-- Directory boundaries, architecture, and initial contracts.
-- Contribution workflow, issue/PR templates, and repository checks.
+- Chrome extension onboarding, profile editor, JSON import/export, local resume and cover-letter storage.
+- On-demand local PDF resume parsing, optional Gemini fallback for missing sections, and Current position. Build output is in `apps/extension/dist/chrome-mv3`.
+- Version 2 profile exports and partial answer imports, with explicit citizenship/export/clearance answers and rule-based wording aliases.
+- Greenhouse, Lever, and Ashby scanning/filling with adapters, general label-based filling on other sites, free-response prompts, missing-field status, and no-submit behavior.
+- Local application history and optional Gemini drafting and Google Sheets synchronization.
+- WXT build, TypeScript check, Vitest unit suite, hermetic Playwright flow, and GitHub Actions CI.
 
-## Milestone 1: shared baseline (merge before parallel feature work)
+## High-priority follow-up
 
-- WXT/React/TypeScript extension scaffold with minimal permissions.
-- Zod profile schema, canonical types, versioned message contracts, and synthetic examples.
-- Working development/build/typecheck/unit-test commands and CI.
-- Manual installation instructions and one controlled test form.
+- Broaden runtime validation to messages and calendar/date formats; profile shape validation and backward-compatible defaults are implemented.
+- Keep self-identification filling grounded in enabled, explicitly saved choices; other identity questions remain manual and visible for review.
+- Document exactly what Gemini receives; keep it optional and exclude contact and EEO information.
+- Review extension permissions, fill reliability, custom widgets, and ATS fixtures with fictional data.
+- Improve Sheets duplicate/retry handling so local IndexedDB remains authoritative.
 
-## Milestone 2: parallel MVP work
+## Team follow-up work
 
-| Track A: UI and persistence | Track B: forms and matching |
-| --- | --- |
-| Profile editor and JSON import/export | Field extraction and pure matching |
-| Trusted local storage and migration | Explainable fill-plan generation |
-| Preview UI and manual mappings | Approved writing and read-back verification |
+Split validation/storage work from form recognition and adapter improvements. Agree on shared contracts in an issue before parallel branches.
 
-Agree on contracts in milestone 1. Use separate issues, branches, and PRs; coordinate changes to shared files.
+## Product extensions
 
-## Milestone 3: useful first release
-
-- One selected ATS adapter based on the team's actual applications.
-- Local tracker with explicit status updates and duplicate detection.
-- CSV export.
-- Meaningful Vitest/Playwright coverage for imports, ambiguity, user edits, dynamic forms, and repeat fills.
-- Documentation, demo using fictional data, and measurements of precision, supported-field coverage, and time saved.
+- Multi-profile support, reusable saved answers, and optional profile-specific field mappings.
+- CSV export, application reminders, and richer tracker filters/history.
+- Pasted job-description fit analysis grounded in verified profile facts.
+- Additional site-specific adapters and controlled job-board discovery.
+- Additional resume formats and improved extraction quality, retaining opt-in external parsing and runtime validation.
+- Cloud sync only after users demonstrate a need for it.
 
 ## Later
 
-Additional adapters and widgets, Sheets sync, job-description fit analysis, grounded AI drafts, selected-board job discovery, and optional cloud accounts/sync. Prioritize after personal use identifies the largest friction.
+Automatic application submission remains outside the product direction; the user reviews the answers and submits each application.

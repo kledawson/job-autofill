@@ -18,7 +18,7 @@ export function sampleProfile(): Profile {
     linkedin: 'https://linkedin.com/in/jordanrivera',
     github: 'https://github.com/jordanrivera',
     portfolio: 'https://jordan.dev',
-    workAuth: { authorizedUS: 'yes', needsSponsorship: 'no', status: 'US Citizen' },
+    workAuth: { ...emptyProfile().workAuth, authorizedUS: 'yes', needsSponsorship: 'no', status: 'US Citizen' },
     education: [
       {
         school: 'University of California, Berkeley',
@@ -43,7 +43,7 @@ export function sampleProfile(): Profile {
     ],
     skills: ['TypeScript', 'React', 'Python', 'SQL'],
     preferences: { salary: '$120,000', startDate: 'June 2026', relocate: 'yes', workMode: 'hybrid', howHeard: 'LinkedIn' },
-    eeo: { gender: 'Female', race: 'Decline to answer', hispanic: 'Decline to answer', veteran: 'I am not a protected veteran', disability: 'Decline to answer' },
+    eeo: { autofillSaved: false, gender: 'Female', race: 'Decline to answer', hispanic: 'Decline to answer', veteran: 'I am not a protected veteran', disability: 'Decline to answer' },
   };
 }
 

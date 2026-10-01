@@ -66,7 +66,7 @@ export default function Onboarding() {
                 <Dot color="bg-green-600" /> <span><b>It never submits.</b> You always click Submit yourself.</span>
               </li>
               <li className="flex gap-2">
-                <Dot color="bg-indigo-600" /> <span><b>Your data stays on this computer.</b> There is no server. Only questions and job details go to Gemini, and application rows to your own Google Sheet.</span>
+                <Dot color="bg-indigo-600" /> <span><b>Your profile stays on this computer.</b> There is no server. If you add a Gemini key, each answer request sends the question, job details, and a filtered summary of your profile to Google. If you connect Sheets, application tracking rows go to your Google Drive.</span>
               </li>
               <li className="flex gap-2">
                 <Dot color="bg-amber-500" /> <span><b>Setup takes about 10 minutes.</b> You can change anything later in settings.</span>

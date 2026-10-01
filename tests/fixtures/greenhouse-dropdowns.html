@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Job Application for Synthetic Engineering Role at Example Corp</title>
+  <style>
+    body { font: 16px sans-serif; max-width: 700px; margin: 24px auto; }
+    .field { margin-bottom: 20px; }
+    label { display: block; margin-bottom: 6px; }
+    .select__control { padding: 10px; border: 1px solid #888; }
+    .select__input { border: 0; }
+    .select__menu { background: #eee; }
+    .select__option { padding: 8px; }
+    .select__single-value { display: inline-block; }
+  </style>
+</head>
+<body>
+  <h1>Synthetic Engineering Role</h1>
+  <form id="application-form"></form>
+  <!-- Phone libraries leave hidden, unrelated listbox options in the page. -->
+  <div style="display:none"><ul role="listbox"><li role="option">Canada +1</li></ul></div>
+  <script>
+    const form = document.querySelector('form');
+    const conditionalRace = new URLSearchParams(location.search).has('conditional-race');
+    if (conditionalRace) {
+      const spacer = document.createElement('div');
+      spacer.style.height = '1000px';
+      spacer.textContent = 'Synthetic long application page';
+      form.before(spacer);
+    }
+    const fields = [
+      ['country', 'Country', ['Canada +1', 'United States +1', 'United Kingdom +44']],
+      ['candidate-location', 'Location (City)', ['San Francisco, California, United States'], 'async'],
+      ['school--1', 'School', ['University of California, Berkeley'], 'async'],
+      ['degree--1', 'Degree', ["Associate's Degree", "Bachelor's Degree", "Master's Degree"]],
+      ['discipline--1', 'Discipline', ['Computer Science', 'Electrical Engineering']],
+      ['end-month--1', 'End date month', ['January', 'May', 'September']],
+      ['authorization', 'Are you legally authorized to work in the United States?', ['Yes', 'No', 'I am authorized to work in the United States for any employer']],
+      ['relocation', 'This role is an in-person role at the stated office(s) on the job description. Are you willing to relocate and commute to our facilities on a daily basis?', ['Yes', 'No']],
+      ['clearance', 'Active Security Clearance(s)', ['Never held a clearance', 'Secret', 'Top Secret']],
+      ['clearance-eligible', 'Clearance Eligibility', ['Yes', 'No']],
+      ['citizen', 'This job requires a US Q security clearance. Can you confirm that you are currently a US Citizen?', ['No, I am not a US Citizen', 'Yes, I am currently a US Citizen']],
+      ['export-status', 'This job requires access to export-controlled information. Please confirm whether you are a US Citizen, Lawful Permanent Resident, or Qualifying Asylee.', ['US Citizen', 'Lawful Permanent Resident', 'Qualifying Asylee']],
+      ['gender', 'Gender', ['Female', 'Male', 'Decline to answer'], 'manual'],
+      ['hispanic_ethnicity', 'Are you Hispanic/Latino?', ['Yes', 'No', 'Decline to answer'], 'manual'],
+      ['race', 'Please identify your race', ['Asian', 'White', 'Black or African American', 'Decline to answer'], 'manual'],
+      ['veteran_status', 'Veteran Status', ['I identify as one or more of the classifications of protected veteran', 'I am not a protected veteran', 'Decline to answer'], 'manual'],
+    ];
+    for (const [id, label, choices, mode] of fields) {
+      const field = document.createElement('div');
+      field.className = 'field';
+      if (id === 'race' && conditionalRace) field.hidden = true;
+      field.innerHTML = '<label id="' + id + '-label" for="' + id + '">' + label + '</label>' +
+        '<div class="select"><div class="select__control"><div class="select__value-container">' +
+        '<div class="select__placeholder">Select...</div><div class="select__input-container">' +
+        '<input class="select__input" id="' + id + '" role="combobox" aria-autocomplete="list" ' +
+        'aria-labelledby="' + id + '-label" aria-required="' + (mode !== 'manual') +
+        '" aria-expanded="false"></div></div></div></div>';
+      form.append(field);
+      const input = field.querySelector('input');
+      const select = field.querySelector('.select');
+      let request = 0;
+      let menu;
+      const close = () => {
+        request++;
+        menu?.remove();
+        menu = undefined;
+        input.setAttribute('aria-expanded', 'false');
+      };
+      const render = (query) => {
+        menu?.remove();
+        menu = document.createElement('div');
+        menu.className = 'select__menu';
+        menu.id = 'react-select-' + id + '-listbox';
+        menu.setAttribute('role', 'listbox');
+        input.setAttribute('aria-controls', menu.id);
+        select.append(menu);
+        const match = mode === 'async'
+          ? choices.filter(choice => query && choice.toLowerCase().includes(query.toLowerCase().split(',')[0]))
+          : choices.filter(choice => !query || choice.toLowerCase().includes(query.toLowerCase()));
+        if (!match.length) menu.textContent = 'No options';
+        for (const text of match) {
+          const option = document.createElement('div');
+          option.className = 'select__option';
+          option.setAttribute('role', 'option');
+          option.setAttribute('aria-selected', 'false');
+          option.textContent = text;
+          option.addEventListener('mousedown', event => event.preventDefault());
+          option.addEventListener('click', () => {
+            setTimeout(() => {
+              field.querySelector('.select__placeholder')?.remove();
+              field.querySelector('.select__single-value')?.remove();
+              const selected = document.createElement('div');
+              selected.className = 'select__single-value';
+              selected.textContent = text;
+              field.querySelector('.select__value-container').prepend(selected);
+              input.value = '';
+              close();
+              if (conditionalRace && id === 'hispanic_ethnicity' && text === 'No') {
+                form.querySelector('#race').closest('.field').hidden = false;
+              }
+            }, 25);
+          });
+          menu.append(option);
+        }
+      };
+      const open = () => {
+        if (input.getAttribute('aria-expanded') === 'true') return;
+        input.setAttribute('aria-expanded', 'true');
+        queueMicrotask(() => render(input.value));
+      };
+      field.querySelector('.select__control').addEventListener('mousedown', open);
+      input.addEventListener('keydown', event => {
+        if (event.key === 'ArrowDown') open();
+        if (event.key === 'Escape') close();
+      });
+      input.addEventListener('input', () => {
+        input.setAttribute('aria-expanded', 'true');
+        const current = ++request;
+        const query = input.value;
+        if (menu) menu.textContent = 'Loading...';
+        setTimeout(() => { if (request === current) render(query); }, 40);
+      });
+    }
+    if (conditionalRace) {
+      form.insertAdjacentHTML('beforeend', '<div class="field"><label for="essay">Tell us about your proudest accomplishment</label><textarea id="essay" required></textarea></div>');
+    }
+    const transcript = document.createElement('div');
+    transcript.className = 'field';
+    transcript.innerHTML = '<label for="transcript">Academic Transcript</label><input id="transcript" type="file" required>';
+    form.append(transcript);
+    form.insertAdjacentHTML('beforeend', '<button type="submit">Submit application</button>');
+    document.body.dataset.submits = '0';
+    form.addEventListener('submit', event => {
+      document.body.dataset.submits = String(Number(document.body.dataset.submits) + 1);
+      event.preventDefault();
+    });
+  </script>
+</body>
+</html>

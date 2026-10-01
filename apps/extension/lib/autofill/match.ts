@@ -6,6 +6,8 @@ const STOPWORDS = new Set(['a', 'an', 'the', 'of', 'in', 'to', 'and', 'or', 'i',
 export function normalize(s: string): string {
   return s
     .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[‘’ʼ]/g, "'")
     .replace(/'s\b/g, '')
     .replace(/[^a-z0-9+#]+/g, ' ')
@@ -43,6 +45,29 @@ export function similarity(want: string, option: string): number {
   const o = normalize(option);
   if (!w || !o) return 0;
   if (w === o) return 1;
+  if (/veteran/.test(w) && /veteran/.test(o)) {
+    const negative = (s: string) => /\b(not|no|non|never)\b/.test(s);
+    if (negative(w) !== negative(o)) return 0;
+  }
+  if (/^(secret|top secret|confidential|public trust|top secret sci)$/.test(w)) return 0;
+  if (/authori[sz]ed/.test(w) && /authori[sz]ed/.test(o)) {
+    const negative = (s: string) => /not authori[sz]ed|unauthori[sz]ed|\bno\b/.test(s);
+    if (negative(w) !== negative(o)) return 0;
+  }
+
+  // These saved categories assert precise eligibility facts. Similar vocabulary
+  // is insufficient ("never held" is different from "no active clearance").
+  if (/any employer|specific employer|never held a clearance|us citizen|lawful permanent resident|qualifying asylee/.test(w)) {
+    if (/any employer/.test(w)) return /any employer/.test(o) && !/not authorized|not authorised|unauthorized|specific employer/.test(o) ? 0.95 : 0;
+    if (/never held a clearance/.test(w)) return /never (held|had).*clearance/.test(o) ? 0.95 : 0;
+    // Positive and negative citizenship statements must never fuzzy-match.
+    if (/us citizen/.test(w)) {
+      const negative = (s: string) => /\b(no|not|non|never)\b/.test(s);
+      if (negative(w) !== negative(o)) return 0;
+      if (/permanent resident|asylee|or/.test(o)) return 0;
+    }
+    if (/lawful permanent resident|qualifying asylee/.test(w)) return o.includes(w) ? 0.95 : 0;
+  }
 
   const wantDecline = isDecline(want);
   const optDecline = isDecline(option);
@@ -92,6 +117,21 @@ export function bestOption(candidates: string[], options: string[]): number {
     });
   });
   return bestScore >= MATCH_THRESHOLD ? best : -1;
+}
+
+/**
+ * A search result can use an expanded display name ("San Jose, California"),
+ * so compare distinctive query words before accepting a filtered first result.
+ */
+export function firstSearchResultIsRelevant(query: string, result: string): boolean {
+  const queryTokens = [...new Set(tokens(query).filter((t) => t.length >= 3 && !GENERIC_TOKENS.has(t)))];
+  const resultTokens = new Set(tokens(result));
+  if (!queryTokens.length) return false;
+  const shared = queryTokens.filter((t) => resultTokens.has(t)).length;
+  // Search widgets filter options using the full query. A single distinctive shared
+  // token is enough to accept their first result (for example, "UC Berkeley" →
+  // "University of California, Berkeley", where only "Berkeley" is distinctive).
+  return shared >= 1;
 }
 
 /** Character limit stated by the field or its label ("max 500 characters", "250 words"). */
