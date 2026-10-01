@@ -392,9 +392,15 @@ function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
 /** Lever-style location inputs: type, then pick the first suggestion that mentions the city. */
 export async function fillTypeahead(field: ScannedField, candidates: string[]): Promise<FillOutcome> {
   const input = field.el as HTMLInputElement;
-  if (input.value.trim() || !candidates[0]) return input.value.trim() ? 'already' : 'nomatch';
-  setNativeValueKeepFocus(input, candidates[0]);
   const container = input.closest('li, [class*="field"], .application-question') ?? input.parentElement!;
+  // Lever keeps the chosen suggestion in a hidden box. Text with an empty hidden box was prefilled (e.g. by
+  // resume parsing) without picking a suggestion, so search again and select one.
+  const chosen = container.querySelector<HTMLInputElement>('input[type="hidden"][name="selectedLocation"]');
+  const unchosen = !!chosen && !chosen.value.trim();
+  if (input.value.trim() && !unchosen) return 'already';
+  if (!candidates[0]) return input.value.trim() ? 'already' : 'nomatch';
+  if (input.value.trim()) setNativeValueKeepFocus(input, '');
+  setNativeValueKeepFocus(input, candidates[0]);
   const suggestion = await waitFor(() => {
     const items = Array.from(
       container.querySelectorAll<HTMLElement>('[role="option"], .dropdown-results > div, .dropdown-location, .pac-item'),
@@ -409,7 +415,27 @@ export async function fillTypeahead(field: ScannedField, candidates: string[]): 
     fire(input, 'change');
     input.blur();
   });
+  if (chosen?.value.trim()) keepSelection(input, chosen);
   return input.value.trim() ? 'filled' : 'failed';
+}
+
+/**
+ * Lever's resume parser can finish after we pick a suggestion (it can take a while) and reset the hidden
+ * "selected location" box (empty or a stub like {"name":""}); the text stays but the form then refuses to submit. While the visible text is
+ * unchanged, put the choice back, and again right before the form is submitted.
+ */
+function keepSelection(input: HTMLInputElement, hidden: HTMLInputElement) {
+  const saved = hidden.value;
+  const text = input.value;
+  const doc = input.ownerDocument;
+  const restore = () => {
+    if (input.isConnected && hidden.value !== saved && input.value === text) hidden.value = saved;
+  };
+  const timer = setInterval(() => {
+    if (!input.isConnected) clearInterval(timer);
+    else restore();
+  }, 250);
+  for (const type of ['click', 'submit', 'mousedown']) doc.addEventListener(type, restore, true);
 }
 
 // ---------------------------------------------------------------------------

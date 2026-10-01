@@ -354,3 +354,40 @@ describe('Lever late resume prefill', () => {
     expect(org.value).toBe('Mine');
   });
 });
+
+describe('Lever location typeahead', () => {
+  it('re-searches and picks the first suggestion when the box was prefilled without choosing one', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/6ed76ce8-4156-4b60-b120-403538bd66cd/apply');
+    const loc = doc.querySelector('input[name="location"]') as HTMLInputElement;
+    const hidden = doc.querySelector('input[name="selectedLocation"]') as HTMLInputElement;
+    loc.value = 'Berkeley, CA';
+    loc.addEventListener('keydown', () => {
+      setTimeout(() => {
+        const results = doc.querySelector('.dropdown-results')!;
+        results.innerHTML = '<div class="dropdown-location" id="location-0">San Francisco, CA, USA</div><div class="dropdown-location" id="location-1">San Francisco, Campeche, MEX</div>';
+      }, 5);
+    });
+    doc.addEventListener('mousedown', (e) => {
+      const t = e.target as HTMLElement;
+      if (t.classList?.contains('dropdown-location')) {
+        loc.value = t.textContent ?? '';
+        hidden.value = '{"id":"x"}';
+      }
+    });
+    const { d } = deps();
+    await new FillSession(doc, ADAPTERS.lever, d).run();
+    expect(loc.value).toBe('San Francisco, CA, USA');
+    expect(hidden.value).not.toBe('');
+    // The site's resume parser resets the hidden choice after the fact; it gets restored.
+    hidden.value = '';
+    await new Promise((r) => setTimeout(r, 700));
+    expect(hidden.value).toBe('{"id":"x"}');
+    hidden.value = '{"name":""}';
+    await new Promise((r) => setTimeout(r, 700));
+    expect(hidden.value).toBe('{"id":"x"}');
+    // Also restored right when a submit is attempted.
+    hidden.value = '';
+    doc.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(hidden.value).toBe('{"id":"x"}');
+  });
+});
