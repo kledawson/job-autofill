@@ -17,6 +17,8 @@ export type ProfileKey =
   | 'zip'
   | 'country'
   | 'location'
+  | 'cityStateZip'
+  | 'cityState'
   | 'linkedin'
   | 'github'
   | 'portfolio'
@@ -96,6 +98,9 @@ const RULES: Rule[] = [
   ['inUS', /(currently |presently )?(located|based|live|living|reside|residing) in the (us|u\.s\.?|usa|united states)/],
   ['relocate', /relocat/],
   ['livesIn', /(live|living|located|based|reside|residing) (in|within|near|around) /],
+  // Combined address lines: "City, State Zip code (e.g. San Francisco, CA 94158)".
+  ['cityStateZip', /\bcity\b.*\b(state|province)\b.*\b(zip|postal)/],
+  ['cityState', /^city,?\s*(and\s*)?(state|province)\b(?!.*(zip|postal))/],
   ['zip', /zip|postal code|postcode/],
   ['address', /street|^address( line)?( 1)?$|mailing address|home address/],
   ['location', /location|where (are you|do you) (currently )?(based|located|live)|where do you plan (on|to) work|current city/],

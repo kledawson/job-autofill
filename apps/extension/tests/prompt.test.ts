@@ -133,3 +133,17 @@ describe('age threshold questions', () => {
     expect(valueFor('ageAtLeast', p, { label: 'Are you over 18 years of age?' })).toBeNull();
   });
 });
+
+describe('combined address lines', () => {
+  it('fills City, State Zip as one value', () => {
+    const p = sampleProfile();
+    p.city = 'San Francisco'; p.state = 'CA'; p.zip = '94158';
+    const k = (label: string) =>
+      (classifyField({ kind: 'text', label, id: '', name: '', path: '', autocomplete: '', required: true, options: [], members: [] } as never) as { key?: string }).key;
+    expect(k('City, State Zip code (e.g. San Francisco, CA 94158)')).toBe('cityStateZip');
+    expect(k('City, State')).toBe('cityState');
+    expect(k('ZIP')).toBe('zip');
+    expect(valueFor('cityStateZip', p)![0]).toBe('San Francisco, CA 94158');
+    expect(valueFor('cityState', p)![0]).toBe('San Francisco, CA');
+  });
+});

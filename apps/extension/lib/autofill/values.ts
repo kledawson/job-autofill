@@ -182,6 +182,12 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return nonEmpty(p.zip);
     case 'country':
       return isUS(p.country) ? ['United States', 'United States of America', 'USA', 'US'] : nonEmpty(p.country);
+    case 'cityStateZip': {
+      const line = [[p.city, p.state].filter(Boolean).join(', '), p.zip].filter(Boolean).join(' ');
+      return nonEmpty(line, [p.city, p.state].filter(Boolean).join(', '));
+    }
+    case 'cityState':
+      return nonEmpty([p.city, p.state].filter(Boolean).join(', '), p.city);
     case 'location':
       return nonEmpty(
         [p.city, p.state].filter(Boolean).join(', '),
