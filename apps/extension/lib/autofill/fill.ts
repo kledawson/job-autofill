@@ -225,7 +225,8 @@ function comboboxHasValue(field: ScannedField): boolean {
 
 function closeMenu(input: HTMLElement) {
   withGuard(input, () => {
-    key(input, 'Escape');
+    // Escape on an already-closed react-select can clear the chosen value, so only send it to an open menu.
+    if (input.getAttribute('aria-expanded') !== 'false') key(input, 'Escape');
     input.blur();
   });
 }
