@@ -46,31 +46,51 @@ export function BasicsSection({ profile: p, onChange }: SectionProps) {
           <Field label="Last name" required>
             <Input value={p.lastName} onChange={(e) => set({ lastName: e.target.value })} autoComplete="family-name" />
           </Field>
-          <Field label="Preferred name" hint="Leave blank to use your first name.">
+          <Field label="Preferred name" hint="Leave blank to use your first name">
             <Input value={p.preferredName} onChange={(e) => set({ preferredName: e.target.value })} />
           </Field>
-          <Field label="Pronouns" hint="Optional.">
+          <Field label="Pronouns" hint="Optional">
             <Input value={p.pronouns} onChange={(e) => set({ pronouns: e.target.value })} placeholder="she/her" />
           </Field>
           <Field label="Email" required>
             <Input type="email" value={p.email} onChange={(e) => set({ email: e.target.value })} autoComplete="email" />
           </Field>
           <div className="grid grid-cols-[6rem_1fr] gap-3">
-            <Field label="Country code" hint="Default +1 (US).">
+            <Field label="Country code" hint="Default +1 (US)">
               <Input value={p.countryCode} onChange={(e) => set({ countryCode: e.target.value })} placeholder="+1" inputMode="tel" />
             </Field>
-            <Field label="Phone" required hint="Without the country code.">
+            <Field label="Phone" required hint="Without the country code">
               <Input type="tel" value={p.phone} onChange={(e) => set({ phone: e.target.value })} autoComplete="tel-national" />
             </Field>
           </div>
+          <label className="flex items-start gap-2 text-sm text-slate-700 sm:col-span-2">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 rounded border-slate-300 accent-indigo-600"
+              checked={p.textConsent}
+              onChange={(e) => set({ textConsent: e.target.checked })}
+            />
+            <span>
+              I consent to receive text message updates about my job applications
+              <span className="block text-xs text-slate-500">Checked answers “Yes” when an application asks; unchecked answers “No”</span>
+            </span>
+          </label>
           <Field label="Age">
             <Input value={p.age} onChange={(e) => set({ age: e.target.value.replace(/\D/g, '').slice(0, 3) })} inputMode="numeric" placeholder="25" />
+          </Field>
+          <Field label="Current company" hint="Your employer now. Leave blank to answer “N/A”.">
+            <Input
+              value={p.currentCompany}
+              onChange={(e) => set({ currentCompany: e.target.value })}
+              placeholder="Apple"
+              autoComplete="organization"
+            />
           </Field>
           <Field label="Current position" hint="Your job title now. Leave blank if you’re not currently working." className="sm:col-span-2">
             <Input
               value={p.currentTitle}
               onChange={(e) => set({ currentTitle: e.target.value })}
-              placeholder="Software Engineering Intern"
+              placeholder="Software Engineer"
               autoComplete="organization-title"
             />
           </Field>
@@ -194,14 +214,14 @@ export function EducationSection({ profile: p, onChange }: SectionProps) {
               <Field label="School" required={i === 0} className="sm:col-span-2">
                 <Input value={e.school} onChange={(ev) => update(i, { school: ev.target.value })} placeholder="University of …" />
               </Field>
-              <Field label="Degree type" hint="Fills the degree dropdown.">
+              <Field label="Degree type" hint="Fills the degree dropdown">
                 <Select
                   options={degreeOptions(e.degree)}
                   value={standardDegree(e.degree) || e.degree}
                   onChange={(ev) => update(i, { degree: ev.target.value })}
                 />
               </Field>
-              <Field label="Field of study / discipline" hint="Fills the major or discipline field.">
+              <Field label="Field of study / discipline" hint="Fills the major or discipline field">
                 <Input value={e.major} onChange={(ev) => update(i, { major: ev.target.value })} placeholder="Computer Science" />
               </Field>
               <Field label="Start">
@@ -210,10 +230,10 @@ export function EducationSection({ profile: p, onChange }: SectionProps) {
               <Field label="End (or expected)">
                 <Input type="month" value={e.endDate} onChange={(ev) => update(i, { endDate: ev.target.value })} />
               </Field>
-              <Field label="GPA" hint="Optional.">
+              <Field label="GPA" hint="Optional">
                 <Input value={e.gpa} onChange={(ev) => update(i, { gpa: ev.target.value })} placeholder="3.7" />
               </Field>
-              <Field label="Honors" hint="Optional.">
+              <Field label="Honors" hint="Optional">
                 <Input value={e.honors} onChange={(ev) => update(i, { honors: ev.target.value })} />
               </Field>
             </Grid>
@@ -320,13 +340,13 @@ export function ExperienceSection({ profile: p, onChange }: SectionProps) {
                 />
                 I currently work here
               </label>
-              <Field label="What you did" hint="One bullet per line." className="sm:col-span-2">
+              <Field label="What you did" hint="One bullet per line" className="sm:col-span-2">
                 <BulletsInput value={x.bullets} onChange={(bullets) => update(i, { bullets })} />
               </Field>
             </Grid>
           </div>
         ))}
-        <Field label="Skills" hint="Comma-separated: languages, frameworks, tools." className="border-t border-slate-100 pt-5">
+        <Field label="Skills" hint="Comma-separated: languages, frameworks, tools" className="border-t border-slate-100 pt-5">
           <Input
             value={skillsText}
             onChange={(e) => {
@@ -349,8 +369,12 @@ export function PreferencesSection({ profile: p, onChange }: SectionProps) {
         <Field label="Desired salary">
           <Input value={p.preferences.salary} onChange={(e) => set({ salary: e.target.value })} placeholder="$120,000" />
         </Field>
-        <Field label="Earliest start date" hint="Leave blank to use two weeks from the day you apply.">
-          <Input value={p.preferences.startDate} onChange={(e) => set({ startDate: e.target.value })} placeholder="Two weeks from today" />
+        <Field label="Earliest start date" hint="Leave blank to use two weeks from the day you apply">
+          <Input
+            type="date"
+            value={/^\d{4}-\d{2}-\d{2}$/.test(p.preferences.startDate) ? p.preferences.startDate : ''}
+            onChange={(e) => set({ startDate: e.target.value })}
+          />
         </Field>
         <Field label="Willing to relocate?">
           <Select
@@ -359,7 +383,7 @@ export function PreferencesSection({ profile: p, onChange }: SectionProps) {
             onChange={(e) => set({ relocate: e.target.value as Profile['preferences']['relocate'] })}
           />
         </Field>
-        <Field label="Work arrangement" hint="Flexible answers Yes to remote, hybrid, and on-site.">
+        <Field label="Work arrangement" hint="Flexible answers Yes to remote, hybrid, and on-site">
           <Select
             options={[
               ['', 'Select…'],
