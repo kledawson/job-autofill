@@ -148,7 +148,8 @@ export interface AdapterKeys {
 }
 
 export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}): Classification {
-  for (const k of [field.id, field.name, field.path]) {
+  // Ashby prefixes names with the form id ("<uuid>__systemfield_eeoc_gender").
+  for (const k of [field.id, field.name, field.name.split('__').pop(), field.path]) {
     if (k && adapterKeys[k]) return { kind: 'profile', key: adapterKeys[k], source: 'adapter' };
   }
 
