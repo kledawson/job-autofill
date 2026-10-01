@@ -243,6 +243,17 @@ function closeMenu(input: HTMLElement) {
   });
 }
 
+/** Closes a dropdown that is still showing its list. Safe on closed ones: it only acts when the page says the list is open. */
+export function closeIfOpen(input: HTMLElement) {
+  if (input.getAttribute('aria-expanded') !== 'true') return;
+  withGuard(input, () => {
+    input.focus();
+    key(input, 'Escape');
+    input.blur();
+    fire(input, 'focusout');
+  });
+}
+
 export async function fillCombobox(
   field: ScannedField,
   candidates: string[],
