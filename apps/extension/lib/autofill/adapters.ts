@@ -127,9 +127,18 @@ const ashby: Adapter = {
     _systemfield_eeoc_veteran_status: 'veteran',
     _systemfield_eeoc_disability_status: 'disability',
   },
-  formRoot: (doc) =>
-    doc.querySelector('.ashby-application-form-field-entry')?.closest('form, [class*="application-form-container"], main') ??
-    doc.body,
+  formRoot(doc) {
+    // Some boards render sections (like the EEO questions) outside the first container, so take the
+    // smallest element that holds every section.
+    const sections = Array.from(doc.querySelectorAll('.ashby-application-form-section-container'));
+    let common: Element | null = sections[0]?.parentElement ?? null;
+    while (common && !sections.every((s) => common!.contains(s))) common = common.parentElement;
+    if (common && common !== doc.documentElement) return common;
+    return (
+      doc.querySelector('.ashby-application-form-field-entry')?.closest('form, [class*="application-form-container"], main') ??
+      doc.body
+    );
+  },
   jobInfo(doc) {
     // "Software Engineer @ Example Co"
     const m = /^(.+) @ (.+)$/.exec(doc.title.trim());
