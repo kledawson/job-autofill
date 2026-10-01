@@ -36,6 +36,32 @@ describe('prompt', () => {
   });
 });
 
+describe('visa status', () => {
+  it('answers a current visa status question with the saved status, N/A when empty', () => {
+    const p = sampleProfile();
+    expect(valueFor('visaStatus', p)).toEqual(['US Citizen']);
+    p.workAuth.status = '';
+    expect(valueFor('visaStatus', p)).toEqual(['N/A']);
+  });
+});
+
+describe('current company and location', () => {
+  it('answers N/A when Current company is empty', () => {
+    const p = sampleProfile();
+    p.currentCompany = '';
+    expect(valueFor('currentCompany', p)).toEqual(['N/A']);
+    p.currentCompany = 'Acme Corp';
+    expect(valueFor('currentCompany', p)).toEqual(['Acme Corp']);
+  });
+
+  it('searches locations by city and state first', () => {
+    const p = sampleProfile();
+    p.city = 'San Jose';
+    p.state = 'CA';
+    expect(valueFor('location', p)?.[0]).toBe('San Jose, CA');
+  });
+});
+
 describe('current position', () => {
   it('answers N/A when Current position is empty', () => {
     const p = sampleProfile();
@@ -79,6 +105,8 @@ describe('start date, work arrangement, survey answers', () => {
     p.preferences.startDate = '';
     const v = valueFor('startDate', p, { now: new Date(2026, 9, 1) })!;
     expect(v.slice(0, 3)).toEqual(['10/15/2026', 'October 15, 2026', '2026-10-15']);
+    p.preferences.startDate = '2026-11-03';
+    expect(valueFor('startDate', p)).toEqual(['11/03/2026', 'November 3, 2026', '2026-11-03']);
     p.preferences.startDate = 'June 2026';
     expect(valueFor('startDate', p)).toEqual(['June 2026']);
   });
