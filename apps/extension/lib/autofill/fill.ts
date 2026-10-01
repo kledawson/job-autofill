@@ -327,7 +327,7 @@ export async function fillCombobox(
   if (idx < 0 && opts.topOption && !query) idx = firstReal(staticOptions);
 
   const choice = options[idx];
-  console.warn(`[Job Autofill] dropdown "${field.label.slice(0, 40)}": ${trace.join(' ')} -> ${choice ? 'picked an option' : 'no match'}`);
+  console.debug(`[Job Autofill] dropdown "${field.label.slice(0, 40)}": ${trace.join(' ')} -> ${choice ? 'picked an option' : 'no match'}`);
   if (!choice) {
     if (input.value) setNativeValueKeepFocus(input, '');
     closeMenu(input);
