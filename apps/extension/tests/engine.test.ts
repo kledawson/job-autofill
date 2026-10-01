@@ -201,8 +201,9 @@ describe('Ashby', () => {
     const auth = doc.querySelector('[data-field-path="3080cfba-auth"] button[data-option="yes"]')!;
     expect(auth.getAttribute('aria-pressed')).toBe('true');
     expect((doc.querySelector('input[name="_systemfield_eeoc_gender"][value="Female"]') as HTMLInputElement).checked).toBe(true);
-    // Text-message consent is left to the user.
-    expect(doc.querySelectorAll('input[name="communicationConsent"]:checked')).toHaveLength(0);
+    // Text-message consent follows the saved choice; the sample profile has not opted in.
+    expect((doc.querySelector('input[name="communicationConsent"][value="notGiven"]') as HTMLInputElement).checked).toBe(true);
+    expect(doc.querySelectorAll('input[name="communicationConsent"][value="given"]:checked')).toHaveLength(0);
 
     expect(answers).toHaveLength(1);
     expect(answers[0]!.question).toContain('Why are you interested in Example Co?');
@@ -216,6 +217,31 @@ describe('Ashby', () => {
       ]),
     );
     expect(submits).toBe(0);
+  });
+
+  it('always agrees to "Acknowledge, confirm, and agree" as a dropdown or a checkbox', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/abc/apply');
+    doc.body.innerHTML = `<form><label for="a">Acknowledge, confirm, and agree to the following statements. *</label>
+      <select id="a"><option value="">Select…</option><option>Yes, I acknowledge, agree, and confirm.</option><option>No, I do not acknowledge, agree, or confirm.</option></select>
+      <label><input type="checkbox" id="c" name="c"> Acknowledge, confirm, and agree to the following statements</label></form>`;
+    const { d } = deps();
+    await new FillSession(doc, ADAPTERS.lever, d).run();
+    expect((doc.getElementById('a') as HTMLSelectElement).selectedIndex).toBe(1);
+    expect((doc.getElementById('c') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('answers Yes to text-message consent when the profile opts in, and classifies a lone consent box', async () => {
+    const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    const profile = { ...sampleProfile(), textConsent: true };
+    const { d } = deps({ context: { profile, resume: RESUME, coverLetter: null, transcript: null, hasGeminiKey: false } });
+    await new FillSession(doc, ADAPTERS.ashby, d).run();
+    expect((doc.querySelector('input[name="communicationConsent"][value="given"]') as HTMLInputElement).checked).toBe(true);
+
+    const box = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    box.body.innerHTML = '<form><label><input type="checkbox" name="sms"> I consent to receive text messages</label><label><input type="checkbox" name="t"> I agree to the terms and receive text messages</label></form>';
+    const [lone, bundled] = scanFields(box.body).map((f) => classifyField(f).kind === 'profile' ? 'textConsent' : classifyField(f).kind);
+    expect(lone).toBe('textConsent');
+    expect(bundled).toBe('consent');
   });
 
   it('flags free responses when no Gemini key is set, and fills everything else', async () => {
@@ -237,5 +263,27 @@ describe('Ashby', () => {
     expect(summary.aiNote).toBe('Gemini rate limit');
     expect((doc.getElementById('0086e069-why') as HTMLTextAreaElement).value).toBe('');
     expect(doc.getElementById('0086e069-why')!.getAttribute('data-jaf-state')).toBe('missing');
+  });
+});
+
+describe('conditional questions', () => {
+  it('fills a race question that only appears after Hispanic/Latino is answered', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/abc/apply');
+    doc.body.innerHTML = `<form><label for="h">Are you Hispanic/Latino?</label>
+      <select id="h"><option value="">Select…</option><option>Yes</option><option>No</option><option>Decline To Self Identify</option></select></form>`;
+    const hispanic = doc.getElementById('h') as HTMLSelectElement;
+    hispanic.addEventListener('change', () => {
+      setTimeout(() => {
+        doc.querySelector('form')!.insertAdjacentHTML(
+          'beforeend',
+          `<label for="r">Please identify your race</label><select id="r"><option value="">Select…</option><option>White</option><option>Decline To Self Identify</option></select>`,
+        );
+      }, 0);
+    });
+    const profile = { ...sampleProfile(), eeo: { ...sampleProfile().eeo, hispanic: 'No' } };
+    const { d } = deps({ context: { profile, resume: RESUME, coverLetter: null, transcript: null, hasGeminiKey: false } });
+    await new FillSession(doc, ADAPTERS.lever, d).run();
+    expect(hispanic.value).toBe('No');
+    expect((doc.getElementById('r') as HTMLSelectElement).value).toBe('Decline To Self Identify');
   });
 });
