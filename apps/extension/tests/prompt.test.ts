@@ -117,3 +117,19 @@ describe('combined and location questions', () => {
     expect(k('Are you able to work onsite in our Mountain View, CA office? (5 days in-office required)')).toBe('workMode');
   });
 });
+
+describe('age threshold questions', () => {
+  it('compares the saved age to the number asked', () => {
+    const p = sampleProfile();
+    p.age = '24';
+    const k = (label: string) =>
+      (classifyField({ kind: 'combobox', label, id: '', name: '', path: '', autocomplete: '', required: true, options: [], members: [] } as never) as { key?: string }).key;
+    expect(k('Are you over 18 years of age?')).toBe('ageAtLeast');
+    expect(k('Are you 21 years of age or older?')).toBe('ageAtLeast');
+    expect(k('Age')).toBe('age');
+    expect(valueFor('ageAtLeast', p, { label: 'Are you over 18 years of age?' })).toEqual(['Yes']);
+    expect(valueFor('ageAtLeast', p, { label: 'Are you at least 25 years old?' })).toEqual(['No']);
+    p.age = '';
+    expect(valueFor('ageAtLeast', p, { label: 'Are you over 18 years of age?' })).toBeNull();
+  });
+});

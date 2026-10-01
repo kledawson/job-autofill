@@ -10,6 +10,7 @@ export type ProfileKey =
   | 'phone'
   | 'phoneCountryCode'
   | 'age'
+  | 'ageAtLeast'
   | 'address'
   | 'city'
   | 'state'
@@ -85,6 +86,8 @@ const RULES: Rule[] = [
   ['phone', WITH_CODE_RE],
   ['phoneCountryCode', /country code|calling code|dial(l?ing)? code|phone code|(phone|mobile) country|^(country|dial|calling) ?code$|^code$/],
   ['phone', /phone|mobile|cell\b/],
+  // "Are you over 18 years of age?" / "at least 21" / "18 or older": answered by comparing your age to the number asked.
+  ['ageAtLeast', /^(?=.*\b(1[4-9]|[2-6][0-9])\b)(?=.*\b(age|years old|older)\b)(?=.*\b(over|at least|older|above|minimum)\b)/],
   ['age', /^(what is |enter )?(your )?age\b(?! range)(?!.*(least|over|older|18|21))|how old are you/],
   ['linkedin', /linkedin/],
   ['github', /github/],

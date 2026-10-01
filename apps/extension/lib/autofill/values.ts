@@ -165,6 +165,11 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
         ? ['+1', '1', 'United States (+1)', 'United States +1', 'United States', 'USA']
         : [code, digits, `(${code})`];
     }
+    case 'ageAtLeast': {
+      const age = parseInt(p.age, 10);
+      const min = parseInt(/\b(1[4-9]|[2-6][0-9])\b/.exec(opts.label ?? '')?.[1] ?? '', 10);
+      return Number.isFinite(age) && Number.isFinite(min) ? [age >= min ? 'Yes' : 'No'] : null;
+    }
     case 'age':
       return nonEmpty(p.age);
     case 'address':
@@ -273,6 +278,7 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
 
 /** Keys whose values are only safe to pick from a list, never typed free-form. */
 export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
+  'ageAtLeast',
   'authorizedNoSponsor',
   'livesIn',
   'authorized',
