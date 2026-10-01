@@ -135,4 +135,9 @@ describe('local resume reader', () => {
     ]).experience[0];
     expect(e).toMatchObject({ company: 'Northwind Traders', location: 'Seattle, WA' });
   });
+
+  it('gives a one-month job the same start and end month', () => {
+    const d = parseResumeText(['Sam Lee', 'Experience', 'Camp Counselor\tJun 2024', 'Camp Pine, Austin, TX', '• Led activities.']);
+    expect(d.experience[0]).toMatchObject({ startDate: '2024-06', endDate: '2024-06', current: false });
+  });
 });

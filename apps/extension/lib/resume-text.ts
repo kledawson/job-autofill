@@ -209,6 +209,9 @@ function parseExperience(lines: string[]): Experience[] {
     .map((e) => {
       const joined = e.headers.join('\n');
       const range = dateRange(joined);
+      // A job that lists one month ("Jun 2025") started and ended in that month.
+      const single = range ? null : SINGLE_RE.exec(joined);
+      const singleMonth = single ? toMonth(single[1]!) : '';
       let segments = e.headers
         .flatMap((h) => stripDates(h).split(SEPARATORS))
         .flatMap((s) => s.split(/\s+at\s+/))
@@ -234,8 +237,8 @@ function parseExperience(lines: string[]): Experience[] {
         title,
         company,
         location,
-        startDate: range?.start ?? '',
-        endDate: range?.end ?? '',
+        startDate: range?.start ?? singleMonth,
+        endDate: range ? range.end : singleMonth,
         current: range?.current ?? false,
         bullets: e.bullets.join('\n'),
       };

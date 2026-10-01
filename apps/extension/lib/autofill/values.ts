@@ -55,9 +55,36 @@ function degreeVariants(degree: string): string[] {
   return out;
 }
 
+/** Other wordings forms use for the same self-identification answer. */
+const EEO_ALIASES: Record<string, string[]> = {
+  male: ['Man', 'Cisgender man'],
+  female: ['Woman', 'Cisgender woman'],
+  'non-binary': ['Nonbinary', 'Non binary', 'Genderqueer', 'Non-binary / third gender'],
+  'black or african american': ['Black', 'African American'],
+  white: ['Caucasian', 'White (Not Hispanic or Latino)'],
+  asian: ['Asian (Not Hispanic or Latino)'],
+  'american indian or alaska native': ['Native American', 'American Indian'],
+  'native hawaiian or other pacific islander': ['Pacific Islander', 'Native Hawaiian'],
+  'two or more races': ['Two or more', 'Multiracial', 'Mixed'],
+  'i am not a protected veteran': ['I am not a veteran', 'Not a protected veteran', 'No'],
+  'no, i do not have a disability': ['No, I do not have a disability and have not had one in the past', 'No, I don’t have a disability', 'No disability', 'No'],
+  'yes, i have a disability (or previously had a disability)': ['Yes, I have a disability', 'Yes'],
+};
+
 function eeo(value: string): string[] {
   const v = value.trim() || DECLINE;
-  return v === DECLINE ? DECLINE_VARIANTS : [v];
+  if (v === DECLINE) return DECLINE_VARIANTS;
+  return [v, ...(EEO_ALIASES[v.toLowerCase()] ?? [])];
+}
+
+const MONTH_NAMES = MONTHS;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/** Candidate spellings of the date two weeks from `now`, in the order forms most often want them. */
+export function twoWeeksOut(now: Date): string[] {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 14);
+  const [y, m, day] = [d.getFullYear(), d.getMonth() + 1, d.getDate()];
+  return [`${pad2(m)}/${pad2(day)}/${y}`, `${MONTH_NAMES[m - 1]} ${day}, ${y}`, `${y}-${pad2(m)}-${pad2(day)}`, '2 weeks', 'Two weeks', 'Immediately'];
 }
 
 function normalizeCode(code: string): string {
@@ -88,7 +115,7 @@ function isUS(country: string): boolean | null {
  * Candidate values for a profile key, best first. Several candidates let option matching
  * handle "Bachelor's Degree" vs "BS", or "January" vs "01". Null when the profile has no value.
  */
-export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean } = {}): string[] | null {
+export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date } = {}): string[] | null {
   const edu = p.education.find((e) => e.school) ?? p.education[0];
   const job = p.experience.find((x) => x.current) ?? p.experience.find((x) => x.company);
   switch (key) {
@@ -181,9 +208,11 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     case 'salary':
       return nonEmpty(p.preferences.salary);
     case 'startDate':
-      return nonEmpty(p.preferences.startDate);
+      return p.preferences.startDate.trim() ? nonEmpty(p.preferences.startDate) : twoWeeksOut(opts.now ?? new Date());
     case 'workMode': {
       const mode = p.preferences.workMode;
+      // "Flexible" means willing to work any arrangement, so every yes/no question about one is Yes.
+      if (opts.yesNo) return mode === 'flexible' ? ['Yes'] : null;
       const labels: Record<string, string[]> = {
         remote: ['Remote'],
         hybrid: ['Hybrid'],
@@ -224,6 +253,9 @@ export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
   'disability',
   'declineOnly',
 ]);
+
+/** Keys never guessed from the top dropdown option when nothing matches. */
+export const NO_TOP_OPTION_KEYS = new Set<ProfileKey>([...CHOICE_ONLY_KEYS, 'workMode', 'startDate', 'salary', 'phoneCountryCode', 'phone', 'age']);
 
 /** Keys where the first search result is acceptable when no option matches by text. */
 export const SEARCH_FIRST_RESULT_KEYS = new Set<ProfileKey>(['location']);

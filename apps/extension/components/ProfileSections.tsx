@@ -337,8 +337,8 @@ export function PreferencesSection({ profile: p, onChange }: SectionProps) {
         <Field label="Desired salary">
           <Input value={p.preferences.salary} onChange={(e) => set({ salary: e.target.value })} placeholder="$120,000" />
         </Field>
-        <Field label="Earliest start date">
-          <Input value={p.preferences.startDate} onChange={(e) => set({ startDate: e.target.value })} placeholder="June 2026" />
+        <Field label="Earliest start date" hint="Leave blank to use two weeks from the day you apply.">
+          <Input value={p.preferences.startDate} onChange={(e) => set({ startDate: e.target.value })} placeholder="Two weeks from today" />
         </Field>
         <Field label="Willing to relocate?">
           <Select
@@ -347,7 +347,7 @@ export function PreferencesSection({ profile: p, onChange }: SectionProps) {
             onChange={(e) => set({ relocate: e.target.value as Profile['preferences']['relocate'] })}
           />
         </Field>
-        <Field label="Work arrangement">
+        <Field label="Work arrangement" hint="Flexible answers Yes to remote, hybrid, and on-site.">
           <Select
             options={[
               ['', 'Select…'],

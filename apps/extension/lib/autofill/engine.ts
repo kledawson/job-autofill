@@ -3,6 +3,7 @@ import { payloadToFile } from '../messages';
 import type { Adapter, JobInfo } from './adapters';
 import { classifyField, type Classification } from './classify';
 import {
+  clickSafely,
   fieldHasValue,
   fillCheckboxGroup,
   fillCombobox,
@@ -20,7 +21,8 @@ import { clearOutline, outline, type ReviewState } from './highlight';
 import { characterLimitFor } from './match';
 import { scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE } from './classify';
-import { SEARCH_FIRST_RESULT_KEYS, valueFor } from './values';
+import { NO_TOP_OPTION_KEYS, SEARCH_FIRST_RESULT_KEYS, valueFor } from './values';
+import { isPlaceholderOption } from './match';
 
 export interface EngineDeps {
   context: FillContext;
@@ -161,7 +163,21 @@ export class FillSession {
         rec.outcome = field.kind === 'file' && file ? fillFile(field, file) : 'nomatch';
         return;
       }
-      const values = valueFor(key, profile, { phoneWithCode: WITH_CODE_RE.test(field.label.toLowerCase()) });
+      const hasCodeField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && r.cls.key === 'phoneCountryCode');
+      const yesNo = isYesNo(field.options);
+      const values = valueFor(key, profile, {
+        phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
+        yesNo: key === 'workMode' && yesNo,
+      });
+      const topOption = !NO_TOP_OPTION_KEYS.has(key);
+      // A multiple-choice list of arrangements: "Flexible" ticks every one.
+      if (key === 'workMode' && field.kind === 'checkboxGroup' && profile.preferences.workMode === 'flexible') {
+        const boxes = field.members as HTMLInputElement[];
+        for (const b of boxes) if (!b.checked) clickSafely(b);
+        rec.outcome = boxes.some((b) => b.checked) ? 'filled' : 'failed';
+        if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
+        return;
+      }
       const first = values?.[0];
       if (!values || !first) {
         rec.outcome = 'nomatch';
@@ -169,6 +185,11 @@ export class FillSession {
       }
       switch (field.kind) {
         case 'text': {
+          if ((field.el as HTMLInputElement).type === 'date') {
+            const iso = values.find((v) => /^\d{4}-\d{2}-\d{2}$/.test(v));
+            rec.outcome = iso ? fillText(field, iso) : 'nomatch';
+            break;
+          }
           const isTypeahead =
             key === 'location' &&
             (this.adapter.platform === 'lever' || /location/i.test((field.el as HTMLElement).className));
@@ -179,10 +200,10 @@ export class FillSession {
           rec.outcome = fillText(field, first);
           break;
         case 'select':
-          rec.outcome = fillSelect(field, values);
+          rec.outcome = fillSelect(field, values, { topOption });
           break;
         case 'combobox':
-          rec.outcome = await fillCombobox(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key) });
+          rec.outcome = await fillCombobox(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key), topOption });
           break;
         case 'radio':
           rec.outcome = fillRadio(field, values);
@@ -283,4 +304,10 @@ export async function waitForForm(doc: Document, adapter: Adapter, timeout = 150
     await sleep(300);
   }
   return false;
+}
+
+/** True when the choices are just Yes and No ("Are you open to remote work?"). */
+function isYesNo(options: string[]): boolean {
+  const real = options.filter((o) => !isPlaceholderOption(o));
+  return real.length > 0 && real.length <= 3 && real.every((o) => /^(yes|no)\b/i.test(o.trim()));
 }

@@ -24,7 +24,7 @@ export interface ResumeDraft {
 export const RESUME_PROMPT = `Extract the candidate's details from the attached resume to pre-fill a job application profile.
 
 - Use only what the resume states. Leave a field as an empty string (or an empty list) when the resume does not include it. Never guess.
-- Dates use the format YYYY-MM. If only a year is given, use YYYY-01. Leave endDate empty for a current job and set current to true.
+- Dates use the format YYYY-MM. If only a year is given, use YYYY-01. Leave endDate empty for a current job (an end date of Present) and set current to true. If a job lists only a single month, use that same month for startDate and endDate.
 - List education and experience most recent first.
 - For experience bullets, copy the resume's bullet points for that job, one per line, without bullet symbols.
 - location is only the city and state (or Remote) of the job. Never put it in company or title.
@@ -137,7 +137,8 @@ export function sanitizeDraft(raw: unknown): ResumeDraft {
       .filter((e) => e.school),
     experience: list(r.experience, 12)
       .map((x) => {
-        const current = x.current === true;
+        // "Present" as the end date (or any wording for "still here") means a current job.
+        const current = x.current === true || /^(present|current|now|ongoing|today)$/i.test(text(x.endDate, 20));
         return {
           title: text(x.title, 120),
           company: text(x.company, 120),

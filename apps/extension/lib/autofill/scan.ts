@@ -230,15 +230,24 @@ export function scanFields(root: ParentNode): ScannedField[] {
     }
 
     if (type === 'radio' || type === 'checkbox') {
-      const key = `${type}:${name || el.id}`;
-      if (name && seenGroups.has(key)) continue;
+      // Survey questions often leave radios unnamed, or give each checkbox its own name; the
+      // surrounding fieldset or radiogroup is then the only thing tying the choices together.
+      const wrapper = el.closest<HTMLElement>('fieldset, [role="radiogroup"], [role="group"]');
+      const inWrapper = wrapper
+        ? Array.from(wrapper.querySelectorAll<HTMLInputElement>(`input[type="${type}"]`)).filter((m) => !isHidden(m))
+        : [];
+      const grouped = inWrapper.length > 1 && (type === 'radio' ? !name : true);
+      const key = grouped ? `wrap:${type}:${inWrapper[0]!.id || inWrapper[0]!.name}:${inWrapper.length}` : `${type}:${name || el.id}`;
+      if ((name || grouped) && seenGroups.has(key)) continue;
       seenGroups.add(key);
       const scope = el.closest('form') ?? root;
-      const members = name
-        ? Array.from(scope.querySelectorAll<HTMLInputElement>(`input[type="${type}"][name="${CSS.escape(name)}"]`)).filter(
-            (m) => !isHidden(m),
-          )
-        : [el as HTMLInputElement];
+      const members = grouped
+        ? inWrapper
+        : name
+          ? Array.from(scope.querySelectorAll<HTMLInputElement>(`input[type="${type}"][name="${CSS.escape(name)}"]`)).filter(
+              (m) => !isHidden(m),
+            )
+          : [el as HTMLInputElement];
       const options = members.map(optionText);
       const kind: FieldKind = type === 'radio' ? 'radio' : members.length > 1 ? 'checkboxGroup' : 'checkbox';
       fields.push(makeField(kind, members[0] ?? el, members, options, commonContainer(members.length ? members : [el])));

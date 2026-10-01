@@ -66,3 +66,26 @@ describe('phone and country code', () => {
     expect(valueFor('age', { ...p, age: '24' })).toEqual(['24']);
   });
 });
+
+describe('start date, work arrangement, survey answers', () => {
+  it('defaults the earliest start date to two weeks out', () => {
+    const p = sampleProfile();
+    p.preferences.startDate = '';
+    const v = valueFor('startDate', p, { now: new Date(2026, 9, 1) })!;
+    expect(v.slice(0, 3)).toEqual(['10/15/2026', 'October 15, 2026', '2026-10-15']);
+    p.preferences.startDate = 'June 2026';
+    expect(valueFor('startDate', p)).toEqual(['June 2026']);
+  });
+  it('answers Yes to every arrangement question when flexible', () => {
+    const p = sampleProfile();
+    p.preferences.workMode = 'flexible';
+    expect(valueFor('workMode', p, { yesNo: true })).toEqual(['Yes']);
+    p.preferences.workMode = 'remote';
+    expect(valueFor('workMode', p, { yesNo: true })).toBeNull();
+  });
+  it('knows other wordings for survey answers', () => {
+    const p = sampleProfile();
+    p.eeo.gender = 'Male';
+    expect(valueFor('gender', p)).toContain('Man');
+  });
+});

@@ -60,7 +60,7 @@ export type Classification =
 type Rule = [ProfileKey, RegExp];
 
 /** A phone field that wants the dialing code typed into the number itself. */
-export const WITH_CODE_RE = /(includ\w*|with|plus|add)\s+(the\s+|your\s+)?(country|international|dial\w*)\s*code|international (format|number)|e\.?164/;
+export const WITH_CODE_RE = /(includ\w*|with|plus|add)\s+(the\s+|your\s+)?(country|international|dial\w*)\s*code|international (format|number)|e\.?164|country code (and|&|\+) (phone )?number|code and (phone )?number/;
 
 // Order matters: specific phrases come before the generic ones they contain.
 const RULES: Rule[] = [
@@ -79,7 +79,7 @@ const RULES: Rule[] = [
   ['fullName', /^((your|full|legal|candidate|applicant)\s+)*name$|full (legal )?name|legal name/],
   ['email', /e-?mail/],
   ['phone', WITH_CODE_RE],
-  ['phoneCountryCode', /country code|calling code|dial(l?ing)? code|phone code|(phone|mobile) country/],
+  ['phoneCountryCode', /country code|calling code|dial(l?ing)? code|phone code|(phone|mobile) country|^(country|dial|calling) ?code$|^code$/],
   ['phone', /phone|mobile|cell\b/],
   ['age', /^(what is |enter )?(your )?age\b(?! range)(?!.*(least|over|older|18|21))|how old are you/],
   ['linkedin', /linkedin/],

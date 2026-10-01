@@ -1,4 +1,4 @@
-import { bestOption, normalize } from './match';
+import { bestOption, isPlaceholderOption, normalize } from './match';
 import type { ScannedField } from './scan';
 
 const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
@@ -116,12 +116,14 @@ export function fillText(field: ScannedField, value: string): FillOutcome {
   return el.value === v ? 'filled' : 'failed';
 }
 
-export function fillSelect(field: ScannedField, candidates: string[]): FillOutcome {
+export function fillSelect(field: ScannedField, candidates: string[], opts: { topOption?: boolean } = {}): FillOutcome {
   const select = field.el as HTMLSelectElement;
   const current = select.options[select.selectedIndex];
   if (current && current.value && select.selectedIndex > 0) return 'already';
   const options = Array.from(select.options);
-  const idx = bestOption(candidates, options.map((o) => o.text));
+  let idx = bestOption(candidates, options.map((o) => o.text));
+  // Nothing fits exactly: take the first real option.
+  if (idx < 0 && opts.topOption) idx = options.findIndex((o) => o.value && !isPlaceholderOption(o.text));
   const option = options[idx];
   if (!option) return 'nomatch';
   withGuard(select, () => {
@@ -231,7 +233,7 @@ function closeMenu(input: HTMLElement) {
 export async function fillCombobox(
   field: ScannedField,
   candidates: string[],
-  opts: { acceptFirstResult?: boolean } = {},
+  opts: { acceptFirstResult?: boolean; topOption?: boolean } = {},
 ): Promise<FillOutcome> {
   const input = field.el as HTMLInputElement;
   if (comboboxHasValue(field)) return 'already';
@@ -248,6 +250,9 @@ export async function fillCombobox(
     return o.length ? o : null;
   }, timing.menuOpen)) ?? [];
   let idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
+  // A static list with no close match: take its first real option.
+  const firstReal = (list: HTMLElement[]) => list.findIndex((o) => !isPlaceholderOption(o.textContent ?? ''));
+  const staticOptions = options;
 
   // Async search lists (locations, schools) need a query first.
   const query = candidates[0] ?? '';
@@ -263,7 +268,10 @@ export async function fillCombobox(
     if (idx < 0 && opts.acceptFirstResult && firstWord && normalize(options[0]?.textContent ?? '').includes(firstWord)) {
       idx = 0;
     }
+    // Results came back for the query: the top one is the best guess ("San Jose, CA, United States").
+    if (idx < 0 && opts.topOption) idx = firstReal(options);
   }
+  if (idx < 0 && opts.topOption && !query) idx = firstReal(staticOptions);
 
   const choice = options[idx];
   if (!choice) {
