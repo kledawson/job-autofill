@@ -147,7 +147,7 @@ function isUS(country: string): boolean | null {
  * Candidate values for a profile key, best first. Several candidates let option matching
  * handle "Bachelor's Degree" vs "BS", or "January" vs "01". Null when the profile has no value.
  */
-export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date; label?: string; description?: string } = {}): string[] | null {
+export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date; label?: string; description?: string; required?: boolean; options?: string[] } = {}): string[] | null {
   const edu = p.education.find((e) => e.school) ?? p.education[0];
   const job = p.experience.find((x) => x.current) ?? p.experience.find((x) => x.company);
   switch (key) {
@@ -186,6 +186,17 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return ['Yes', 'I acknowledge', 'I agree', 'Agree', 'Acknowledge'];
     case 'textConsent':
       return [p.textConsent ? 'Yes' : 'No'];
+    case 'ageRange': {
+      const age = parseInt(p.age, 10);
+      if (!Number.isFinite(age)) return null;
+      const hit = (opts.options ?? []).find((o) => {
+        const nums = (o.match(/\d+/g) ?? []).map(Number);
+        if (nums.length >= 2) return age >= nums[0]! && age <= nums[1]!;
+        if (nums.length === 1) return /or (older|above|more|over)|\+|and (over|above|older)|over|above/i.test(o) ? age >= nums[0]! : /under|below|less|younger/i.test(o) ? age < nums[0]! : false;
+        return false;
+      });
+      return hit ? [hit] : null;
+    }
     case 'age':
       return nonEmpty(p.age);
     case 'address':
@@ -219,9 +230,9 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     case 'website':
       return nonEmpty(p.website || p.portfolio || p.github);
     case 'currentCompany':
-      return [p.currentCompany.trim() || 'N/A'];
+      return nonEmpty(p.currentCompany.trim()) ?? (opts.required ? ['N/A'] : null);
     case 'currentTitle':
-      return [p.currentTitle.trim() || 'N/A'];
+      return nonEmpty(p.currentTitle.trim()) ?? (opts.required ? ['N/A'] : null);
     case 'school':
       return nonEmpty(edu?.school);
     case 'degree': {
@@ -265,6 +276,10 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return yesNo(p.preferences.relocate);
     case 'salary':
       return salaryAnswer(p.preferences.salary, opts.description ?? '', opts.label ?? '');
+    case 'noticePeriod': {
+      const employed = !!(p.currentCompany.trim() || p.currentTitle.trim() || p.experience.some((x) => x.current));
+      return employed ? ['2 weeks', '2 Weeks', '14 days', '2'] : ['0', '0 days', 'None', 'Immediate', 'Immediately'];
+    }
     case 'startDate':
       return p.preferences.startDate.trim() ? chosenStartDate(p.preferences.startDate) : twoWeeksOut(opts.now ?? new Date());
     case 'workMode': {

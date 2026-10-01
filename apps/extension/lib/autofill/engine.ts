@@ -14,6 +14,7 @@ import {
   fillText,
   fillTypeahead,
   closeIfOpen,
+  setNativeValue,
   fillCheckbox,
   fillYesNo,
   sleep,
@@ -234,6 +235,8 @@ export class FillSession {
         phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
         yesNo: key === 'workMode' && yesNo,
         label: field.label,
+        required: field.required,
+        options: field.options,
       });
       const topOption = TOP_OPTION_KEYS.has(key);
       // A multiple-choice list of arrangements: "Flexible" ticks every one.
@@ -246,6 +249,10 @@ export class FillSession {
       }
       const first = values?.[0];
       if (!values || !first) {
+        // The site's resume parser may have prefilled an employer the profile says is blank; clear it.
+        if (key === 'currentCompany' && field.kind === 'text' && !profile.currentCompany.trim()) {
+          keepBlank(field.el as HTMLInputElement);
+        }
         rec.outcome = 'nomatch';
         return;
       }
@@ -392,4 +399,23 @@ const QUESTION_RE = /^(are|is|will|would|do|does|can|could|have|did)\b/i;
 function isYesNo(options: string[]): boolean {
   const real = options.filter((o) => !isPlaceholderOption(o));
   return real.length > 0 && real.length <= 3 && real.every((o) => /^(yes|no)\b/i.test(o.trim()));
+}
+
+/**
+ * Keeps an optional box empty while the site's resume parser may still be prefilling it. Parsing can finish
+ * seconds after the upload, so check for a while; stop as soon as the person types or focuses the box.
+ */
+function keepBlank(input: HTMLInputElement, ms = 20000) {
+  let touched = false;
+  const stop = () => {
+    touched = true;
+  };
+  input.addEventListener('keydown', stop, { once: true });
+  input.addEventListener('focus', stop, { once: true });
+  const clear = () => {
+    if (!touched && input.isConnected && input.value.trim()) setNativeValue(input, '');
+  };
+  clear();
+  const timer = setInterval(clear, 300);
+  setTimeout(() => clearInterval(timer), ms);
 }

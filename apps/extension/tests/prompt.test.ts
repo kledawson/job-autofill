@@ -46,10 +46,12 @@ describe('visa status', () => {
 });
 
 describe('current company and location', () => {
-  it('answers N/A when Current company is empty', () => {
+  it('answers N/A when Current company is empty and required, else leaves it blank', () => {
     const p = sampleProfile();
     p.currentCompany = '';
-    expect(valueFor('currentCompany', p)).toEqual(['N/A']);
+    expect(valueFor('currentCompany', p, { required: true })).toEqual(['N/A']);
+    expect(valueFor('currentCompany', p)).toBeNull();
+    expect(valueFor('currentCompany', p, { required: false })).toBeNull();
     p.currentCompany = 'Acme Corp';
     expect(valueFor('currentCompany', p)).toEqual(['Acme Corp']);
   });
@@ -63,10 +65,11 @@ describe('current company and location', () => {
 });
 
 describe('current position', () => {
-  it('answers N/A when Current position is empty', () => {
+  it('answers N/A when Current position is empty and required, else leaves it blank', () => {
     const p = sampleProfile();
     p.experience[0]!.current = true;
-    expect(valueFor('currentTitle', p)).toEqual(['N/A']);
+    expect(valueFor('currentTitle', p, { required: true })).toEqual(['N/A']);
+    expect(valueFor('currentTitle', p)).toBeNull();
     p.currentTitle = 'Teaching Assistant';
     expect(valueFor('currentTitle', p)).toEqual(['Teaching Assistant']);
     expect(profileForPrompt(p)).toContain('Current position: Teaching Assistant');
@@ -240,5 +243,34 @@ describe('degree type', () => {
   it('keeps type and field apart when reading a resume', () => {
     const d = sanitizeDraft({ education: [{ school: 'UCSC', degree: 'B.S. Computer Science', major: '' }] });
     expect(d.education[0]).toMatchObject({ degree: "Bachelor's Degree", major: 'Computer Science' });
+  });
+});
+
+describe('notice period', () => {
+  it('answers 2 weeks when employed and 0 when unemployed', () => {
+    const p = sampleProfile();
+    p.currentCompany = 'Acme Corp';
+    expect(valueFor('noticePeriod', p)?.[0]).toBe('2 weeks');
+    p.currentCompany = '';
+    p.currentTitle = '';
+    p.experience.forEach((x) => (x.current = false));
+    expect(valueFor('noticePeriod', p)?.[0]).toBe('0');
+  });
+});
+
+describe('age range', () => {
+  const opts = ['18-20', '21-29', '30-39', '40-49', '50-59', '60 or older'];
+  it('picks the range containing the saved age', () => {
+    const p = sampleProfile();
+    p.age = '23';
+    expect(valueFor('ageRange', p, { options: opts })).toEqual(['21-29']);
+    p.age = '64';
+    expect(valueFor('ageRange', p, { options: opts })).toEqual(['60 or older']);
+    p.age = '';
+    expect(valueFor('ageRange', p, { options: opts })).toBeNull();
+  });
+  it('classifies "What is your age range?"', () => {
+    const c = classifyField({ kind: 'radio', label: 'What is your age range?', id: '', name: '', path: '', autocomplete: '', required: false, options: opts, members: [] } as never) as { key?: string };
+    expect(c.key).toBe('ageRange');
   });
 });

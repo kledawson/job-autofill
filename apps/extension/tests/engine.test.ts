@@ -325,3 +325,32 @@ describe('conditional questions', () => {
     expect((doc.getElementById('r') as HTMLSelectElement).value).toBe('Decline To Self Identify');
   });
 });
+
+describe('Lever resume prefill', () => {
+  it('clears an employer the site prefilled when the profile has no current company and the field is optional', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/6ed76ce8-4156-4b60-b120-403538bd66cd/apply');
+    const org = doc.querySelector('input[name="org"]') as HTMLInputElement;
+    org.value = 'Apple';
+    const { d } = deps();
+    d.context.profile.currentCompany = '';
+    await new FillSession(doc, ADAPTERS.lever, d).run();
+    expect(org.value).toBe('');
+  });
+});
+
+describe('Lever late resume prefill', () => {
+  it('clears an employer the parser fills after the fill pass, unless the person has started typing', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/6ed76ce8-4156-4b60-b120-403538bd66cd/apply');
+    const org = doc.querySelector('input[name="org"]') as HTMLInputElement;
+    const { d } = deps();
+    d.context.profile.currentCompany = '';
+    await new FillSession(doc, ADAPTERS.lever, d).run();
+    org.value = 'Apple';
+    await new Promise((r) => setTimeout(r, 700));
+    expect(org.value).toBe('');
+    org.dispatchEvent(new Event('keydown'));
+    org.value = 'Mine';
+    await new Promise((r) => setTimeout(r, 700));
+    expect(org.value).toBe('Mine');
+  });
+});

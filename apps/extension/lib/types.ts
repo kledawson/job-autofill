@@ -33,7 +33,7 @@ export interface Profile {
   pronouns: string;
   /** Job title held now, e.g. "Software Engineering Intern". Empty if not working. */
   currentTitle: string;
-  /** Employer now. Empty if not working; autofill answers "N/A". */
+  /** Employer now. Empty if not working; autofill answers "N/A" only when the field is required. */
   currentCompany: string;
 
   email: string;

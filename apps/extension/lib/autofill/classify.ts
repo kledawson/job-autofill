@@ -12,6 +12,7 @@ export type ProfileKey =
   | 'textConsent'
   | 'acknowledge'
   | 'age'
+  | 'ageRange'
   | 'ageAtLeast'
   | 'address'
   | 'city'
@@ -45,6 +46,7 @@ export type ProfileKey =
   | 'relocate'
   | 'salary'
   | 'startDate'
+  | 'noticePeriod'
   | 'workMode'
   | 'gender'
   | 'race'
@@ -96,6 +98,7 @@ const RULES: Rule[] = [
   ['phone', /phone|mobile|cell\b/],
   // "Are you over 18 years of age?" / "at least 21" / "18 or older": answered by comparing your age to the number asked.
   ['ageAtLeast', /^(?=.*\b(1[4-9]|[2-6][0-9])\b)(?=.*\b(age|years old|older)\b)(?=.*\b(over|at least|older|above|minimum)\b)/],
+  ['ageRange', /\bage (range|group|bracket)|\bage\b.*\b(range|group|bracket)|\b(range|group|bracket)\b.*\bage\b/],
   ['age', /^(what is |enter )?(your )?age\b(?! range)(?!.*(least|over|older|18|21))|how old are you/],
   ['linkedin', /linkedin/],
   ['github', /github/],
@@ -125,7 +128,8 @@ const RULES: Rule[] = [
   ['major', /major|discipline|field of study|area of study|concentration/],
   ['school', /school|university|college|institution/],
   ['salary', /salary|compensation|pay (range|expectation)|desired pay/],
-  ['startDate', /start date|available to start|earliest (start|available)|when (can|could|would) you (start|begin)|notice period/],
+  ['noticePeriod', /notice period/],
+  ['startDate', /start date|available to start|earliest (start|available)|when (can|could|would) you (start|begin)/],
   ['workMode', /remote|on-?site|hybrid|in[- ]office|work arrangement/],
 ];
 
