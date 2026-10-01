@@ -79,7 +79,7 @@ export function DocumentsSection({
   return (
     <Card title="Documents" description="Attached to the resume, cover letter, and transcript upload fields. Stored only on this computer.">
       <div className="space-y-3">
-        <FileSlot kind="resume" label="Resume (PDF)" hint="Required by almost every application." />
+        <FileSlot kind="resume" label="Resume (PDF)" hint="Required by almost every application" />
         {onResumeDraft && <ResumeImport onResumeDraft={onResumeDraft} hasGeminiKey={!!hasGeminiKey} onNeedKey={onNeedKey} />}
         <FileSlot kind="coverLetter" label="Cover letter" hint="Optional. Attached when a form has a cover letter upload." />
         <FileSlot kind="transcript" label="Transcript" hint="Optional. Attached when a form has a transcript upload." />
@@ -245,7 +245,7 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
       }
     >
       <div className="space-y-4">
-        <Field label="API key" hint={hasKey ? 'A key is saved. Enter a new one to replace it.' : 'Stored only in this browser and used only by the extension’s background worker.'}>
+        <Field label="API key" hint={hasKey ? 'A key is saved. Enter a new one to replace it.' : 'Stored only in this browser and used only by the extension’s background worker'}>
           <Input
             type="password"
             value={key}
