@@ -152,6 +152,16 @@ export function fillRadio(field: ScannedField, candidates: string[]): FillOutcom
   return radio.checked ? 'filled' : 'failed';
 }
 
+/** A lone "I consent to text messages" box: ticked only when the answer is Yes, otherwise left unticked. */
+export function fillCheckbox(field: ScannedField, candidates: string[]): FillOutcome {
+  const box = field.members[0] as HTMLInputElement | undefined;
+  if (!box) return 'nomatch';
+  if (box.checked) return 'already';
+  if (candidates[0] !== 'Yes') return 'nomatch';
+  clickSafely(box);
+  return box.checked ? 'filled' : 'failed';
+}
+
 export function fillCheckboxGroup(field: ScannedField, candidates: string[]): FillOutcome {
   const boxes = field.members as HTMLInputElement[];
   if (boxes.some((b) => b.checked)) return 'already';
@@ -341,13 +351,30 @@ function indicatorFor(field: ScannedField): HTMLElement | null {
   );
 }
 
+/**
+ * Types into a search box one character at a time. Some react-select search lists (Greenhouse locations)
+ * ignore a whole query set at once and only search when text arrives as typing would.
+ */
 function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  const win = el.ownerDocument.defaultView ?? window;
+  const write = (v: string) => (setter ? setter.call(el, v) : (el.value = v));
   withGuard(el, () => {
     el.focus();
-    if (setter) setter.call(el, value);
-    else el.value = value;
-    fire(el, 'input');
+    if (!value) {
+      write('');
+      fire(el, 'input');
+      return;
+    }
+    let typed = '';
+    for (const ch of value) {
+      el.dispatchEvent(new win.KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
+      typed += ch;
+      write(typed);
+      const InputEventCtor = win.InputEvent ?? win.Event;
+      el.dispatchEvent(new InputEventCtor('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: ch } as InputEventInit));
+      el.dispatchEvent(new win.KeyboardEvent('keyup', { key: ch, bubbles: true }));
+    }
   });
 }
 
