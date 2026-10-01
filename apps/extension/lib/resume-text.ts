@@ -320,6 +320,7 @@ export function parseResumeText(lines: string[], annotations: string[] = []): Re
     zip: location?.[3] ?? '',
     ...links,
     currentTitle: experience.find((x) => x.current)?.title ?? '',
+    currentCompany: experience.find((x) => x.current)?.company ?? '',
     education,
     experience,
     skills: parseSkills(sections.skills),
