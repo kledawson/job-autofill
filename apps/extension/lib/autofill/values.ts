@@ -86,8 +86,18 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 /** Candidate spellings of the date two weeks from `now`, in the order forms most often want them. */
 export function twoWeeksOut(now: Date): string[] {
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 14);
-  const [y, m, day] = [d.getFullYear(), d.getMonth() + 1, d.getDate()];
-  return [`${pad2(m)}/${pad2(day)}/${y}`, `${MONTH_NAMES[m - 1]} ${day}, ${y}`, `${y}-${pad2(m)}-${pad2(day)}`, '2 weeks', 'Two weeks', 'Immediately'];
+  return [...dateVariants(d.getFullYear(), d.getMonth() + 1, d.getDate()), '2 weeks', 'Two weeks', 'Immediately'];
+}
+
+function dateVariants(y: number, m: number, day: number): string[] {
+  return [`${pad2(m)}/${pad2(day)}/${y}`, `${MONTH_NAMES[m - 1]} ${day}, ${y}`, `${y}-${pad2(m)}-${pad2(day)}`];
+}
+
+/** A picked calendar date (YYYY-MM-DD) in the spellings forms use; older free-text answers pass through. */
+function chosenStartDate(value: string): string[] | null {
+  const v = value.trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? dateVariants(+m[1]!, +m[2]!, +m[3]!) : nonEmpty(v);
 }
 
 function normalizeCode(code: string): string {
@@ -172,6 +182,10 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       const min = parseInt(/\b(1[4-9]|[2-6][0-9])\b/.exec(opts.label ?? '')?.[1] ?? '', 10);
       return Number.isFinite(age) && Number.isFinite(min) ? [age >= min ? 'Yes' : 'No'] : null;
     }
+    case 'acknowledge':
+      return ['Yes', 'I acknowledge', 'I agree', 'Agree', 'Acknowledge'];
+    case 'textConsent':
+      return [p.textConsent ? 'Yes' : 'No'];
     case 'age':
       return nonEmpty(p.age);
     case 'address':
@@ -205,7 +219,7 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     case 'website':
       return nonEmpty(p.website || p.portfolio || p.github);
     case 'currentCompany':
-      return nonEmpty(job?.company);
+      return [p.currentCompany.trim() || 'N/A'];
     case 'currentTitle':
       return [p.currentTitle.trim() || 'N/A'];
     case 'school':
@@ -233,6 +247,8 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     }
     case 'authorized':
       return yesNo(p.workAuth.authorizedUS);
+    case 'visaStatus':
+      return [p.workAuth.status.trim() || 'N/A'];
     case 'sponsorship':
       return yesNo(p.workAuth.needsSponsorship);
     case 'authorizedNoSponsor': {
@@ -250,7 +266,7 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     case 'salary':
       return salaryAnswer(p.preferences.salary, opts.description ?? '', opts.label ?? '');
     case 'startDate':
-      return p.preferences.startDate.trim() ? nonEmpty(p.preferences.startDate) : twoWeeksOut(opts.now ?? new Date());
+      return p.preferences.startDate.trim() ? chosenStartDate(p.preferences.startDate) : twoWeeksOut(opts.now ?? new Date());
     case 'workMode': {
       const mode = p.preferences.workMode;
       if (opts.yesNo) {
@@ -290,6 +306,8 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
 /** Keys whose values are only safe to pick from a list, never typed free-form. */
 export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
   'ageAtLeast',
+  'textConsent',
+  'acknowledge',
   'authorizedNoSponsor',
   'livesIn',
   'authorized',
