@@ -33,12 +33,16 @@ export interface Profile {
   pronouns: string;
   /** Job title held now, e.g. "Software Engineering Intern". Empty if not working. */
   currentTitle: string;
+  /** Employer now. Empty if not working; autofill answers "N/A". */
+  currentCompany: string;
 
   email: string;
   age: string;
   /** Dialing code with a leading +, e.g. "+1". */
   countryCode: string;
   phone: string;
+  /** Agrees to receive text message updates about applications; answers "Yes"/"No" to SMS consent questions. */
+  textConsent: boolean;
   address: string;
   city: string;
   state: string;
@@ -105,10 +109,12 @@ export function emptyProfile(): Profile {
     preferredName: '',
     pronouns: '',
     currentTitle: '',
+    currentCompany: '',
     email: '',
     age: '',
     countryCode: '+1',
     phone: '',
+    textConsent: false,
     address: '',
     city: '',
     state: '',
