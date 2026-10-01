@@ -301,7 +301,7 @@ export class FillSession {
     const state = [...this.records.values()]
       .filter((r) => r.field.kind === 'combobox' && r.field.el.isConnected)
       .map((r) => `${r.field.label.slice(0, 28)}=${comboboxHasValue(r.field) ? 'set' : 'EMPTY'}`);
-    console.warn(`[Job Autofill] ${when}: ${state.join(' | ')}`);
+    console.debug(`[Job Autofill] ${when}: ${state.join(' | ')}`);
   }
 
   private async fillFreeResponse(rec: FieldRecord) {
