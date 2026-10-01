@@ -5,6 +5,8 @@ export interface PayRange {
   low: number;
   high: number;
   hourly: boolean;
+  /** Currency code written right after the range, e.g. "USD". */
+  currency: string;
 }
 
 const AMOUNT = '(\\d{1,3}(?:,\\d{3})+|\\d+(?:\\.\\d+)?)\\s*([kK])?';
@@ -27,7 +29,8 @@ export function findPayRange(description: string): PayRange | null {
     const hourly = /per hour|\/\s*h(ou)?r|hourly/i.test(after);
     const plausible = hourly ? low >= 8 && high <= 500 : low >= 15000 && high <= 2_000_000;
     if (!plausible || high < low) continue;
-    const range = { low, high, hourly };
+    const currency = /^\s*(USD|CAD|EUR|GBP|AUD)\b/i.exec(after)?.[1]?.toUpperCase() ?? '';
+    const range = { low, high, hourly, currency };
     const before = description.slice(Math.max(0, (m.index ?? 0) - 200), m.index ?? 0);
     if (/salary|pay|compensation|base|range|ote|wage/i.test(before)) return range;
     first ??= range;
@@ -57,10 +60,11 @@ export function salaryAnswer(saved: string, description: string, label: string):
   const wantsRange = /\brange\b/i.test(label);
   const posted = findPayRange(description);
   if (posted) {
-    const { low, high, hourly } = posted;
+    const { low, high, hourly, currency } = posted;
+    const unit = currency ? ` ${currency}` : '';
     return wantsRange
-      ? [`${formatAmount(low, hourly)} - ${formatAmount(high, hourly)}`]
-      : [formatAmount(low + 0.75 * (high - low), hourly)];
+      ? [`${formatAmount(low, hourly)} - ${formatAmount(high, hourly)}${unit}`]
+      : [`${formatAmount(low + 0.75 * (high - low), hourly)}${unit}`];
   }
   const text = saved.trim();
   if (!text) return null;

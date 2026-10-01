@@ -154,6 +154,9 @@ describe('salary and other people names', () => {
   it('uses the posted range, a figure above the midpoint, or the saved amount', () => {
     expect(salaryAnswer('$90,000', desc, 'Salary expectations')).toEqual(['$115,000']);
     expect(salaryAnswer('$90,000', desc, 'What is your expected salary range?')).toEqual(['$100,000 - $120,000']);
+    expect(
+      salaryAnswer('', 'Annual Base Pay Range\n\n$135,000 - $155,000 USD\n\nPrivacy', 'What are your salary expectations? Please state a range.'),
+    ).toEqual(['$135,000 - $155,000 USD']);
     expect(salaryAnswer('$90,000', 'No pay listed', 'Salary expectations')).toEqual(['$90,000']);
     expect(salaryAnswer('$100k-$120k', 'No pay listed', 'Salary expectations')).toEqual(['$100,000']);
     expect(salaryAnswer('$100k-$120k', '', 'Salary range')).toEqual(['$100k-$120k']);
