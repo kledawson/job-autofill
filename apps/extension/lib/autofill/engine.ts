@@ -13,6 +13,7 @@ import {
   fillSelect,
   fillText,
   fillTypeahead,
+  closeIfOpen,
   fillCheckbox,
   fillYesNo,
   sleep,
@@ -157,12 +158,22 @@ export class FillSession {
       await this.restoreDropdowns(fresh);
       this.traceDropdowns('end of pass');
       watcher.disconnect();
+      await this.closeOpenDropdowns();
       for (const rec of fresh) {
         if (rec.cls.kind === 'free_response') await this.fillFreeResponse(rec);
       }
       return fresh.length;
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** Leaves every dropdown closed; a question we could not answer is flagged red instead of left open. */
+  private async closeOpenDropdowns() {
+    const inputs = [...this.records.values()].filter((r) => r.field.kind === 'combobox' && r.field.el.isConnected).map((r) => r.field.el);
+    for (let round = 0; round < 2; round++) {
+      for (const el of inputs) closeIfOpen(el);
+      await sleep(timing.settle);
     }
   }
 
