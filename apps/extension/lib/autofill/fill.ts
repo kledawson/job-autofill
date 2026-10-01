@@ -6,7 +6,7 @@ const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
 export type FillOutcome = 'filled' | 'already' | 'nomatch' | 'failed';
 
 /** Waits used while dropdowns load; tests shorten these. */
-export const timing = { menuOpen: 700, search: 3000, typeahead: 2500, afterUpload: 2000 };
+export const timing = { menuOpen: 700, search: 3000, typeahead: 2500, afterUpload: 2000, settle: 350 };
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -216,7 +216,7 @@ function comboboxOptions(input: HTMLElement): HTMLElement[] {
   return Array.from(doc.querySelectorAll<HTMLElement>('[role="option"]')).filter(isVisible);
 }
 
-function comboboxHasValue(field: ScannedField): boolean {
+export function comboboxHasValue(field: ScannedField): boolean {
   const input = field.el as HTMLInputElement;
   const box = field.outlineTarget.closest('[class*="container"], [class*="select"]') ?? field.outlineTarget;
   const shown = box.querySelector('[class*="single-value"], [class*="singleValue"], [class*="multi-value"], [class*="multiValue"]');
@@ -284,6 +284,8 @@ export async function fillCombobox(
   clickSafely(choice);
   await sleep(120);
   closeMenu(input);
+  // Give the page time to commit the choice to its own state before the next field is touched.
+  await sleep(timing.settle);
   return comboboxHasValue(field) || !input.isConnected ? 'filled' : 'failed';
 }
 

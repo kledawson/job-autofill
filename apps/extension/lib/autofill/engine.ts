@@ -4,6 +4,7 @@ import type { Adapter, JobInfo } from './adapters';
 import { classifyField, type Classification } from './classify';
 import {
   clickSafely,
+  comboboxHasValue,
   fieldHasValue,
   fillCheckboxGroup,
   fillCombobox,
@@ -140,9 +141,13 @@ export class FillSession {
       for (const rec of files) await this.fillProfileField(rec);
       if (files.some((r) => r.outcome === 'filled')) await sleep(this.adapter.platform === 'greenhouse' ? 300 : timing.afterUpload);
 
+      const watcher = this.watchForCleared();
       for (const rec of fresh) {
         if (rec.field.kind !== 'file') await this.fillProfileField(rec);
       }
+      // Some forms reset a dropdown when a later field is touched; put back any that went blank.
+      await this.restoreDropdowns(fresh);
+      watcher.disconnect();
       for (const rec of fresh) {
         if (rec.cls.kind === 'free_response') await this.fillFreeResponse(rec);
       }
@@ -152,9 +157,43 @@ export class FillSession {
     }
   }
 
+  /** Field being filled right now, named in the warning when an earlier answer disappears. */
+  private activeLabel = '';
+
+  /** Logs (labels only, never values) when a chosen dropdown answer is removed from the page mid-fill. */
+  private watchForCleared(): MutationObserver {
+    const obs = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const n of Array.from(m.removedNodes)) {
+          if (n.nodeType === 1 && /single-?value/i.test((n as Element).className?.toString?.() ?? '')) {
+            console.warn(`[Job Autofill] a dropdown answer was cleared while filling "${this.activeLabel}"`);
+          }
+        }
+      }
+    });
+    obs.observe(this.root() as Node, { childList: true, subtree: true });
+    return obs;
+  }
+
+  private async restoreDropdowns(records: FieldRecord[]) {
+    for (let round = 0; round < 3; round++) {
+      const lost = records.filter(
+        (r) => r.field.kind === 'combobox' && r.outcome === 'filled' && r.field.el.isConnected && !comboboxHasValue(r.field),
+      );
+      if (!lost.length) return;
+      console.warn(`[Job Autofill] re-filling ${lost.length} dropdown(s) that went blank (round ${round + 1})`);
+      for (const rec of lost) {
+        rec.outcome = undefined;
+        await this.fillProfileField(rec);
+      }
+      await sleep(timing.settle);
+    }
+  }
+
   private async fillProfileField(rec: FieldRecord) {
     if (rec.cls.kind !== 'profile') return;
     const { field } = rec;
+    this.activeLabel = field.label;
     const key = rec.cls.key;
     const profile = this.deps.context.profile;
     try {
