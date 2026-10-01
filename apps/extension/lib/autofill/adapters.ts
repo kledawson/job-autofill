@@ -118,6 +118,7 @@ const ashby: Adapter = {
     _systemfield_name: 'fullName',
     _systemfield_email: 'email',
     _systemfield_phone: 'phone',
+    communicationConsent: 'textConsent',
     _systemfield_location: 'location',
     _systemfield_resume: 'resume',
     _systemfield_linkedin: 'linkedin',
