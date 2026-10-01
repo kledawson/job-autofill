@@ -146,7 +146,9 @@ export class FillSession {
         if (rec.field.kind !== 'file') await this.fillProfileField(rec);
       }
       // Some forms reset a dropdown when a later field is touched; put back any that went blank.
+      this.traceDropdowns('before restore');
       await this.restoreDropdowns(fresh);
+      this.traceDropdowns('end of pass');
       watcher.disconnect();
       for (const rec of fresh) {
         if (rec.cls.kind === 'free_response') await this.fillFreeResponse(rec);
@@ -263,6 +265,15 @@ export class FillSession {
       rec.outcome = 'failed';
     }
     if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
+    if (field.kind === 'combobox') this.traceDropdowns(`after "${field.label.slice(0, 50)}" (${rec.outcome})`);
+  }
+
+  /** One console line listing which dropdowns currently show an answer (labels only, never values). */
+  private traceDropdowns(when: string) {
+    const state = [...this.records.values()]
+      .filter((r) => r.field.kind === 'combobox' && r.field.el.isConnected)
+      .map((r) => `${r.field.label.slice(0, 28)}=${comboboxHasValue(r.field) ? 'set' : 'EMPTY'}`);
+    console.warn(`[Job Autofill] ${when}: ${state.join(' | ')}`);
   }
 
   private async fillFreeResponse(rec: FieldRecord) {

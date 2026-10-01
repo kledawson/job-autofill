@@ -15,7 +15,7 @@ export default defineConfig({
   // Visible folder (not the default .output) so it is easy to pick in Chrome's Load unpacked dialog.
   outDir: 'dist',
   modules: ['@wxt-dev/module-react'],
-  vite: () => ({ plugins: [tailwindcss()] }),
+  vite: () => ({ plugins: [tailwindcss()], define: { __BUILD__: JSON.stringify(new Date().toISOString()) } }),
   manifest: {
     name: 'Job Application Autofill',
     description:

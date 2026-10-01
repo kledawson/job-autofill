@@ -52,7 +52,8 @@ export default defineContentScript({
             })
           ).applicationId;
 
-        showStatus({ title: 'Filling application…', lines: ['Filling fields from your profile.'], tone: 'working' });
+        console.warn(`[Job Autofill] build ${__BUILD__}: filling started`);
+        showStatus({ title: 'Filling application…', lines: ['Filling fields from your profile.', `Build ${__BUILD__.slice(5, 16).replace('T', ' ')}`], tone: 'working' });
         const summary = await s.run();
         currentId = id;
         await report(summary);
