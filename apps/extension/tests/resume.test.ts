@@ -93,3 +93,19 @@ describe('model date wording', () => {
     expect([d.experience[0]!.startDate, d.experience[0]!.endDate, d.experience[0]!.current]).toEqual(['2025-06', '', true]);
   });
 });
+
+describe('re-importing into a profile that already has entries', () => {
+  it('fills the empty dates and details without touching what is there', () => {
+    const p = sampleProfile();
+    p.experience = [{ title: 'Data Operations Technician', company: 'Meta Platforms (via QualityAI)', location: '', startDate: '', endDate: '', current: false, bullets: 'My own bullet' }];
+    p.education = [{ school: 'University of California, Santa Cruz', degree: "Bachelor's Degree", major: 'Computer Science', gpa: '', startDate: '', endDate: '', honors: '' }];
+    const draft = sanitizeDraft({
+      experience: [{ title: 'Data Operations Technician', company: 'Meta Platforms (via QualityAI)', location: 'Remote', startDate: '2026-04', endDate: '2026-06', current: false, bullets: 'Their bullet' }],
+      education: [{ school: 'University of California - Santa Cruz', degree: 'B.S.', major: 'CS', startDate: '2022-09', endDate: '2026-06' }],
+    });
+    const { profile, filled } = mergeResumeDraft(p, draft);
+    expect(profile.experience[0]).toMatchObject({ startDate: '2026-04', endDate: '2026-06', location: 'Remote', bullets: 'My own bullet' });
+    expect(profile.education[0]).toMatchObject({ startDate: '2022-09', endDate: '2026-06', degree: "Bachelor's Degree", major: 'Computer Science' });
+    expect(filled).toEqual(expect.arrayContaining(['education details', 'job details']));
+  });
+});

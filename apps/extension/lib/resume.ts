@@ -202,6 +202,47 @@ const SCALARS = [
   ['currentTitle', 'current position'],
 ] as const;
 
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const sameSchool = (a: Education, b: Education) => {
+  const x = norm(a.school);
+  const y = norm(b.school);
+  return !!x && !!y && (x === y || x.includes(y) || y.includes(x));
+};
+const sameJob = (a: Experience, b: Experience) => {
+  const company = norm(a.company);
+  const other = norm(b.company);
+  const title = norm(a.title);
+  const otherTitle = norm(b.title);
+  const companyMatch = !!company && !!other && (company === other || company.includes(other) || other.includes(company));
+  const titleMatch = !title || !otherTitle || title === otherTitle || title.includes(otherTitle) || otherTitle.includes(title);
+  return companyMatch ? titleMatch : !company && !!title && title === otherTitle;
+};
+
+/** For each saved entry that matches a resume entry, fills the fields left empty; never overwrites anything typed. */
+function fillEmptyFields<T extends object>(
+  saved: T[],
+  fromResume: T[],
+  same: (a: T, b: T) => boolean,
+  keys: (keyof T)[],
+): { items: T[]; changed: boolean } {
+  let changed = false;
+  const items = saved.map((entry) => {
+    const match = fromResume.find((d) => same(entry, d));
+    if (!match) return entry;
+    const next = { ...entry };
+    for (const k of keys) {
+      const have = String(entry[k] ?? '').trim();
+      const want = String(match[k] ?? '').trim();
+      if (!have && want) {
+        next[k] = match[k];
+        changed = true;
+      }
+    }
+    return next;
+  });
+  return { items, changed };
+}
+
 const blankEducation = (e: Education) => !e.school && !e.degree && !e.major;
 const blankExperience = (x: Experience) => !x.title && !x.company && !x.bullets;
 
@@ -223,10 +264,23 @@ export function mergeResumeDraft(profile: Profile, draft: ResumeDraft): { profil
   if (draft.education.length && profile.education.every(blankEducation)) {
     next.education = draft.education;
     filled.push(draft.education.length > 1 ? `${draft.education.length} schools` : 'education');
+  } else if (draft.education.length) {
+    // Already has schools: keep what is there and fill only the empty details (dates, degree, GPA…).
+    const { items, changed } = fillEmptyFields(profile.education, draft.education, sameSchool, ['degree', 'major', 'gpa', 'startDate', 'endDate', 'honors']);
+    next.education = items;
+    if (changed) filled.push('education details');
   }
   if (draft.experience.length && profile.experience.every(blankExperience)) {
     next.experience = draft.experience;
     filled.push(draft.experience.length > 1 ? `${draft.experience.length} jobs` : 'experience');
+  } else if (draft.experience.length) {
+    const { items, changed } = fillEmptyFields(profile.experience, draft.experience, sameJob, ['location', 'startDate', 'endDate', 'bullets']);
+    // A job the resume lists as ongoing, with no dates saved yet, becomes current.
+    next.experience = items.map((x, i) => {
+      const match = draft.experience.find((d) => sameJob(profile.experience[i]!, d));
+      return match?.current && !x.current && !x.endDate ? { ...x, current: true } : x;
+    });
+    if (changed || next.experience.some((x, i) => x.current !== items[i]!.current)) filled.push('job details');
   }
   if (draft.skills.length && !profile.skills.length) {
     next.skills = draft.skills;
