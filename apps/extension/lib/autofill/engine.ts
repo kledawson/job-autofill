@@ -13,6 +13,7 @@ import {
   fillSelect,
   fillText,
   fillTypeahead,
+  fillCheckbox,
   fillYesNo,
   sleep,
   timing,
@@ -83,6 +84,12 @@ export class FillSession {
   /** Runs the full pipeline once: scan, classify, fill, free responses, verify. */
   async run(): Promise<FillSummary> {
     await this.processNew();
+    // Answering one question can reveal another (race after Hispanic/Latino). Those appear while the
+    // pass runs, before observe() starts, so keep scanning until a pass finds nothing new.
+    for (let round = 0; round < 5; round++) {
+      await sleep(timing.settle);
+      if (!(await this.processNew())) break;
+    }
     return this.verify();
   }
 
@@ -257,6 +264,9 @@ export class FillSession {
           break;
         case 'radio':
           rec.outcome = fillRadio(field, values);
+          break;
+        case 'checkbox':
+          rec.outcome = fillCheckbox(field, values);
           break;
         case 'checkboxGroup':
           rec.outcome = fillCheckboxGroup(field, values);
