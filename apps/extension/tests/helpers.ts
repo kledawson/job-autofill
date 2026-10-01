@@ -9,6 +9,7 @@ export function sampleProfile(): Profile {
     firstName: 'Jordan',
     lastName: 'Rivera',
     preferredName: 'Jo',
+    currentCompany: 'Acme Corp',
     email: 'jordan@example.com',
     phone: '415-555-0100',
     city: 'San Francisco',
