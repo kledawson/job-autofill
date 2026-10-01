@@ -1,3 +1,5 @@
+import { parseDegreeLine } from '../lib/degree';
+import { sanitizeDraft } from '../lib/resume';
 import { describe, expect, it } from 'vitest';
 import { missingSections, parseResumeText, toMonth } from '../lib/resume-text';
 
@@ -139,5 +141,46 @@ describe('local resume reader', () => {
   it('gives a one-month job the same start and end month', () => {
     const d = parseResumeText(['Sam Lee', 'Experience', 'Camp Counselor\tJun 2024', 'Camp Pine, Austin, TX', '• Led activities.']);
     expect(d.experience[0]).toMatchObject({ startDate: '2024-06', endDate: '2024-06', current: false });
+  });
+
+  it('splits degree, field of study, and honors across common degree line styles', () => {
+    const cases: [string, { degree: string; major: string; honors: string }][] = [
+      ['B.S. Computer Science, Honors in the Major', { degree: 'B.S.', major: 'Computer Science', honors: 'Honors in the Major' }],
+      ['Bachelor of Science in Computer Science with Honors', { degree: 'Bachelor of Science', major: 'Computer Science', honors: 'Honors' }],
+      ['Bachelor of Arts (B.A.), Economics, magna cum laude', { degree: 'Bachelor of Arts', major: 'Economics', honors: 'magna cum laude' }],
+      ['Computer Science, B.S.', { degree: 'B.S.', major: 'Computer Science', honors: '' }],
+      ['M.S. in Data Science, Minor in Statistics', { degree: 'M.S.', major: 'Data Science', honors: '' }],
+      ['Ph.D. in Physics', { degree: 'Ph.D.', major: 'Physics', honors: '' }],
+      ['B.S. in Computer Science and Engineering, GPA: 3.9', { degree: 'B.S.', major: 'Computer Science and Engineering', honors: '' }],
+      ["Bachelor's Degree, Biology", { degree: "Bachelor's Degree", major: 'Biology', honors: '' }],
+    ];
+    for (const [line, want] of cases) expect(parseDegreeLine(line), line).toEqual(want);
+  });
+
+  it('keeps honors out of the field of study on a full education entry', () => {
+    const d = parseResumeText([
+      'Alex Kim',
+      'alex@example.com',
+      'Education',
+      'University of California, Santa Cruz\tSanta Cruz, CA',
+      'B.S. Computer Science, Honors in the Major\tSep 2022 – Jun 2026',
+      'GPA: 3.8',
+    ]);
+    expect(d.education[0]).toMatchObject({
+      school: 'University of California, Santa Cruz',
+      degree: "Bachelor's Degree",
+      major: 'Computer Science',
+      honors: 'Honors in the Major',
+      gpa: '3.8',
+    });
+  });
+
+  it('repairs a model reply that put honors in the major', () => {
+    const d = sanitizeDraft({
+      education: [{ school: 'UCSC', degree: 'B.S.', major: 'the Major', honors: 'B.S. Computer Science, Honors in the Major' }],
+    });
+    expect(d.education[0]).toMatchObject({ degree: "Bachelor's Degree", major: '', honors: 'Honors in the Major' });
+    const e = sanitizeDraft({ education: [{ school: 'UCSC', degree: 'B.S. Computer Science, Honors in the Major', major: '' }] });
+    expect(e.education[0]).toMatchObject({ degree: "Bachelor's Degree", major: 'Computer Science', honors: 'Honors in the Major' });
   });
 });

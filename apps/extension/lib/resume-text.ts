@@ -1,6 +1,7 @@
 // Reads a resume's text locally, without AI. Contact details and links are reliable;
 // education, experience, and skills are best-effort because resume layouts vary.
 import { sanitizeDraft, type ResumeDraft } from './resume';
+import { parseDegreeLine } from './degree';
 import type { Education, Experience } from './types';
 
 // --- Dates -------------------------------------------------------------------
@@ -126,25 +127,20 @@ function parseEducation(lines: string[]): Education[] {
     const text = entry.join('\n');
     const segments = entry.flatMap((l) => l.replace(BULLET_RE, '').split(SEPARATORS)).map((s) => s.trim()).filter(Boolean);
     const school = stripDates(segments.find((s) => SCHOOL_RE.test(s) && !DEGREE_RE.test(s)) ?? segments[0] ?? '');
-    let degree = '';
-    let major = '';
     const degreeSeg = segments.find((s) => DEGREE_RE.test(s));
-    if (degreeSeg) {
-      const clean = stripDates(degreeSeg).replace(/[,;]?\s*(minor|concentration)\b.*$/i, '').replace(/[,;]?\s*gpa.*$/i, '');
-      const inMatch = /^(.*?)\s+in\s+(.+)$/i.exec(clean);
-      if (inMatch) {
-        degree = inMatch[1]!.trim();
-        major = inMatch[2]!.trim();
-      } else {
-        const m = DEGREE_RE.exec(clean)!;
-        degree = clean.slice(0, m.index + m[0].length).replace(/[,:]$/, '').trim();
-        major = clean.slice(m.index + m[0].length).replace(/^[\s,:.-]+/, '').trim();
-      }
-    }
+    const parsed = degreeSeg ? parseDegreeLine(stripDates(degreeSeg)) : { degree: '', major: '', honors: '' };
+    const { degree, major } = parsed;
     const range = dateRange(text);
     const single = range ? null : SINGLE_RE.exec(text.replace(/gpa[:\s]*[\d.]+(\s*\/\s*[\d.]+)?/gi, ''));
     const gpa = /gpa[:\s]*([0-4]\.\d{1,2})/i.exec(text)?.[1] ?? '';
-    const honors = entry.find((l) => /dean.?s list|honors|cum laude|scholar/i.test(l))?.replace(BULLET_RE, '').trim() ?? '';
+    // Honors from the degree line itself, else from another line ("GPA: 3.8, Dean's List" gives "Dean's List").
+    const honors =
+      parsed.honors ||
+      entry
+        .filter((l) => l !== degreeSeg && !(degreeSeg && l.includes(degreeSeg)))
+        .flatMap((l) => l.replace(BULLET_RE, '').split(/\s*[;,]\s*/))
+        .filter((c) => /dean.?s list|honou?rs|cum laude|scholar/i.test(c))
+        .join('; ');
     return {
       school: school.replace(/[,\s]+$/, ''),
       degree,

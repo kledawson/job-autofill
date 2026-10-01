@@ -1,4 +1,4 @@
-import { splitDegree, standardDegree } from './degree';
+import { parseDegreeLine, splitDegree, standardDegree, startsWithDegree } from './degree';
 import { emptyProfile, type Education, type Experience, type Profile } from './types';
 
 /** Profile fields a resume can supply. Work authorization, preferences, and EEO answers are never inferred. */
@@ -127,7 +127,14 @@ export function sanitizeDraft(raw: unknown): ResumeDraft {
     currentTitle: text(r.currentTitle, 120),
     education: list(r.education, 8)
       .map((e) => {
-        const split = splitDegree({ degree: text(e.degree, 120), major: text(e.major, 120) });
+        // The model may put honors or a minor in the major, or the whole line in the degree; read the line properly.
+        const rawDegree = text(e.degree, 120);
+        const rawMajor = text(e.major, 120);
+        const messy = !rawMajor || /^(the )?major$/i.test(rawMajor) || /\b(honou?rs?|minor|cum laude|gpa)\b/i.test(rawMajor);
+        const line = messy ? parseDegreeLine([rawDegree, /^(the )?major$/i.test(rawMajor) ? '' : rawMajor].filter(Boolean).join(', ')) : null;
+        const split = line ? { degree: line.degree, major: line.major } : splitDegree({ degree: rawDegree, major: rawMajor });
+        const rawHonors = text(e.honors, 300);
+        const honors = startsWithDegree(rawHonors) ? parseDegreeLine(rawHonors).honors : rawHonors || line?.honors || '';
         return {
         school: text(e.school, 150),
         degree: standardDegree(split.degree) || split.degree,
@@ -135,7 +142,7 @@ export function sanitizeDraft(raw: unknown): ResumeDraft {
         gpa: text(e.gpa, 20),
         startDate: month(e.startDate),
         endDate: month(e.endDate),
-        honors: text(e.honors, 300),
+        honors,
       };
       })
       .filter((e) => e.school),
