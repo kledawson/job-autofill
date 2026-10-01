@@ -33,7 +33,7 @@ describe('resume draft validation', () => {
     expect(d.linkedin).toBe('https://linkedin.com/in/jordanrivera');
     expect(d.github).toBe('');
     expect(d.education).toHaveLength(1);
-    expect(d.education[0]).toMatchObject({ startDate: '2022-01', endDate: '' });
+    expect(d.education[0]).toMatchObject({ startDate: '2022-01', endDate: '2026-05' });
     expect(d.experience[0]).toMatchObject({ current: true, endDate: '', bullets: 'Led weekly sections\nGraded 200 exams' });
     expect(d.skills).toEqual(['Python', 'SQL']);
   });
@@ -80,5 +80,16 @@ describe('asking Gemini for only what is missing', () => {
     expect(Object.keys(schema.properties)).toEqual(['experience']);
     expect(prompt).toContain('Only extract these sections: experience.');
     expect(Object.keys(sectionRequest(undefined).schema.properties)).toContain('firstName');
+  });
+});
+
+describe('model date wording', () => {
+  it('accepts month names and slashes as well as YYYY-MM', () => {
+    const d = sanitizeDraft({
+      education: [{ school: 'UCSC', startDate: 'Sep 2022', endDate: 'June 2026' }],
+      experience: [{ title: 'Intern', company: 'Acme', startDate: '06/2025', endDate: 'Present' }],
+    });
+    expect([d.education[0]!.startDate, d.education[0]!.endDate]).toEqual(['2022-09', '2026-06']);
+    expect([d.experience[0]!.startDate, d.experience[0]!.endDate, d.experience[0]!.current]).toEqual(['2025-06', '', true]);
   });
 });

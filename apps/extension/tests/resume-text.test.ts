@@ -183,4 +183,35 @@ describe('local resume reader', () => {
     const e = sanitizeDraft({ education: [{ school: 'UCSC', degree: 'B.S. Computer Science, Honors in the Major', major: '' }] });
     expect(e.education[0]).toMatchObject({ degree: "Bachelor's Degree", major: 'Computer Science', honors: 'Honors in the Major' });
   });
+
+  it('reads education and job dates written in many styles', () => {
+    const edu: [string, string, string][] = [
+      ['B.S. Computer Science\tSeptember 2022 – Expected June 2026', '2022-09', '2026-06'],
+      ['B.S. Computer Science\t2022–2026', '2022-01', '2026-01'],
+      ['B.S. Computer Science\t09/2022 – 06/2026', '2022-09', '2026-06'],
+      ["B.S. Computer Science\tSep '22 – Jun '26", '2022-09', '2026-06'],
+      ['B.S. Computer Science\tFall 2022 – Spring 2026', '2022-09', '2026-05'],
+      ['B.S. Computer Science, Expected June 2026', '', '2026-06'],
+    ];
+    for (const [line, start, end] of edu) {
+      const d = parseResumeText(['Alex Kim', 'Education', 'University of California, Santa Cruz', line]);
+      expect([d.education[0]?.startDate, d.education[0]?.endDate], line).toEqual([start, end]);
+    }
+    const jobs: [string[], string, string, boolean][] = [
+      [['Software Engineering Intern\tMay – August 2025', 'Acme Corp\tSan Francisco, CA'], '2025-05', '2025-08', false],
+      [['Software Engineering Intern\tMay-Aug 2025', 'Acme Corp'], '2025-05', '2025-08', false],
+      [["Software Engineering Intern\tJun '25 – Aug '25", 'Acme Corp'], '2025-06', '2025-08', false],
+      [['Software Engineering Intern', 'Acme Corp, San Francisco, CA', 'June 2025 – August 2025'], '2025-06', '2025-08', false],
+      [['Software Engineering Intern\t06/15/2025 – 08/20/2025', 'Acme Corp'], '2025-06', '2025-08', false],
+      [['Software Engineering Intern\tJune 15, 2025 – August 20, 2025', 'Acme Corp'], '2025-06', '2025-08', false],
+      [['Software Engineering Intern, Acme Corp (June 2025 – August 2025)'], '2025-06', '2025-08', false],
+      [['Software Engineering Intern', 'Acme Corp\tJune 2025 – Present'], '2025-06', '', true],
+    ];
+    for (const [lines, start, end, current] of jobs) {
+      const d = parseResumeText(['Alex Kim', 'Experience', ...lines, '• Built things.']);
+      const x = d.experience[0]!;
+      expect([x.startDate, x.endDate, x.current], lines.join(' / ')).toEqual([start, end, current]);
+      expect(x.company, lines.join(' / ')).toBe('Acme Corp');
+    }
+  });
 });

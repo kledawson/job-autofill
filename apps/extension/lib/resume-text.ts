@@ -8,34 +8,49 @@ import type { Education, Experience } from './types';
 
 const MONTH = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
 const SEASON = '(?:spring|summer|fall|autumn|winter)';
-const YEAR = '(?:19|20)\\d{2}';
-const DATE = `(?:(?:${MONTH}|${SEASON}),?\\s+${YEAR}|\\d{1,2}\\/${YEAR}|${YEAR})`;
-const END = `(?:${DATE}|present|current|now|ongoing)`;
+const YEAR = "(?:(?:19|20)\\d{2}|['’]\\d{2}(?!\\d))";
+const DAY = '\\d{1,2}(?:st|nd|rd|th)?';
+const DATE = `(?:(?:${MONTH}|${SEASON})\\s+${DAY},?\\s+${YEAR}|\\d{1,2}\\/\\d{1,2}\\/${YEAR}|(?:${MONTH}|${SEASON}),?\\s*${YEAR}|\\d{1,2}\\/${YEAR}|${YEAR})`;
+const END = `(?:(?:expected|anticipated|exp\\.?|projected|est\\.?)\\s*:?\\s*)?(?:${DATE}|present|current|now|ongoing|today)`;
 const RANGE_RE = new RegExp(`(${DATE})\\s*(?:-|–|—|to|until)\\s*(${END})`, 'i');
+// "May – August 2025": the year is written once, after the second month.
+const SHARED_RE = new RegExp(`(${MONTH})\\s*(?:-|–|—|to)\\s*(${MONTH})\\s*(?:${DAY},?\\s*)?(${YEAR})`, 'i');
 const SINGLE_RE = new RegExp(`(?:expected|anticipated|graduat\\w*|class of)?:?\\s*(${DATE})`, 'i');
 
 const MONTH_NUM: Record<string, number> = {
   jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
   spring: 1, summer: 6, fall: 9, autumn: 9, winter: 12,
 };
+// A season that ends a range ("Fall 2022 – Spring 2026") means the end of that term.
+const SEASON_END: Record<string, number> = { spring: 5, summer: 8, fall: 12, autumn: 12, winter: 3 };
 
-/** "Jun 2025" → "2025-06", "06/2025" → "2025-06", "2025" → "2025-01", "Present" → "". */
-export function toMonth(s: string): string {
-  const t = s.trim().toLowerCase();
-  const year = /((?:19|20)\d{2})/.exec(t)?.[1];
+/** "Jun 2025" → "2025-06", "06/15/2025" → "2025-06", "Jun '25" → "2025-06", "2025" → "2025-01", "Present" → "". */
+export function toMonth(s: string, isEnd = false): string {
+  const t = s.trim().toLowerCase().replace(/^(expected|anticipated|exp\.?|projected|est\.?)\s*:?\s*/, '');
+  let year = /((?:19|20)\d{2})/.exec(t)?.[1];
+  if (!year) {
+    const short = /['’](\d{2})(?!\d)/.exec(t)?.[1];
+    if (short) year = `${parseInt(short, 10) > 60 ? '19' : '20'}${short}`;
+  }
   if (!year) return '';
   const slash = /^(\d{1,2})\//.exec(t);
   if (slash) return `${year}-${slash[1]!.padStart(2, '0')}`;
   const word = /^[a-z]+/.exec(t)?.[0];
-  const n = word ? MONTH_NUM[word.slice(0, 3)] ?? MONTH_NUM[word] : undefined;
+  const season = word && isEnd ? SEASON_END[word] : undefined;
+  const n = season ?? (word ? MONTH_NUM[word.slice(0, 3)] ?? MONTH_NUM[word] : undefined);
   return `${year}-${String(n ?? 1).padStart(2, '0')}`;
 }
 
 function dateRange(text: string): { start: string; end: string; current: boolean; match: string } | null {
   const m = RANGE_RE.exec(text);
   if (m) {
-    const current = /present|current|now|ongoing/i.test(m[2]!);
-    return { start: toMonth(m[1]!), end: current ? '' : toMonth(m[2]!), current, match: m[0] };
+    const current = /present|current|now|ongoing|today/i.test(m[2]!);
+    return { start: toMonth(m[1]!), end: current ? '' : toMonth(m[2]!, true), current, match: m[0] };
+  }
+  const shared = SHARED_RE.exec(text);
+  if (shared) {
+    const year = shared[3]!;
+    return { start: toMonth(`${shared[1]} ${year}`), end: toMonth(`${shared[2]} ${year}`, true), current: false, match: shared[0] };
   }
   return null;
 }
@@ -113,7 +128,13 @@ const DEGREE_RE =
   /\b(bachelor|master|doctor|ph\.?\s?d|associate|b\.?\s?s\.?c?|b\.?\s?a\.?|b\.?\s?eng|m\.?\s?s\.?c?|m\.?\s?a\.?|m\.?\s?eng|mba|b\.?\s?b\.?\s?a|high school diploma)(?![A-Za-z])/i;
 
 function stripDates(s: string): string {
-  return s.replace(RANGE_RE, '').replace(new RegExp(`(expected|anticipated|graduat\\w*|class of)?:?\\s*${DATE}`, 'gi'), '').trim();
+  return s
+    .replace(RANGE_RE, '')
+    .replace(SHARED_RE, '')
+    .replace(new RegExp(`(expected|anticipated|graduat\\w*|class of)?:?\\s*${DATE}`, 'gi'), '')
+    .replace(/\(\s*\)/g, '')
+    .replace(/^[\s,|–—-]+|[\s,|–—-]+$/g, '')
+    .trim();
 }
 
 function parseEducation(lines: string[]): Education[] {
@@ -193,7 +214,10 @@ function parseExperience(lines: string[]): Experience[] {
       if (cur) cur.bullets.push(line.replace(BULLET_RE, '').trim());
       continue;
     }
-    if (!cur || cur.bullets.length || (hasDate && cur.hasDate) || cur.headers.length >= 2) {
+    // A line holding only the dates, under the title and company, belongs to that same job.
+    const dateOnly = hasDate && stripDates(line).replace(/[\s,()|•·–—-]+/g, '') === '';
+    const joinsDates = dateOnly && !!cur && !cur.hasDate && !cur.bullets.length;
+    if (!cur || cur.bullets.length || (hasDate && cur.hasDate) || (cur.headers.length >= 2 && !joinsDates)) {
       cur = { headers: [], bullets: [], hasDate: false };
       entries.push(cur);
     }

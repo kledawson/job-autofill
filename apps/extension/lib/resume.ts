@@ -85,11 +85,18 @@ function text(v: unknown, max = 200): string {
   return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '';
 }
 
+const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/** Accepts YYYY-MM as asked for, and tolerates the other wordings a model sometimes returns ("Sep 2022", "09/2022"). */
 function month(v: unknown): string {
   const s = text(v, 20);
   if (/^\d{4}-\d{2}$/.test(s)) return s;
   if (/^\d{4}$/.test(s)) return `${s}-01`;
-  return '';
+  const slash = /^(\d{1,2})[\/.-](\d{4})$/.exec(s);
+  if (slash && +slash[1]! >= 1 && +slash[1]! <= 12) return `${slash[2]}-${slash[1]!.padStart(2, '0')}`;
+  const named = /^([a-z]{3})[a-z]*\.?,?\s+(?:\d{1,2},?\s+)?(\d{4})$/i.exec(s);
+  const idx = named ? MONTH_NAMES.indexOf(named[1]!.toLowerCase()) : -1;
+  return idx >= 0 ? `${named![2]}-${String(idx + 1).padStart(2, '0')}` : '';
 }
 
 function url(v: unknown): string {
