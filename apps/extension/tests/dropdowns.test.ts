@@ -75,6 +75,24 @@ describe('work authorization and clearance answers', () => {
     gc.workAuth.status = '';
     expect(valueFor('usCitizen', gc)).toBeNull();
   });
+  it('picks the matching option for a Citizenship Status list', () => {
+    const opts = [
+      '(a) U.S. citizen or national of the United States',
+      '(b) U.S. lawful permanent resident',
+      '(c) Refugee under 8 U.S.C. 1157',
+      '(d) Asylee under 8 U.S.C. 1158',
+      '(e) Authorized to work in the United States under the Deferred Action for Childhood Arrivals (DACA) program',
+      '(f) Other (please explain)',
+    ];
+    expect(key('Citizenship Status')).toBe('citizenshipStatus');
+    expect(key('Country of Citizenship')).not.toBe('citizenshipStatus');
+    expect(pick('citizenshipStatus', opts)).toBe(opts[0]);
+    const gc = sampleProfile();
+    gc.workAuth.status = 'Permanent Resident (Green Card)';
+    expect(pick('citizenshipStatus', opts, {}, gc)).toBe(opts[1]);
+    gc.workAuth.status = 'H-1B';
+    expect(valueFor('citizenshipStatus', gc)).toBeNull();
+  });
   it('maps the saved clearance onto the form options', () => {
     const opts = ['Top Secret SCI with Polygraph', 'Top Secret SCI/SAP', 'Top Secret', 'DOE Level Q', 'Secret', 'Expired Clearance', 'Never held a clearance', 'Do not wish to disclose'];
     expect(key('Active Security Clearance(s)')).toBe('clearance');

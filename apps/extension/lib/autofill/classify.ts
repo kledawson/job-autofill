@@ -40,6 +40,7 @@ export type ProfileKey =
   | 'authorized'
   | 'sponsorship'
   | 'usCitizen'
+  | 'citizenshipStatus'
   | 'usPerson'
   | 'clearance'
   | 'clearanceEligible'
@@ -87,6 +88,8 @@ const RULES: Rule[] = [
   // "Can you confirm you are currently a US Citizen?" often sits inside a long clearance or export-control preamble.
   ['usPerson', /export[- ]controlled|\bu\.?s\.? persons?\b|lawful permanent resident.*asylee/],
   ['usCitizen', /\b(u\.?s\.?|united states|american) citizen/],
+  // "Citizenship Status" with a list of statuses ("(a) U.S. citizen or national...", "(b) U.S. lawful permanent resident").
+  ['citizenshipStatus', /citizenship status|^(your |u\.?s\.? )?citizenship\b(?!.*country)/],
   // "Clearance Eligibility", "Are you able to obtain a clearance?": a citizenship question, not the level held.
   ['clearanceEligible', /clearance.{0,40}(eligib|qualif|obtain|able to|willing|undergo|sponsor)|(eligib|qualif|obtain|able to|willing|undergo).{0,40}clearance/],
   ['clearance', /security clearance|\bclearances?\b/],
