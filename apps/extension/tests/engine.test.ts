@@ -38,7 +38,7 @@ const countSubmit = (e: Event) => {
 };
 
 beforeEach(() => {
-  Object.assign(timing, { menuOpen: 20, search: 30, typeahead: 30, afterUpload: 0, settle: 0 });
+  Object.assign(timing, { menuOpen: 20, search: 30, typeahead: 30, afterUpload: 0, settle: 0, reveal: 400 });
   submits = 0;
   window.addEventListener('submit', countSubmit);
 });
@@ -323,6 +323,34 @@ describe('conditional questions', () => {
     await new FillSession(doc, ADAPTERS.lever, d).run();
     expect(hispanic.value).toBe('No');
     expect((doc.getElementById('r') as HTMLSelectElement).value).toBe('Decline To Self Identify');
+  });
+});
+
+describe('conditional question order', () => {
+  it('fills the race question revealed by Hispanic/Latino before moving on to veteran status', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/abc/apply');
+    doc.body.innerHTML = `<form><div id="h-wrap"><label for="h">Are you Hispanic/Latino?</label>
+      <select id="h"><option value="">Select…</option><option>Yes</option><option>No</option><option>Decline To Self Identify</option></select></div>
+      <label for="v">Veteran Status</label>
+      <select id="v"><option value="">Select…</option><option>I am not a protected veteran</option><option>Decline To Self Identify</option></select></form>`;
+    const order: string[] = [];
+    doc.querySelector('form')!.addEventListener('change', (e) => order.push((e.target as HTMLElement).id));
+    const hispanic = doc.getElementById('h') as HTMLSelectElement;
+    // Like Greenhouse: the race question renders a moment after "No", directly under Hispanic/Latino.
+    hispanic.addEventListener('change', () => {
+      if (hispanic.value !== 'No') return;
+      setTimeout(() => {
+        doc.getElementById('h-wrap')!.insertAdjacentHTML(
+          'afterend',
+          `<label for="r">Please identify your race</label><select id="r"><option value="">Select…</option><option>White</option><option>Decline To Self Identify</option></select>`,
+        );
+      }, 150);
+    });
+    const profile = { ...sampleProfile(), eeo: { ...sampleProfile().eeo, hispanic: 'No' } };
+    const { d } = deps({ context: { profile, resume: RESUME, coverLetter: null, transcript: null, hasGeminiKey: false } });
+    await new FillSession(doc, ADAPTERS.lever, d).run();
+    expect((doc.getElementById('r') as HTMLSelectElement).value).toBe('Decline To Self Identify');
+    expect(order).toEqual(['h', 'r', 'v']);
   });
 });
 
