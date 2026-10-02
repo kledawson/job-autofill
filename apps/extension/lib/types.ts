@@ -58,6 +58,8 @@ export interface Profile {
     authorizedUS: YesNo;
     needsSponsorship: YesNo;
     status: string;
+    /** Highest active security clearance, one of CLEARANCE_LEVELS (empty when not set). */
+    clearance: string;
   };
 
   education: Education[];
@@ -84,6 +86,19 @@ export interface Profile {
 }
 
 export const DECLINE = 'Decline to answer';
+
+export const WORK_STATUSES = ['US Citizen', 'Permanent Resident (Green Card)', 'Asylee / Refugee', 'F-1 (OPT/CPT)', 'H-1B', 'Other visa'];
+
+export const CLEARANCE_LEVELS = [
+  'None / never held',
+  'Secret',
+  'Top Secret',
+  'Top Secret SCI',
+  'Top Secret SCI with Polygraph',
+  'DOE Q',
+  'Expired',
+  'Prefer not to disclose',
+];
 
 export function emptyEducation(): Education {
   return { school: '', degree: '', major: '', gpa: '', startDate: '', endDate: '', honors: '' };
@@ -124,7 +139,7 @@ export function emptyProfile(): Profile {
     github: '',
     portfolio: '',
     website: '',
-    workAuth: { authorizedUS: '', needsSponsorship: '', status: '' },
+    workAuth: { authorizedUS: '', needsSponsorship: '', status: '', clearance: '' },
     education: [emptyEducation()],
     experience: [emptyExperience()],
     skills: [],

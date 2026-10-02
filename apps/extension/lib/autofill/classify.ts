@@ -39,6 +39,10 @@ export type ProfileKey =
   | 'gradDate'
   | 'authorized'
   | 'sponsorship'
+  | 'usCitizen'
+  | 'usPerson'
+  | 'clearance'
+  | 'clearanceEligible'
   | 'visaStatus'
   | 'inUS'
   | 'livesIn'
@@ -80,6 +84,12 @@ const RULES: Rule[] = [
   ['visaStatus', /^(what (is|are) )?(your )?(current )?(visa|immigration|work authori[sz]ation) status\??$/],
   ['sponsorship', /sponsor|visa (status|support)|require.*visa/],
   ['authorized', /authori[sz]ed to work|legally (able|authori[sz]ed|eligible|permitted)|work authori[sz]ation|eligib(le|ility) to work|right to work|permitted to work/],
+  // "Can you confirm you are currently a US Citizen?" often sits inside a long clearance or export-control preamble.
+  ['usPerson', /export[- ]controlled|\bu\.?s\.? persons?\b|lawful permanent resident.*asylee/],
+  ['usCitizen', /\b(u\.?s\.?|united states|american) citizen/],
+  // "Clearance Eligibility", "Are you able to obtain a clearance?": a citizenship question, not the level held.
+  ['clearanceEligible', /clearance.{0,40}(eligib|qualif|obtain|able to|willing|undergo|sponsor)|(eligib|qualif|obtain|able to|willing|undergo).{0,40}clearance/],
+  ['clearance', /security clearance|\bclearances?\b/],
   ['hispanic', /hispanic|latin[oax]/],
   ['race', /\brace\b|ethnicit/],
   ['declineOnly', /sexual orientation|lgbt|transgender|gender identity.*(trans|same)/],
