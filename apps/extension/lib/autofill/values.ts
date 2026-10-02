@@ -252,6 +252,15 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     }
     case 'acknowledge':
       return ['Yes', 'I acknowledge', 'I agree', 'Agree', 'Acknowledge'];
+    case 'essentialFunctions':
+      return [
+        'Yes',
+        'I can perform the essential functions of this role with or without reasonable accommodation',
+        'Yes, without accommodation',
+        'Yes, with accommodation',
+        'I can',
+        'Able',
+      ];
     case 'textConsent':
       return [p.textConsent ? 'Yes' : 'No'];
     case 'ageRange': {
@@ -416,6 +425,7 @@ export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
   'ageAtLeast',
   'textConsent',
   'acknowledge',
+  'essentialFunctions',
   'authorizedNoSponsor',
   'livesIn',
   'authorized',

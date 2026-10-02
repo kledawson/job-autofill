@@ -11,6 +11,7 @@ export type ProfileKey =
   | 'phoneCountryCode'
   | 'textConsent'
   | 'acknowledge'
+  | 'essentialFunctions'
   | 'age'
   | 'ageRange'
   | 'ageAtLeast'
@@ -93,6 +94,8 @@ const RULES: Rule[] = [
   // "Clearance Eligibility", "Are you able to obtain a clearance?": a citizenship question, not the level held.
   ['clearanceEligible', /clearance.{0,40}(eligib|qualif|obtain|able to|willing|undergo|sponsor)|(eligib|qualif|obtain|able to|willing|undergo).{0,40}clearance/],
   ['clearance', /security clearance|\bclearances?\b/],
+  // "Can you perform the essential functions of this role with or without reasonable accommodation?": always Yes.
+  ['essentialFunctions', /essential (job )?(functions|duties|requirements)|with or without (a )?reasonable accommodation/],
   ['hispanic', /hispanic|latin[oax]/],
   ['race', /\brace\b|ethnicit/],
   ['declineOnly', /sexual orientation|lgbt|transgender|gender identity.*(trans|same)/],
