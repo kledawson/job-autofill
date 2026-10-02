@@ -19,7 +19,7 @@ export function sampleProfile(): Profile {
     linkedin: 'https://linkedin.com/in/jordanrivera',
     github: 'https://github.com/jordanrivera',
     portfolio: 'https://jordan.dev',
-    workAuth: { authorizedUS: 'yes', needsSponsorship: 'no', status: 'US Citizen' },
+    workAuth: { authorizedUS: 'yes', needsSponsorship: 'no', status: 'US Citizen', clearance: '' },
     education: [
       {
         school: 'University of California, Berkeley',

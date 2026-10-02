@@ -1,6 +1,6 @@
 import { DECLINE, type Profile, type YesNo } from '../types';
 import type { ProfileKey } from './classify';
-import { normalize } from './match';
+import { isPlaceholderOption, normalize } from './match';
 import { splitDegree, standardDegree } from '../degree';
 import { salaryAnswer } from './salary';
 
@@ -133,6 +133,74 @@ function livesIn(label: string, p: Profile): string[] | null {
   return l.includes(` ${city} `) ? ['Yes'] : null;
 }
 
+type Citizenship = 'citizen' | 'resident' | 'other';
+
+/** US citizen, permanent resident / asylee (also a "US person"), or anyone else; null when no status is saved. */
+function citizenship(p: Profile): Citizenship | null {
+  const s = p.workAuth.status.trim();
+  if (!s) return null;
+  if (/citizen/i.test(s)) return 'citizen';
+  if (/permanent resident|green card|asylee|refugee/i.test(s)) return 'resident';
+  return 'other';
+}
+
+/**
+ * "Are you authorized to work in the US?" Yes/No lists take Yes; longer lists ("I am authorized to work for any
+ * employer", "...for my present employer only", "I require sponsorship") get the wording that fits the profile.
+ * Citizens and residents who need no sponsorship can work for any employer.
+ */
+function authorizedAnswers(p: Profile): string[] | null {
+  const { authorizedUS, needsSponsorship } = p.workAuth;
+  if (authorizedUS === 'no') return ['No', 'I am not authorized to work in the United States'];
+  if (authorizedUS !== 'yes') return null;
+  if (needsSponsorship === 'yes') return ['Yes', 'I require sponsorship to work in the United States'];
+  if (needsSponsorship === 'no') {
+    return [
+      'Yes',
+      'I am authorized to work in the United States for any employer',
+      'Authorized to work for any employer',
+      'I am legally authorized to work in the United States',
+      'I am authorized to work in the United States',
+    ];
+  }
+  return ['Yes'];
+}
+
+/** Rank used to answer "Do you hold a Top Secret clearance?" from the highest level held. */
+const CLEARANCE_RANK: Record<string, number> = { secret: 1, 'top secret': 2, 'doe q': 2, 'top secret sci': 3, 'top secret sci with polygraph': 4 };
+
+function clearanceAnswers(level: string, label: string, options: string[], yesNoQuestion: boolean): string[] | null {
+  const l = level.trim().toLowerCase();
+  if (!l) return null;
+  if (/^prefer not/.test(l)) return DECLINE_VARIANTS;
+  const held = l in CLEARANCE_RANK;
+  const real = options.filter((o) => !isPlaceholderOption(o));
+  if (yesNoQuestion || (real.length > 0 && real.length <= 3 && real.every((o) => /^(yes|no)\b/i.test(o.trim())))) {
+    if (!held) return ['No'];
+    const q = label.toLowerCase();
+    const asked = /\bpoly/.test(q) ? 4 : /\bsci\b|ts\/sci/.test(q) ? 3 : /top secret|\bts\b/.test(q) ? 2 : /\bdoe\b|\bq\b/.test(q) ? 2 : /\bsecret\b/.test(q) ? 1 : 0;
+    return [CLEARANCE_RANK[l]! >= asked ? 'Yes' : 'No'];
+  }
+  switch (l) {
+    case 'none / never held':
+      return ['Never held a clearance', 'None', 'No clearance', 'No active clearance', 'N/A', 'Not applicable'];
+    case 'expired':
+      return ['Expired Clearance', 'Expired', 'Inactive'];
+    case 'secret':
+      return ['Secret'];
+    case 'top secret':
+      return ['Top Secret', 'TS'];
+    case 'top secret sci':
+      return ['Top Secret SCI', 'Top Secret/SCI', 'TS/SCI', 'Top Secret'];
+    case 'top secret sci with polygraph':
+      return ['Top Secret SCI with Polygraph', 'TS/SCI with Polygraph', 'TS/SCI with Poly', 'Top Secret SCI', 'Top Secret'];
+    case 'doe q':
+      return ['DOE Level Q', 'DOE Q', 'Q Clearance', 'Q'];
+    default:
+      return [level.trim()];
+  }
+}
+
 function nonEmpty(...values: (string | undefined)[]): string[] | null {
   const out = values.map((v) => v?.trim() ?? '').filter(Boolean);
   return out.length ? Array.from(new Set(out)) : null;
@@ -257,7 +325,23 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return m ? [`${m[2]}/${m[1]}`] : null;
     }
     case 'authorized':
-      return yesNo(p.workAuth.authorizedUS);
+      return authorizedAnswers(p);
+    case 'usCitizen': {
+      const c = citizenship(p);
+      return c === null ? null : [c === 'citizen' ? 'Yes' : 'No'];
+    }
+    case 'usPerson': {
+      const c = citizenship(p);
+      if (c === null) return null;
+      if (c === 'other' && /other visa/i.test(p.workAuth.status)) return null;
+      return c === 'other' ? ['No'] : ['Yes', c === 'citizen' ? 'US Citizen' : /asylee|refugee/i.test(p.workAuth.status) ? 'Qualifying Asylee' : 'Lawful Permanent Resident'];
+    }
+    case 'clearanceEligible': {
+      const c = citizenship(p);
+      return c === null ? null : [c === 'citizen' ? 'Yes' : 'No'];
+    }
+    case 'clearance':
+      return clearanceAnswers(p.workAuth.clearance, opts.label ?? '', opts.options ?? [], !!opts.yesNo);
     case 'visaStatus':
       return [p.workAuth.status.trim() || 'N/A'];
     case 'sponsorship':
@@ -326,6 +410,10 @@ export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
   'authorizedNoSponsor',
   'livesIn',
   'authorized',
+  'usCitizen',
+  'usPerson',
+  'clearance',
+  'clearanceEligible',
   'sponsorship',
   'inUS',
   'relocate',

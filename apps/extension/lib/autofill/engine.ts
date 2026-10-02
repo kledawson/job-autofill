@@ -233,7 +233,7 @@ export class FillSession {
       const values = valueFor(key, profile, {
         description: key === 'salary' ? (this.description ?? '') : undefined,
         phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
-        yesNo: key === 'workMode' && yesNo,
+        yesNo: (key === 'workMode' || key === 'clearance') && yesNo,
         label: field.label,
         required: field.required,
         options: field.options,

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { DECLINE, emptyEducation, emptyExperience, type Education, type Experience, type Profile } from '@/lib/types';
+import { DECLINE, emptyEducation, emptyExperience, type Education, type Experience, type Profile, CLEARANCE_LEVELS, WORK_STATUSES } from '@/lib/types';
 import { DEGREE_TYPES, standardDegree } from '@/lib/degree';
 import { Button, Card, Field, Grid, Input, Select, Textarea } from './ui';
 
@@ -160,11 +160,16 @@ export function WorkAuthSection({ profile: p, onChange }: SectionProps) {
         </Field>
         <Field label="Current status" className="sm:col-span-2">
           <Select
-            options={['', 'US Citizen', 'Permanent Resident (Green Card)', 'F-1 (OPT/CPT)', 'H-1B', 'Other visa'].map(
-              (o) => [o, o || 'Select…'] as [string, string],
-            )}
+            options={['', ...WORK_STATUSES].map((o) => [o, o || 'Select…'] as [string, string])}
             value={p.workAuth.status}
             onChange={(e) => set({ status: e.target.value })}
+          />
+        </Field>
+        <Field label="Active security clearance" className="sm:col-span-2">
+          <Select
+            options={['', ...CLEARANCE_LEVELS].map((o) => [o, o || 'Select…'] as [string, string])}
+            value={p.workAuth.clearance}
+            onChange={(e) => set({ clearance: e.target.value })}
           />
         </Field>
       </Grid>
