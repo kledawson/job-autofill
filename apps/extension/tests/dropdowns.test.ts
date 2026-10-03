@@ -75,6 +75,24 @@ describe('work authorization and clearance answers', () => {
     gc.workAuth.status = '';
     expect(valueFor('usCitizen', gc)).toBeNull();
   });
+  it('picks the matching option for a Citizenship Status list', () => {
+    const opts = [
+      '(a) U.S. citizen or national of the United States',
+      '(b) U.S. lawful permanent resident',
+      '(c) Refugee under 8 U.S.C. 1157',
+      '(d) Asylee under 8 U.S.C. 1158',
+      '(e) Authorized to work in the United States under the Deferred Action for Childhood Arrivals (DACA) program',
+      '(f) Other (please explain)',
+    ];
+    expect(key('Citizenship Status')).toBe('citizenshipStatus');
+    expect(key('Country of Citizenship')).not.toBe('citizenshipStatus');
+    expect(pick('citizenshipStatus', opts)).toBe(opts[0]);
+    const gc = sampleProfile();
+    gc.workAuth.status = 'Permanent Resident (Green Card)';
+    expect(pick('citizenshipStatus', opts, {}, gc)).toBe(opts[1]);
+    gc.workAuth.status = 'H-1B';
+    expect(valueFor('citizenshipStatus', gc)).toBeNull();
+  });
   it('maps the saved clearance onto the form options', () => {
     const opts = ['Top Secret SCI with Polygraph', 'Top Secret SCI/SAP', 'Top Secret', 'DOE Level Q', 'Secret', 'Expired Clearance', 'Never held a clearance', 'Do not wish to disclose'];
     expect(key('Active Security Clearance(s)')).toBe('clearance');
@@ -96,5 +114,28 @@ describe('work authorization and clearance answers', () => {
     p.workAuth.clearance = 'Secret';
     expect(valueFor('clearance', p, { yesNo: true, label: 'Do you hold an active Top Secret clearance?' })).toEqual(['No']);
     expect(valueFor('clearance', p, { yesNo: true, label: 'Do you have an active security clearance?' })).toEqual(['Yes']);
+  });
+});
+
+describe('essential functions question', () => {
+  const key = (label: string) => (classifyField({ label, kind: 'select', id: '', name: '', path: '', options: [], autocomplete: '' } as any) as any).key;
+  const pick = (opts: string[]) => opts[bestOption(valueFor('essentialFunctions', sampleProfile(), { options: opts })!, opts)];
+
+  it('classifies common wordings', () => {
+    for (const l of [
+      'Can you perform all of the essential functions of this role with or without reasonable accommodations?',
+      'Are you able to perform the essential job functions of this position?',
+      'Can you perform the duties of this job with or without reasonable accommodation? (Disability)',
+    ]) expect(key(l)).toBe('essentialFunctions');
+  });
+  it('always picks the option closest to Yes', () => {
+    expect(pick(['Yes', 'No'])).toBe('Yes');
+    expect(pick(['No', 'Yes, with accommodation', 'Yes, without accommodation'])).toMatch(/^Yes/);
+    const long = [
+      'I cannot perform the essential functions of this role',
+      'I can perform the essential functions of this role with or without reasonable accommodation',
+    ];
+    expect(pick(long)).toBe(long[1]);
+    expect(pick(['Unable', 'Able'])).toBe('Able');
   });
 });

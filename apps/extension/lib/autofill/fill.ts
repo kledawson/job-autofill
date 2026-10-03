@@ -6,7 +6,15 @@ const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
 export type FillOutcome = 'filled' | 'already' | 'nomatch' | 'failed';
 
 /** Waits used while dropdowns load; tests shorten these. */
-export const timing = { menuOpen: 700, search: 3000, typeahead: 2500, afterUpload: 2000, settle: 350 };
+export const timing = {
+  menuOpen: 700,
+  search: 3000,
+  typeahead: 2500,
+  afterUpload: 2000,
+  settle: 350,
+  /** How long to wait for a follow-up question (race) after answering one known to reveal it (Hispanic/Latino). */
+  reveal: 1500,
+};
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

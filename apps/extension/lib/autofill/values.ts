@@ -252,6 +252,15 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     }
     case 'acknowledge':
       return ['Yes', 'I acknowledge', 'I agree', 'Agree', 'Acknowledge'];
+    case 'essentialFunctions':
+      return [
+        'Yes',
+        'I can perform the essential functions of this role with or without reasonable accommodation',
+        'Yes, without accommodation',
+        'Yes, with accommodation',
+        'I can',
+        'Able',
+      ];
     case 'textConsent':
       return [p.textConsent ? 'Yes' : 'No'];
     case 'ageRange': {
@@ -330,6 +339,15 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       const c = citizenship(p);
       return c === null ? null : [c === 'citizen' ? 'Yes' : 'No'];
     }
+    case 'citizenshipStatus': {
+      // Only citizen and green card map to one option; refugee vs asylee and visas are left to the person.
+      const c = citizenship(p);
+      if (c === 'citizen') return ['U.S. citizen or national of the United States', 'US Citizen', 'Citizen'];
+      if (c === 'resident' && /permanent resident|green card/i.test(p.workAuth.status)) {
+        return ['U.S. lawful permanent resident', 'Lawful Permanent Resident', 'Permanent Resident', 'Green Card'];
+      }
+      return null;
+    }
     case 'usPerson': {
       const c = citizenship(p);
       if (c === null) return null;
@@ -407,10 +425,12 @@ export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
   'ageAtLeast',
   'textConsent',
   'acknowledge',
+  'essentialFunctions',
   'authorizedNoSponsor',
   'livesIn',
   'authorized',
   'usCitizen',
+  'citizenshipStatus',
   'usPerson',
   'clearance',
   'clearanceEligible',

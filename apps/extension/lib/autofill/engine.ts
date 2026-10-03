@@ -53,6 +53,14 @@ interface FieldRecord {
   flag?: boolean;
 }
 
+/** Questions whose answer is known to reveal a follow-up directly beneath them. */
+const REVEALS_RE = /hispanic|latino/i;
+
+function byDocumentOrder(a: FieldRecord, b: FieldRecord): number {
+  const pos = a.field.el.compareDocumentPosition(b.field.el);
+  return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+}
+
 export class FillSession {
   private records = new Map<HTMLElement, FieldRecord>();
   private jobInfo: JobInfo;
@@ -131,18 +139,34 @@ export class FillSession {
     this.observer?.disconnect();
   }
 
+  /** Polls until new fields show up or the time runs out. */
+  private async waitForFresh(maxMs: number): Promise<FieldRecord[]> {
+    const step = Math.min(150, maxMs);
+    for (let waited = 0; ; waited += step) {
+      await sleep(step);
+      const found = this.collectFresh();
+      if (found.length || waited + step >= maxMs) return found;
+    }
+  }
+
+  /** Registers fields that appeared since the last scan, in document order. */
+  private collectFresh(): FieldRecord[] {
+    const fresh: FieldRecord[] = [];
+    for (const field of scanFields(this.root())) {
+      if (this.records.has(field.el)) continue;
+      const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys) };
+      this.records.set(field.el, rec);
+      fresh.push(rec);
+    }
+    return fresh;
+  }
+
   /** Fills fields not seen before. Returns how many new fields were found. */
   async processNew(): Promise<number> {
     if (this.busy) return 0;
     this.busy = true;
     try {
-      const fresh: FieldRecord[] = [];
-      for (const field of scanFields(this.root())) {
-        if (this.records.has(field.el)) continue;
-        const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys) };
-        this.records.set(field.el, rec);
-        fresh.push(rec);
-      }
+      const fresh = this.collectFresh();
       if (!fresh.length) return 0;
 
       // Resume first: some sites (Ashby, Lever) parse it and prefill fields, and we only fill empty ones.
@@ -151,8 +175,35 @@ export class FillSession {
       if (files.some((r) => r.outcome === 'filled')) await sleep(this.adapter.platform === 'greenhouse' ? 300 : timing.afterUpload);
 
       const watcher = this.watchForCleared();
-      for (const rec of fresh) {
-        if (rec.field.kind !== 'file') await this.fillProfileField(rec);
+      // Walk the form top to bottom. A question revealed by an answer (race after Hispanic/Latino) is
+      // slotted in right after the field that revealed it, so it is filled before moving further down.
+      let added = false;
+      const grow = new MutationObserver((mutations) => {
+        if (mutations.some((m) => Array.from(m.addedNodes).some((n) => n.nodeType === 1 && !(n as Element).closest('[data-jaf]')))) {
+          added = true;
+        }
+      });
+      grow.observe(this.root() as Node, { childList: true, subtree: true });
+      const queue = fresh.filter((r) => r.field.kind !== 'file');
+      try {
+        for (let i = 0; i < queue.length; i++) {
+          const rec = queue[i]!;
+          added = false;
+          await this.fillProfileField(rec);
+          const reveals = REVEALS_RE.test(rec.field.label);
+          if (!added && !reveals) continue;
+          // The follow-up can render a beat after the answer lands, so a known reveal question is
+          // polled before moving on; other DOM changes get one short settle.
+          const more = await this.waitForFresh(reveals ? timing.reveal : timing.settle);
+          if (!more.length) continue;
+          fresh.push(...more);
+          const rest = [...queue.slice(i + 1), ...more.filter((r) => r.field.kind !== 'file')].sort(byDocumentOrder);
+          queue.length = i + 1;
+          queue.push(...rest);
+          for (const r of more) if (r.field.kind === 'file') await this.fillProfileField(r);
+        }
+      } finally {
+        grow.disconnect();
       }
       // Some forms reset a dropdown when a later field is touched; put back any that went blank.
       this.traceDropdowns('before restore');
