@@ -195,7 +195,8 @@ test('onboarding reads the resume into the profile, then collects the rest', asy
 
   // Education, experience, and skills too.
   await expect(page.getByLabel('School', { exact: false }).first()).toHaveValue('University of California, Berkeley');
-  await expect(page.getByLabel('Degree')).toHaveValue('Bachelor of Science');
+  await expect(page.getByLabel('Degree type')).toHaveValue("Bachelor's Degree");
+  await expect(page.getByLabel('Field of study / discipline')).toHaveValue('Computer Science');
   await expect(page.getByLabel('End (or expected)')).toHaveValue('2026-05');
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByLabel('Title')).toHaveValue('Software Engineering Intern');
