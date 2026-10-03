@@ -230,6 +230,15 @@ describe('Ashby', () => {
     expect((doc.getElementById('c') as HTMLInputElement).checked).toBe(true);
   });
 
+  it('always answers Yes to "essential functions with or without reasonable accommodations"', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/abc/apply');
+    doc.body.innerHTML = `<form><label for="e">Can you perform all of the essential functions of this role with or without reasonable accommodations? *</label>
+      <select id="e"><option value="">Select…</option><option>No</option><option>Yes</option></select></form>`;
+    const { d } = deps();
+    await new FillSession(doc, ADAPTERS.lever, d).run();
+    expect((doc.getElementById('e') as HTMLSelectElement).value).toBe('Yes');
+  });
+
   it('answers Yes to text-message consent when the profile opts in, and classifies a lone consent box', async () => {
     const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
     const profile = { ...sampleProfile(), textConsent: true };
