@@ -271,7 +271,8 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   expect(geminiPrompts.join('\n')).not.toMatch(/Female|jordan@example.com|415-555/);
 
   // Required questions the profile cannot answer are outlined red, and nothing was submitted.
-  expect(await form.locator('[data-jaf-state="missing"]').count()).toBeGreaterThan(0);
+  // AI answers are outlined as they are written; red outlines come from the final verify pass, a moment later.
+  await expect.poll(() => form.locator('[data-jaf-state="missing"]').count(), { timeout: 30_000 }).toBeGreaterThan(0);
   expect(await form.evaluate(() => (window as any).__submits)).toBe(0);
   expect(form.url()).toContain('/apply');
   await form.setViewportSize({ width: 1100, height: 900 });
