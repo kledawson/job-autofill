@@ -1,3 +1,5 @@
+import { bachelorDegreeAliases, standardDegree } from '../degree';
+
 // Words that appear in many options and say little on their own ("Stanford University" vs "Aalborg University").
 const GENERIC_TOKENS = new Set(['university', 'college', 'school', 'institute', 'technology', 'degree', 'state', 'community', 'academy']);
 
@@ -92,6 +94,26 @@ export function bestOption(candidates: string[], options: string[]): number {
     });
   });
   return bestScore >= MATCH_THRESHOLD ? best : -1;
+}
+
+/** Match degree levels and known aliases without confusing BS with BA or a different degree level. */
+export function bestDegreeOption(candidates: string[], options: string[]): number {
+  const level = candidates.map(standardDegree).find(Boolean);
+  if (!level) return bestOption(candidates, options);
+  const qualification = candidates.map((c) => bachelorDegreeAliases(c)[0]).find(Boolean);
+  const eligible = options.map((option, index) => ({ option, index, qualification: bachelorDegreeAliases(option)[0] }))
+    .filter((o) => !isPlaceholderOption(o.option) && standardDegree(o.option) === level &&
+      (!qualification || !o.qualification || qualification === o.qualification));
+
+  // Literal or known-alias matches are stronger than the shared word "Bachelor".
+  for (const candidate of candidates) {
+    const exact = eligible.find((o) => normalize(o.option) === normalize(candidate));
+    if (exact) return exact.index;
+  }
+  const generic = eligible.filter((o) => !o.qualification);
+  const remaining = generic.length ? generic : eligible;
+  // A level-only profile can match BS when it is the sole bachelor's option, but cannot choose BA vs BS.
+  return remaining.length === 1 ? remaining[0]!.index : -1;
 }
 
 /** Character limit stated by the field or its label ("max 500 characters", "250 words"). */

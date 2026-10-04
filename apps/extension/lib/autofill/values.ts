@@ -1,7 +1,7 @@
 import { DECLINE, type Profile, type YesNo } from '../types';
 import type { ProfileKey } from './classify';
 import { isPlaceholderOption, normalize } from './match';
-import { splitDegree, standardDegree } from '../degree';
+import { bachelorDegreeAliases, splitDegree, standardDegree } from '../degree';
 import { salaryAnswer } from './salary';
 
 const MONTHS = [
@@ -49,7 +49,7 @@ function year(yyyyMm: string): string[] | null {
 
 function degreeVariants(degree: string, raw = degree): string[] {
   const d = degree.toLowerCase();
-  const out = Array.from(new Set([degree, raw]));
+  const out = Array.from(new Set([degree, raw, ...bachelorDegreeAliases(raw)]));
   if (/bachelor|\bb\.?s\.?\b|\bb\.?a\.?\b|\bbsc\b|undergrad/.test(d)) out.push("Bachelor's Degree", 'Bachelor', "Bachelor's");
   else if (/master|\bm\.?s\.?\b|\bm\.?a\.?\b|\bmsc\b|mba/.test(d)) out.push("Master's Degree", 'Master', "Master's");
   else if (/ph\.?d|doctor/.test(d)) out.push('Doctor of Philosophy (Ph.D.)', 'Ph.D.', 'Doctorate');

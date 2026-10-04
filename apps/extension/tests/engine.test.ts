@@ -45,6 +45,78 @@ beforeEach(() => {
 afterEach(() => window.removeEventListener('submit', countSubmit));
 
 describe('Greenhouse', () => {
+  it.each([
+    ['BS', ["Associate's Degree", "Bachelor's Degree", "Master's Degree"], "Bachelor's Degree"],
+    ['B.S.', ["Bachelor's Degree", "Master's Degree"], "Bachelor's Degree"],
+    ['BSc', ["Bachelor's Degree", "Master's Degree"], "Bachelor's Degree"],
+    ['Bachelor of Science', ["Associate's Degree", "Bachelor's Degree", "Master's Degree"], "Bachelor's Degree"],
+    ['Bachelors Degree', ["Bachelor's Degree", "Master's Degree"], "Bachelor's Degree"],
+    ['B.B.A.', ["Associate's Degree", "Bachelor's Degree", "Master's Degree"], "Bachelor's Degree"],
+    ['Baccalaureate', ["Bachelor's Degree", "Master's Degree"], "Bachelor's Degree"],
+    ["Bachelor's Degree", ['BS', 'MS', 'PhD'], 'BS'],
+    ['BS', ['Bachelor of Arts', 'Bachelor of Science', 'Master of Science'], 'Bachelor of Science'],
+    ['BA', ['Bachelor of Science', 'Bachelor of Arts'], 'Bachelor of Arts'],
+    ['BS', ['BA', 'MS'], ''],
+    ["Bachelor's Degree", ['BA', 'BS', 'MS'], ''],
+    ['BS', ["Associate's Degree", "Master's Degree"], ''],
+    ["Bachelor's Degree", ['International Baccalaureate Diploma', "Master's Degree"], ''],
+    ['', ["Bachelor's Degree", "Master's Degree"], ''],
+  ] as const)('maps saved degree %s to equivalent degree options %j', async (degree, options, expected) => {
+    document.body.innerHTML = '<form id="application-form"><label for="degree--0">Degree*</label><select id="degree--0"><option value="">Select…</option></select></form>';
+    const select = document.getElementById('degree--0') as HTMLSelectElement;
+    for (const text of options) {
+      const option = document.createElement('option');
+      option.value = option.textContent = text;
+      select.appendChild(option);
+    }
+    const { d } = deps();
+    d.context.profile.education[0]!.degree = degree;
+    const summary = await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(select.value).toBe(expected);
+    expect(summary.filledCount).toBe(expected ? 1 : 0);
+    expect(submits).toBe(0);
+  });
+
+  it.each([
+    ['BS', ["Associate's Degree", "Bachelor's Degree", "Master's Degree"], "Bachelor's Degree"],
+    ["Bachelor's Degree", ['AS', 'BS', 'MS'], 'BS'],
+    ['BS', ['Bachelor of Arts', 'Bachelor of Science'], 'Bachelor of Science'],
+  ] as const)('clicks and retains the matching custom degree option for %s', async (degree, options, expected) => {
+    document.body.innerHTML = '<form id="application-form"><label for="degree--0">Degree*</label><div class="select__container"><div class="select__control"><input id="degree--0" role="combobox" aria-expanded="false"></div></div></form>';
+    const input = document.getElementById('degree--0') as HTMLInputElement;
+    const control = input.parentElement!;
+    input.addEventListener('mousedown', () => {
+      const menu = document.createElement('div');
+      menu.id = 'degree-menu';
+      menu.setAttribute('role', 'listbox');
+      for (const text of options) {
+        const option = document.createElement('div');
+        option.setAttribute('role', 'option');
+        option.textContent = text;
+        option.addEventListener('click', () => {
+          menu.remove();
+          input.value = '';
+          input.setAttribute('aria-expanded', 'false');
+          const selected = document.createElement('div');
+          selected.className = 'select__single-value';
+          selected.textContent = text;
+          control.appendChild(selected);
+        });
+        menu.appendChild(option);
+      }
+      input.setAttribute('aria-controls', menu.id);
+      input.setAttribute('aria-expanded', 'true');
+      control.appendChild(menu);
+    });
+    const { d } = deps();
+    d.context.profile.education[0]!.degree = degree;
+    const summary = await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(control.querySelector('.select__single-value')?.textContent).toBe(expected);
+    expect(input.value).toBe('');
+    expect(summary.filledCount).toBe(1);
+    expect(submits).toBe(0);
+  });
+
   it('classifies the real form', () => {
     const doc = loadFixture('greenhouse.html', 'https://job-boards.greenhouse.io/northwind/jobs/8806482002');
     const byLabel = Object.fromEntries(classified(doc, 'greenhouse').map((f) => [f.label, f.cls]));

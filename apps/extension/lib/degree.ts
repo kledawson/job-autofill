@@ -10,8 +10,34 @@ export const DEGREE_TYPES = [
   'High School Diploma / GED',
 ] as const;
 
+// Keep specific bachelor's qualifications apart: BS and BA have the same level, but are not
+// interchangeable when a form offers both. The first entry is the full name of each qualification.
+const BACHELOR_ALIASES = [
+  ['Bachelor of Science', 'BS', 'B.S.', 'B S', 'BSc', 'B.Sc.', 'B Sc', 'SB', 'S.B.'],
+  ['Bachelor of Arts', 'BA', 'B.A.', 'B A', 'AB', 'A.B.'],
+  ['Bachelor of Engineering', 'BE', 'B.E.', 'BEng', 'B.Eng.'],
+  ['Bachelor of Business Administration', 'BBA', 'B.B.A.'],
+  ['Bachelor of Fine Arts', 'BFA', 'B.F.A.'],
+  ['Bachelor of Applied Science', 'BASc', 'B.A.Sc.'],
+  ['Bachelor of Technology', 'BTech', 'B.Tech.'],
+  ['Bachelor of Education', 'BEd', 'B.Ed.'],
+  ['Bachelor of Commerce', 'BCom', 'B.Com.'],
+] as const;
+
+const degreeSpelling = (s: string) => s.toLowerCase().replace(/[.‘’ʼ']/g, '').replace(/\bbachelors\b/g, 'bachelor').replace(/\s+/g, ' ').trim();
+
+/** Equivalent names for a specific bachelor's qualification; empty for a generic bachelor's degree. */
+export function bachelorDegreeAliases(degree: string): string[] {
+  const d = degreeSpelling(degree);
+  const group = BACHELOR_ALIASES.find((aliases) => aliases.some((alias) => {
+    const a = degreeSpelling(alias);
+    return d === a || d.startsWith(`${a} `) || d.startsWith(`${a}(`) || d.startsWith(`${a},`);
+  }));
+  return group ? [...group] : [];
+}
+
 const DEGREE_START =
-  /^((?:bachelor|master|doctor)s?(?:'s|’s)?(?: of (?:science|arts|engineering|business administration|fine arts))?|ph\.?\s?d\.?|associate(?:'s|’s)?(?: of (?:science|arts))?|b\.?\s?[sa]\.?(?:c\.?)?|m\.?\s?[sa]\.?(?:c\.?)?|mba|b\.?\s?eng\.?|m\.?\s?eng\.?)(?:\s+degree)?(?=[\s,:-]|$)(?!\s+(?:of|degree)\b)[\s,:-]*(?:in\s+)?(.+)$/i;
+  /^((?:bachelor|master|doctor)s?(?:'s|’s)?(?: of (?:applied science|science|arts|engineering|business administration|fine arts|technology|education|commerce))?|ph\.?\s?d\.?|associate(?:'s|’s)?(?: of (?:science|arts))?|b\.?\s?[sa]\.?(?:c\.?)?|m\.?\s?[sa]\.?(?:c\.?)?|mba|b\.?\s?eng\.?|m\.?\s?eng\.?|b\.?\s?[bf]\.?(?:a\.?)|b\.?\s?a\.?\s?sc\.?|b\.?\s?(?:tech|ed|com)\.?|[as]\.?\s?b\.?|b\.?\s?e\.?)(?:\s+degree)?(?=[\s,:-]|$)(?!\s+(?:of|degree)\b)[\s,:-]*(?:in\s+)?(.+)$/i;
 
 /** A degree saved as "B.S. Computer Science" is the degree "B.S." and the field "Computer Science". */
 export function splitDegree(e: { degree: string; major: string }): { degree: string; major: string } {
@@ -29,7 +55,7 @@ export function standardDegree(degree: string): string {
   if (/^mba\b|business administration/.test(d) && /master|^mba/.test(d)) return 'MBA';
   if (/ph\s?d|doctor/.test(d)) return 'Doctorate (Ph.D.)';
   if (/master|^m\s?[sa]\b|^m\s?sc\b|^m\s?eng\b/.test(d)) return "Master's Degree";
-  if (/bachelor|^b\s?[sa]\b|^b\s?sc\b|^b\s?eng\b|undergrad/.test(d)) return "Bachelor's Degree";
+  if (/bachelor|^baccalaureate(?: degree)?(?:$|\s+in\b)|^b\s?[sa]\b|^b\s?sc\b|^b\s?eng\b|undergrad/.test(d) || bachelorDegreeAliases(degree).length) return "Bachelor's Degree";
   if (/associate|^a\s?[as]\b/.test(d)) return "Associate's Degree";
   if (/high school|^ged\b|diploma/.test(d)) return 'High School Diploma / GED';
   return '';

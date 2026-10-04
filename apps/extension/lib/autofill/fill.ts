@@ -1,4 +1,4 @@
-import { bestOption, isPlaceholderOption, normalize } from './match';
+import { bestDegreeOption, bestOption, isPlaceholderOption, normalize } from './match';
 import type { ScannedField } from './scan';
 
 const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
@@ -126,12 +126,12 @@ export function fillText(field: ScannedField, value: string): FillOutcome {
   return el.value === v ? 'filled' : 'failed';
 }
 
-export function fillSelect(field: ScannedField, candidates: string[], opts: { topOption?: boolean } = {}): FillOutcome {
+export function fillSelect(field: ScannedField, candidates: string[], opts: { topOption?: boolean; degree?: boolean } = {}): FillOutcome {
   const select = field.el as HTMLSelectElement;
   const current = select.options[select.selectedIndex];
   if (current && current.value && select.selectedIndex > 0) return 'already';
   const options = Array.from(select.options);
-  let idx = bestOption(candidates, options.map((o) => o.text));
+  let idx = (opts.degree ? bestDegreeOption : bestOption)(candidates, options.map((o) => o.text));
   // Nothing fits exactly: take the first real option.
   if (idx < 0 && opts.topOption) idx = options.findIndex((o) => o.value && !isPlaceholderOption(o.text));
   const option = options[idx];
@@ -147,10 +147,10 @@ export function fillSelect(field: ScannedField, candidates: string[], opts: { to
   return select.selectedIndex === idx ? 'filled' : 'failed';
 }
 
-export function fillRadio(field: ScannedField, candidates: string[]): FillOutcome {
+export function fillRadio(field: ScannedField, candidates: string[], opts: { degree?: boolean } = {}): FillOutcome {
   const radios = field.members as HTMLInputElement[];
   if (radios.some((r) => r.checked)) return 'already';
-  const radio = radios[bestOption(candidates, field.options)];
+  const radio = radios[(opts.degree ? bestDegreeOption : bestOption)(candidates, field.options)];
   if (!radio) return 'nomatch';
   clickSafely(radio);
   if (!radio.checked) {
@@ -265,7 +265,7 @@ export function closeIfOpen(input: HTMLElement) {
 export async function fillCombobox(
   field: ScannedField,
   candidates: string[],
-  opts: { acceptFirstResult?: boolean; topOption?: boolean } = {},
+  opts: { acceptFirstResult?: boolean; topOption?: boolean; degree?: boolean } = {},
 ): Promise<FillOutcome> {
   const input = field.el as HTMLInputElement;
   if (comboboxHasValue(field)) return 'already';
@@ -299,7 +299,8 @@ export async function fillCombobox(
     }
     trace.push(`arrow${arrow ? '' : '(none)'}=${options.length}`);
   }
-  let idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
+  const matchOption = opts.degree ? bestDegreeOption : bestOption;
+  let idx = matchOption(candidates, options.map((o) => o.textContent ?? ''));
   // A static list with no close match: take its first real option.
   const firstReal = (list: HTMLElement[]) => list.findIndex((o) => !isPlaceholderOption(o.textContent ?? ''));
   const staticOptions = options;
@@ -320,7 +321,7 @@ export async function fillCombobox(
         }, i === 0 ? timing.search : Math.min(timing.search, 1500))) ?? [];
       trace.push(`typed${i + 1}=${options.length}`);
       if (options.length && !firstResults.length) firstResults = options;
-      idx = bestOption(candidates, options.map((o) => o.textContent ?? ''));
+      idx = matchOption(candidates, options.map((o) => o.textContent ?? ''));
       if (idx >= 0) break;
     }
     // Only the most specific search that returned anything may supply a "top result" guess.

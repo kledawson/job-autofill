@@ -57,6 +57,11 @@ Field classification is adapter mappings (`lib/autofill/adapters.ts`) first, the
 (`lib/autofill/classify.ts`). Option matching (`lib/autofill/match.ts`) leaves a field empty rather
 than guessing. Anti-bot puzzle questions and consent checkboxes are always left to you.
 
+Degree matching recognizes common bachelor's spellings and abbreviations (such as BS, B.S., BSc,
+BA, and BBA) in saved profiles and dropdown options. Specific qualifications stay distinct: BS
+matches Bachelor of Science rather than Bachelor of Arts. If a saved generic Bachelor's Degree has
+multiple specific choices such as BA and BS, the extension leaves that choice for your review.
+
 Safety: the engine refuses to interact with submit controls, and cancels any form submission that
 fires while it is dispatching events. Voluntary self-identification answers and contact details are
 never sent to Gemini.
