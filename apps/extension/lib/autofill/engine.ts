@@ -326,13 +326,13 @@ export class FillSession {
           rec.outcome = fillText(field, first);
           break;
         case 'select':
-          rec.outcome = fillSelect(field, values, { topOption });
+          rec.outcome = fillSelect(field, values, { topOption, degree: key === 'degree' });
           break;
         case 'combobox':
-          rec.outcome = await fillCombobox(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key), topOption });
+          rec.outcome = await fillCombobox(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key), topOption, degree: key === 'degree' });
           break;
         case 'radio':
-          rec.outcome = fillRadio(field, values);
+          rec.outcome = fillRadio(field, values, { degree: key === 'degree' });
           break;
         case 'checkbox':
           rec.outcome = fillCheckbox(field, values);

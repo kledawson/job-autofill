@@ -239,6 +239,17 @@ describe('degree type', () => {
     expect(standardDegree('MBA')).toBe('MBA');
     expect(standardDegree('Ph.D.')).toBe('Doctorate (Ph.D.)');
     expect(standardDegree('Certificate')).toBe('');
+    expect(standardDegree('International Baccalaureate Diploma')).toBe('High School Diploma / GED');
+  });
+  it('recognizes bachelor abbreviations and keeps a combined major separate', () => {
+    const p = sampleProfile();
+    p.education[0]!.major = '';
+    for (const degree of ['BBA', 'B.B.A.', 'BFA', 'BEng', 'BTech', 'BEd', 'BCom', 'BASc', 'AB', 'SB', 'Baccalaureate']) {
+      expect(standardDegree(degree), degree).toBe("Bachelor's Degree");
+    }
+    p.education[0]!.degree = 'B.B.A. in Business Administration';
+    expect(valueFor('degree', p)![0]).toBe("Bachelor's Degree");
+    expect(valueFor('major', p)).toEqual(['Business Administration']);
   });
   it('keeps type and field apart when reading a resume', () => {
     const d = sanitizeDraft({ education: [{ school: 'UCSC', degree: 'B.S. Computer Science', major: '' }] });
