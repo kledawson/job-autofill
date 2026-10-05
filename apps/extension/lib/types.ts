@@ -159,7 +159,8 @@ export interface StoredFile {
 
 export type ApplicationStatus = 'Filling' | 'Ready for review' | 'Submitted' | 'Abandoned';
 
-export type Platform = 'greenhouse' | 'lever' | 'ashby';
+/** Known applicant tracking systems; `other` is any company careers site or unrecognized form. */
+export type Platform = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'other';
 
 export interface Application {
   id?: number;

@@ -2,7 +2,7 @@
 
 A local-first Chrome extension for assisted job application autofill and application tracking.
 
-**Status:** working MVP in [`apps/extension`](apps/extension/README.md): fills Greenhouse, Lever, and Ashby applications from a saved profile, writes free responses with Gemini (optional), tracks applications in Google Sheets (optional), and never submits for you.
+**Status:** working MVP in [`apps/extension`](apps/extension/README.md): fills Greenhouse, Lever, Ashby, Workday, and other careers-site applications from a saved profile, writes free responses with Gemini (optional), tracks applications in Google Sheets (optional), and never submits for you.
 
 > The MVP follows the product design doc, which includes Gemini free responses, Google Sheets tracking, and resume upload. `AGENTS.md` and `docs/` still describe the narrower original scope and need to be reconciled.
 

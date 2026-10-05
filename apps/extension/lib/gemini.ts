@@ -101,6 +101,15 @@ export async function generateJson(
     'text' in input
       ? [{ text: `${prompt}\n\nResume text:\n${input.text}` }]
       : [{ inline_data: { mime_type: 'application/pdf', data: input.pdfBase64 } }, { text: prompt }];
+  return generateStructured(apiKey, model, parts, responseSchema);
+}
+
+/** JSON reply to a prompt alone (no resume attached). */
+export function generatePromptJson(apiKey: string, model: string, prompt: string, responseSchema: object): Promise<unknown> {
+  return generateStructured(apiKey, model, [{ text: prompt }], responseSchema);
+}
+
+async function generateStructured(apiKey: string, model: string, parts: Part[], responseSchema: object): Promise<unknown> {
   const config = { temperature: 0, responseMimeType: 'application/json', responseSchema };
   let text: string;
   try {

@@ -201,6 +201,26 @@ function clearanceAnswers(level: string, label: string, options: string[], yesNo
   }
 }
 
+const US_STATES: Record<string, string> = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut',
+  DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois',
+  IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana',
+  NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York',
+  NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania',
+  PR: 'Puerto Rico', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas',
+  UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+};
+
+/** "CA" and "California": text boxes take what was saved, dropdowns usually list the full name. */
+function stateVariants(state: string): string[] | null {
+  const s = state.trim();
+  const full = US_STATES[s.toUpperCase()];
+  if (full) return [s, full];
+  const abbr = Object.keys(US_STATES).find((k) => US_STATES[k]!.toLowerCase() === s.toLowerCase());
+  return nonEmpty(s, abbr);
+}
+
 function nonEmpty(...values: (string | undefined)[]): string[] | null {
   const out = values.map((v) => v?.trim() ?? '').filter(Boolean);
   return out.length ? Array.from(new Set(out)) : null;
@@ -215,9 +235,23 @@ function isUS(country: string): boolean | null {
  * Candidate values for a profile key, best first. Several candidates let option matching
  * handle "Bachelor's Degree" vs "BS", or "January" vs "01". Null when the profile has no value.
  */
-export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date; label?: string; description?: string; required?: boolean; options?: string[] } = {}): string[] | null {
-  const edu = p.education.find((e) => e.school) ?? p.education[0];
-  const job = p.experience.find((x) => x.current) ?? p.experience.find((x) => x.company);
+export function valueFor(
+  key: ProfileKey,
+  p: Profile,
+  opts: {
+    phoneWithCode?: boolean;
+    yesNo?: boolean;
+    now?: Date;
+    label?: string;
+    description?: string;
+    required?: boolean;
+    options?: string[];
+    /** Entry of a numbered Education / Work Experience block. */
+    index?: number;
+  } = {},
+): string[] | null {
+  const edu = opts.index !== undefined ? educationEntries(p)[opts.index] : (p.education.find((e) => e.school) ?? p.education[0]);
+  const job = experienceEntries(p)[opts.index ?? 0];
   switch (key) {
     case 'fullName':
       return nonEmpty([p.firstName, p.lastName].filter(Boolean).join(' '));
@@ -237,6 +271,8 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       const code = normalizeCode(p.countryCode);
       return nonEmpty(code ? `${code} ${national}` : national);
     }
+    case 'phoneType':
+      return ['Mobile', 'Cell', 'Mobile Phone', 'Cell Phone'];
     case 'phoneCountryCode': {
       const code = normalizeCode(p.countryCode);
       if (!code) return null;
@@ -281,7 +317,7 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     case 'city':
       return nonEmpty(p.city);
     case 'state':
-      return nonEmpty(p.state);
+      return stateVariants(p.state);
     case 'zip':
       return nonEmpty(p.zip);
     case 'country':
@@ -413,11 +449,51 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return eeo(p.eeo.disability);
     case 'declineOnly':
       return DECLINE_VARIANTS;
+    case 'expTitle':
+      return nonEmpty(job?.title);
+    case 'expCompany':
+      return nonEmpty(job?.company);
+    case 'expLocation':
+      return nonEmpty(job?.location);
+    case 'expDescription':
+      return nonEmpty(job?.bullets);
+    case 'expCurrent':
+      return job?.current ? ['Yes'] : null;
+    case 'expStartMonth':
+      return job ? month(job.startDate) : null;
+    case 'expStartYear':
+      return job ? year(job.startDate) : null;
+    case 'expStartDate':
+      return job ? monthYear(job.startDate) : null;
+    case 'expEndMonth':
+      return job && !job.current ? month(job.endDate) : null;
+    case 'expEndYear':
+      return job && !job.current ? year(job.endDate) : null;
+    case 'expEndDate':
+      return job && !job.current ? monthYear(job.endDate) : null;
     case 'resume':
     case 'coverLetter':
     case 'transcript':
       return null;
   }
+}
+
+/** Education entries worth entering, in profile order. Numbered form sections map onto these. */
+export function educationEntries(p: Profile) {
+  return p.education.filter((e) => e.school.trim());
+}
+
+/** Work history entries worth entering, in profile order. */
+export function experienceEntries(p: Profile) {
+  return p.experience.filter((x) => x.company.trim() || x.title.trim());
+}
+
+/** "06/2025", "2025-06", "June 2025" for a YYYY-MM date. */
+function monthYear(yyyyMm: string): string[] | null {
+  const m = /^(\d{4})-(\d{2})/.exec(yyyyMm);
+  if (!m) return null;
+  const name = MONTHS[parseInt(m[2]!, 10) - 1];
+  return [`${m[2]}/${m[1]}`, `${m[1]}-${m[2]}`, ...(name ? [`${name} ${m[1]}`] : [])];
 }
 
 /** Keys whose values are only safe to pick from a list, never typed free-form. */

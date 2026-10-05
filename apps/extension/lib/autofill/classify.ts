@@ -9,6 +9,7 @@ export type ProfileKey =
   | 'email'
   | 'phone'
   | 'phoneCountryCode'
+  | 'phoneType'
   | 'textConsent'
   | 'acknowledge'
   | 'essentialFunctions'
@@ -62,16 +63,35 @@ export type ProfileKey =
   | 'declineOnly'
   | 'resume'
   | 'coverLetter'
-  | 'transcript';
+  | 'transcript'
+  // One entry of the work history, chosen by the field's section (Work Experience 1, 2, ...).
+  | 'expTitle'
+  | 'expCompany'
+  | 'expLocation'
+  | 'expDescription'
+  | 'expCurrent'
+  | 'expStartMonth'
+  | 'expStartYear'
+  | 'expStartDate'
+  | 'expEndMonth'
+  | 'expEndYear'
+  | 'expEndDate';
 
 export type Classification =
-  | { kind: 'profile'; key: ProfileKey; source: 'adapter' | 'rule' }
+  | {
+      kind: 'profile';
+      key: ProfileKey;
+      source: 'adapter' | 'rule' | 'ai';
+      /** Which education or experience entry to read, for fields in a numbered section. */
+      index?: number;
+    }
   | { kind: 'free_response' }
   /** Terms, privacy, and certification checkboxes: always left to the user. */
   | { kind: 'consent' }
   /** Anti-bot puzzles and "prove you're human" prompts: always left to the user. */
   | { kind: 'challenge' }
-  | { kind: 'unknown' };
+  /** `askAi`: no rule recognised the question, so an AI mapping may be tried. */
+  | { kind: 'unknown'; askAi?: boolean };
 
 type Rule = [ProfileKey, RegExp];
 
@@ -109,6 +129,7 @@ const RULES: Rule[] = [
   ['lastName', /last name|surname|family name/],
   ['fullName', /^((your|full|legal|candidate|applicant)\s+)*name$|full (legal )?name|legal name/],
   ['email', /e-?mail/],
+  ['phoneType', /phone (device )?type|type of phone|device type/],
   ['phone', WITH_CODE_RE],
   ['phoneCountryCode', /country code|calling code|dial(l?ing)? code|phone code|(phone|mobile) country|^(country|dial|calling) ?code$|^code$/],
   ['phone', /phone|mobile|cell\b/],
@@ -162,6 +183,31 @@ const BLOB_RE = /[A-Za-z0-9+/=]{80,}/;
 const FREE_TEXT_INPUT_RE = /^(why|describe|tell us|explain|please (describe|explain|share|tell)|what (interests|excites|motivates|draws))|why do you want|why are you interested/;
 const SKIP_OPTIONAL_TEXTAREA_RE = /additional information|anything else|cover letter|additional comments|comments/;
 
+// Rules for fields inside a numbered "Work Experience N" / "Education N" block. Order matters.
+const EXPERIENCE_RULES: Rule[] = [
+  ['expCurrent', /currently work|i work here|current (job|role|position|employer)|present/],
+  ['expDescription', /description|responsibilit|duties|summary|accomplishments?|achievements?/],
+  ['expTitle', /title|position|\brole\b/],
+  ['expCompany', /company|employer|organi[sz]ation/],
+  ['expLocation', /location|city/],
+  ['expStartMonth', /^(from|start)\b.*\bmonth$/],
+  ['expStartYear', /^(from|start)\b.*\byear$/],
+  ['expStartDate', /^(from|start)( date)?\b/],
+  ['expEndMonth', /^(to|end)\b.*\bmonth$/],
+  ['expEndYear', /^(to|end)\b.*\byear$/],
+  ['expEndDate', /^(to|end)( date)?\b/],
+];
+const EDUCATION_RULES: Rule[] = [
+  ['school', /school|university|college|institution/],
+  ['degree', /degree/],
+  ['major', /major|discipline|field of study|area of study|concentration/],
+  ['gpa', /\bgpa\b|grade (point )?average|overall result/],
+  ['eduStartMonth', /^(from|start)\b.*\bmonth$/],
+  ['eduStartYear', /^(from|start|first year)\b.*\byear$|first year attended/],
+  ['eduEndMonth', /^(to|end|graduation)\b.*\bmonth$/],
+  ['eduEndYear', /^(to|end|graduation|last year)\b.*\byear$|last year attended|graduation year/],
+];
+
 export interface AdapterKeys {
   /** Exact element id, name, or Ashby field path → profile key. */
   [idOrName: string]: ProfileKey;
@@ -169,11 +215,21 @@ export interface AdapterKeys {
 
 export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}): Classification {
   // Ashby prefixes names with the form id ("<uuid>__systemfield_eeoc_gender").
-  for (const k of [field.id, field.name, field.name.split('__').pop(), field.path]) {
-    if (k && adapterKeys[k]) return { kind: 'profile', key: adapterKeys[k], source: 'adapter' };
+  const index = field.section?.index;
+  // Workday ids repeat per entry with a number in front ("workExperience-12--jobTitle"); match on the end.
+  const suffix = field.id.replace(/^(workExperience|education)-\d+--/, '');
+  for (const k of [field.id, suffix, field.name, field.name.split('__').pop(), field.path]) {
+    if (k && adapterKeys[k]) return { kind: 'profile', key: adapterKeys[k], source: 'adapter', ...(index !== undefined ? { index } : {}) };
   }
 
   const label = field.label.toLowerCase();
+
+  if (field.section && field.kind !== 'file') {
+    const rules = field.section.kind === 'experience' ? EXPERIENCE_RULES : EDUCATION_RULES;
+    for (const [key, re] of rules) {
+      if (re.test(label)) return { kind: 'profile', key, source: 'rule', index: field.section.index };
+    }
+  }
 
   if (field.kind === 'file') {
     if (/transcript/.test(label) || /transcript/i.test(field.id + field.name)) return { kind: 'profile', key: 'transcript', source: 'rule' };
@@ -186,6 +242,9 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
 
   // "...provide the employee's first and last name": a name, but not the applicant's.
   if (OTHER_PERSON_RE.test(label)) return { kind: 'unknown' };
+
+  // "Phone Extension" would otherwise take the phone number.
+  if (/\bextension\b|^ext\.?$/.test(label)) return { kind: 'unknown' };
 
   if (CHALLENGE_RE.test(label) || BLOB_RE.test(field.label) || field.label.length > 700) return { kind: 'challenge' };
 
@@ -228,5 +287,5 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
     return field.label ? { kind: 'free_response' } : { kind: 'unknown' };
   }
   if (field.kind === 'text' && FREE_TEXT_INPUT_RE.test(label)) return { kind: 'free_response' };
-  return { kind: 'unknown' };
+  return field.label ? { kind: 'unknown', askAi: true } : { kind: 'unknown' };
 }

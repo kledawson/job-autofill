@@ -5,7 +5,7 @@ import { missingRequired } from '@/components/ProfileSections';
 import { Button, cx, Input, Notice } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { sendToBackground } from '@/lib/messages';
-import { PLATFORM_NAMES } from '@/lib/platforms';
+import { ALL_SITES, detectPlatform, PLATFORM_NAMES } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
 
 const STATUS_STYLE: Record<ApplicationStatus, string> = {
@@ -23,23 +23,40 @@ function StatusPill({ status }: { status: ApplicationStatus }) {
   );
 }
 
-function useActiveTabId() {
-  const [tabId, setTabId] = useState<number>();
+function useActiveTab() {
+  const [tab, setTab] = useState<{ id?: number; url?: string }>({});
   useEffect(() => {
     const refresh = async () => {
-      const [tab] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
-      setTabId(tab?.id);
+      const [t] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+      setTab({ id: t?.id, url: t?.url });
     };
     void refresh();
     browser.tabs.onActivated.addListener(refresh);
+    browser.tabs.onUpdated.addListener(refresh);
     browser.windows.onFocusChanged.addListener(refresh);
     return () => {
       browser.tabs.onActivated.removeListener(refresh);
+      browser.tabs.onUpdated.removeListener(refresh);
       browser.windows.onFocusChanged.removeListener(refresh);
     };
   }, []);
-  return tabId;
+  return tab;
 }
+
+/**
+ * Pages outside the known job sites need the optional all-sites permission. Chrome only shows its prompt
+ * during a click, so this must be the first thing a click handler awaits.
+ */
+async function ensureAccess(url: string | undefined): Promise<boolean> {
+  if (url && detectPlatform(url)) return true;
+  try {
+    return await browser.permissions.request({ origins: ALL_SITES });
+  } catch {
+    return false;
+  }
+}
+
+const ACCESS_DENIED = 'To fill applications outside Greenhouse, Lever, Ashby, and Workday, allow Job Autofill to read the site.';
 
 const when = (ms: number) =>
   new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -48,7 +65,7 @@ export default function SidePanel() {
   const { settings } = usePublicSettings();
   const profile = useLiveQuery(() => getProfile());
   const applications = useLiveQuery(() => db.applications.orderBy('filledAt').reverse().limit(50).toArray()) ?? [];
-  const tabId = useActiveTabId();
+  const { id: tabId, url: tabUrl } = useActiveTab();
   const current = applications.find((a) => a.tabId === tabId && a.status !== 'Submitted') ?? applications.find((a) => a.tabId === tabId);
   const resume = useLiveQuery(() => db.files.get('resume'));
 
@@ -60,9 +77,10 @@ export default function SidePanel() {
   const setupGaps = profile ? missingRequired(profile) : [];
 
   async function openAndFill(force = false) {
-    setBusy(true);
     setError('');
     setDuplicate(null);
+    if (!(await ensureAccess(link.trim()))) return setError(ACCESS_DENIED);
+    setBusy(true);
     const res = await sendToBackground('startFill', { url: link, force });
     setBusy(false);
     if (!res.ok) return setError(res.error);
@@ -72,6 +90,7 @@ export default function SidePanel() {
 
   async function fillThisPage() {
     setError('');
+    if (!(await ensureAccess(tabUrl))) return setError(ACCESS_DENIED);
     const res = await sendToBackground('fillActiveTab', {});
     if (!res.ok) setError(res.error);
   }
@@ -127,7 +146,7 @@ export default function SidePanel() {
             id="job-link"
             value={link}
             onChange={(e) => setLink(e.target.value)}
-            placeholder="Paste a Greenhouse, Lever, or Ashby link"
+            placeholder="Paste any job application link"
           />
           <Button type="submit" disabled={busy || !link.trim()} className="shrink-0">
             Open and fill

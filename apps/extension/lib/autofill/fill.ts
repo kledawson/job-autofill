@@ -1,5 +1,5 @@
 import { bestDegreeOption, bestOption, isPlaceholderOption, normalize } from './match';
-import type { ScannedField } from './scan';
+import { promptContainer, type ScannedField } from './scan';
 
 const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
 
@@ -123,6 +123,14 @@ export function fillText(field: ScannedField, value: string): FillOutcome {
   if (field.maxLength && v.length > field.maxLength) v = v.slice(0, field.maxLength);
   if (el.getAttribute('type') === 'month' && !/^\d{4}-\d{2}$/.test(v)) return 'nomatch';
   setNativeValue(el, v);
+  // Segmented date boxes (Workday's month/year spinbuttons) only take typed keys.
+  if (el.value !== v && el.tagName === 'INPUT' && el.getAttribute('role') === 'spinbutton') {
+    setNativeValueKeepFocus(el as HTMLInputElement, v);
+    withGuard(el, () => {
+      fire(el, 'change');
+      el.blur();
+    });
+  }
   return el.value === v ? 'filled' : 'failed';
 }
 
@@ -234,6 +242,106 @@ function comboboxOptions(input: HTMLElement): HTMLElement[] {
     if (opts.length) return opts;
   }
   return Array.from(doc.querySelectorAll<HTMLElement>('[role="option"]')).filter(isVisible);
+}
+
+// --- Button dropdowns (Workday "Select One") ---
+
+/** True when the dropdown button shows a choice rather than its "Select One" prompt. */
+export function listboxHasValue(field: ScannedField): boolean {
+  const text = (field.el.textContent ?? '').trim();
+  return !!text && !isPlaceholderOption(text);
+}
+
+export async function fillListbox(
+  field: ScannedField,
+  candidates: string[],
+  opts: { topOption?: boolean; degree?: boolean } = {},
+): Promise<FillOutcome> {
+  const button = field.el;
+  if (listboxHasValue(field)) return 'already';
+  clickSafely(button);
+  const waitOptions = async (ms: number) =>
+    (await waitFor(() => {
+      const o = comboboxOptions(button);
+      return o.length ? o : null;
+    }, ms)) ?? [];
+  let options = await waitOptions(timing.menuOpen);
+  const matchOption = opts.degree ? bestDegreeOption : bestOption;
+  let idx = matchOption(candidates, options.map((o) => o.textContent ?? ''));
+  // Long lists render only the options in view; typing the start of the answer scrolls to it.
+  const query = candidates[0] ?? '';
+  if (idx < 0 && query && options.length) {
+    const target = (button.ownerDocument.activeElement as HTMLElement | null) ?? button;
+    withGuard(target, () => {
+      for (const ch of query.slice(0, 8)) key(target, ch);
+    });
+    options = await waitOptions(timing.settle + 100);
+    idx = matchOption(candidates, options.map((o) => o.textContent ?? ''));
+  }
+  if (idx < 0 && opts.topOption) idx = options.findIndex((o) => !isPlaceholderOption(o.textContent ?? ''));
+  const choice = options[idx];
+  if (!choice) {
+    closeIfOpen(button);
+    return 'nomatch';
+  }
+  clickSafely(choice);
+  await sleep(timing.settle);
+  closeIfOpen(button);
+  return listboxHasValue(field) || !button.isConnected ? 'filled' : 'failed';
+}
+
+// --- Search prompts (Workday multiselect: type, Enter, pick a result into a chip) ---
+
+export function promptHasValue(field: ScannedField): boolean {
+  const box = promptContainer(field.el);
+  const chip = box.querySelector('[data-automation-id="selectedItem"], [data-automation-id="selectedItemList"] [role="option"], [data-automation-id="selectedItemList"] li');
+  return !!chip?.textContent?.trim();
+}
+
+function promptOptions(input: HTMLElement): HTMLElement[] {
+  const doc = input.ownerDocument;
+  const prompt = Array.from(doc.querySelectorAll<HTMLElement>('[data-automation-id="promptOption"]')).filter(isVisible);
+  const list = prompt.length ? prompt : comboboxOptions(input);
+  return list.filter((o) => !/^(loading|searching|no (items|results|matches))/i.test(o.textContent?.trim() ?? ''));
+}
+
+export async function fillPrompt(
+  field: ScannedField,
+  candidates: string[],
+  opts: { acceptFirstResult?: boolean; topOption?: boolean; degree?: boolean } = {},
+): Promise<FillOutcome> {
+  const input = field.el as HTMLInputElement;
+  if (promptHasValue(field)) return 'already';
+  const matchOption = opts.degree ? bestDegreeOption : bestOption;
+  let options: HTMLElement[] = [];
+  let firstResults: HTMLElement[] = [];
+  let idx = -1;
+  for (const [i, q] of searchQueries(candidates).slice(0, 4).entries()) {
+    setNativeValueKeepFocus(input, q);
+    withGuard(input, () => key(input, 'Enter'));
+    options =
+      (await waitFor(() => {
+        const o = promptOptions(input);
+        return o.length ? o : null;
+      }, i === 0 ? timing.search : Math.min(timing.search, 1500))) ?? [];
+    if (options.length && !firstResults.length) firstResults = options;
+    idx = matchOption(candidates, options.map((o) => o.textContent ?? ''));
+    if (idx >= 0) break;
+  }
+  if (idx < 0) options = firstResults;
+  const firstWord = normalize(candidates[0] ?? '').split(' ')[0] ?? '';
+  if (idx < 0 && opts.acceptFirstResult && firstWord && normalize(options[0]?.textContent ?? '').includes(firstWord)) idx = 0;
+  if (idx < 0 && opts.topOption) idx = options.findIndex((o) => !isPlaceholderOption(o.textContent ?? ''));
+  const choice = options[idx];
+  if (!choice) {
+    if (input.value) setNativeValueKeepFocus(input, '');
+    closeMenu(input);
+    return 'nomatch';
+  }
+  clickSafely(choice);
+  await sleep(timing.settle);
+  closeMenu(input);
+  return promptHasValue(field) || !input.isConnected ? 'filled' : 'failed';
 }
 
 export function comboboxHasValue(field: ScannedField): boolean {
@@ -467,6 +575,10 @@ export function fieldHasValue(field: ScannedField): boolean {
       return (field.members as HTMLInputElement[]).some((m) => m.checked);
     case 'combobox':
       return comboboxHasValue(field);
+    case 'listbox':
+      return listboxHasValue(field);
+    case 'prompt':
+      return promptHasValue(field);
     case 'yesno':
       return field.members.some(
         (b) => b.getAttribute('aria-pressed') === 'true' || SELECTED_CLASS.test(b.className),

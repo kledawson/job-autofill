@@ -1,7 +1,8 @@
-import type { AnswerRequest, FillContext, Result } from '../messages';
+import type { AnswerRequest, FieldQuestion, FillContext, Result } from '../messages';
+import { AI_MAPPABLE_KEYS } from '../field-map';
 import { payloadToFile } from '../messages';
 import type { Adapter, JobInfo } from './adapters';
-import { classifyField, type Classification } from './classify';
+import { classifyField, type Classification, type ProfileKey } from './classify';
 import {
   clickSafely,
   comboboxHasValue,
@@ -9,6 +10,8 @@ import {
   fillCheckboxGroup,
   fillCombobox,
   fillFile,
+  fillListbox,
+  fillPrompt,
   fillRadio,
   fillSelect,
   fillText,
@@ -23,7 +26,7 @@ import {
 } from './fill';
 import { clearOutline, outline, type ReviewState } from './highlight';
 import { characterLimitFor } from './match';
-import { scanFields, type ScannedField } from './scan';
+import { isSignInPage, scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE } from './classify';
 import { SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
 import { isPlaceholderOption } from './match';
@@ -32,6 +35,8 @@ export interface EngineDeps {
   context: FillContext;
   answer(req: AnswerRequest): Promise<Result<{ answer: string }>>;
   jobDescription(info: JobInfo): Promise<string>;
+  /** Asks AI which profile fact (if any) answers each question no rule recognised. Optional. */
+  mapFields?(fields: FieldQuestion[]): Promise<Result<{ keys: (string | null)[] }>>;
   /** Called whenever counts change (initial fill, conditional fields, user edits). */
   onProgress?(summary: FillSummary): void;
 }
@@ -103,9 +108,10 @@ export class FillSession {
     return this.verify();
   }
 
-  /** Watches for conditional follow-up questions and user edits. */
+  /** Watches for conditional follow-up questions, user edits, and (multi-step forms) the next step. */
   observe() {
-    const root = this.root() as Node;
+    // A multi-step form swaps its whole form between steps, so watch the page instead.
+    const root = (this.adapter.multiStep ? this.doc.body : this.root()) as Node;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const rescan = () => {
       clearTimeout(timer);
@@ -152,7 +158,10 @@ export class FillSession {
   /** Registers fields that appeared since the last scan, in document order. */
   private collectFresh(): FieldRecord[] {
     const fresh: FieldRecord[] = [];
-    for (const field of scanFields(this.root())) {
+    const fields = scanFields(this.root());
+    // Sign-in pages are left alone; the form after them is new and gets filled then.
+    if (isSignInPage(this.root(), fields)) return fresh;
+    for (const field of fields) {
       if (this.records.has(field.el)) continue;
       const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys) };
       this.records.set(field.el, rec);
@@ -166,6 +175,8 @@ export class FillSession {
     if (this.busy) return 0;
     this.busy = true;
     try {
+      // Add one work-experience / education entry per profile entry before reading the fields.
+      await this.adapter.prepare?.(this.root(), this.deps.context.profile).catch((err) => console.warn('[Job Autofill] could not add entries', err));
       const fresh = this.collectFresh();
       if (!fresh.length) return 0;
 
@@ -211,6 +222,7 @@ export class FillSession {
       this.traceDropdowns('end of pass');
       watcher.disconnect();
       await this.closeOpenDropdowns();
+      await this.mapUnknown(fresh);
       for (const rec of fresh) {
         if (rec.cls.kind === 'free_response') await this.fillFreeResponse(rec);
       }
@@ -220,9 +232,48 @@ export class FillSession {
     }
   }
 
+  /**
+   * Questions no rule recognised: AI picks which saved profile fact answers each (or none), and the value
+   * itself still comes from the profile. Only labels and option texts are sent, never profile values.
+   */
+  private async mapUnknown(records: FieldRecord[]) {
+    if (!this.deps.mapFields || !this.deps.context.hasGeminiKey) return;
+    const pending = records.filter(
+      (r) => r.cls.kind === 'unknown' && r.cls.askAi && r.field.el.isConnected && r.field.kind !== 'file' && !fieldHasValue(r.field),
+    );
+    if (!pending.length) return;
+    const res = await this.deps
+      .mapFields(
+        pending.map((r) => ({
+          label: r.field.label.slice(0, 300),
+          kind: r.field.kind,
+          options: r.field.options.filter((o) => !isPlaceholderOption(o)).slice(0, 30).map((o) => o.slice(0, 120)),
+          section: r.field.section?.kind,
+        })),
+      )
+      .catch((err) => ({ ok: false as const, error: String(err) }));
+    if (!res.ok) {
+      console.warn('[Job Autofill] AI field matching skipped:', res.error);
+      return;
+    }
+    for (const [i, rec] of pending.entries()) {
+      const key = res.keys[i];
+      if (!key || !AI_MAPPABLE_KEYS.has(key as ProfileKey)) continue;
+      const index = rec.field.section?.index;
+      rec.cls = { kind: 'profile', key: key as ProfileKey, source: 'ai', ...(index !== undefined ? { index } : {}) };
+      await this.fillProfileField(rec);
+      if (rec.outcome === 'filled') {
+        rec.ai = true;
+        outline(rec.field.outlineTarget, 'ai');
+      }
+    }
+  }
+
   /** Leaves every dropdown closed; a question we could not answer is flagged red instead of left open. */
   private async closeOpenDropdowns() {
-    const inputs = [...this.records.values()].filter((r) => r.field.kind === 'combobox' && r.field.el.isConnected).map((r) => r.field.el);
+    const inputs = [...this.records.values()]
+      .filter((r) => (r.field.kind === 'combobox' || r.field.kind === 'listbox') && r.field.el.isConnected)
+      .map((r) => r.field.el);
     for (let round = 0; round < 2; round++) {
       for (const el of inputs) closeIfOpen(el);
       await sleep(timing.settle);
@@ -278,9 +329,7 @@ export class FillSession {
       // react-select style dropdowns expose no options up front, so a question-shaped label stands in.
       const yesNo = isYesNo(field.options) || (!field.options.length && field.kind !== 'text' && QUESTION_RE.test(field.label.trim()));
       // Salary answers follow the pay range posted in the job description when there is one.
-      if (key === 'salary' && this.description === null) {
-        this.description = this.jobInfo.description || (await this.deps.jobDescription(this.jobInfo).catch(() => ''));
-      }
+      if (key === 'salary') await this.loadDescription();
       const values = valueFor(key, profile, {
         description: key === 'salary' ? (this.description ?? '') : undefined,
         phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
@@ -288,6 +337,7 @@ export class FillSession {
         label: field.label,
         required: field.required,
         options: field.options,
+        index: rec.cls.index,
       });
       const topOption = TOP_OPTION_KEYS.has(key);
       // A multiple-choice list of arrangements: "Flexible" ticks every one.
@@ -309,16 +359,18 @@ export class FillSession {
       }
       switch (field.kind) {
         case 'text': {
-          if ((field.el as HTMLInputElement).type === 'date') {
-            const iso = values.find((v) => /^\d{4}-\d{2}-\d{2}$/.test(v));
+          const input = field.el as HTMLInputElement;
+          if (input.type === 'date' || input.type === 'month') {
+            const iso = values.find((v) => (input.type === 'date' ? /^\d{4}-\d{2}-\d{2}$/ : /^\d{4}-\d{2}$/).test(v));
             rec.outcome = iso ? fillText(field, iso) : 'nomatch';
             break;
           }
           const isTypeahead =
             key === 'location' &&
             (this.adapter.platform === 'lever' || /location/i.test((field.el as HTMLElement).className));
-          // A number box rejects "$115,000"; give it just the digits.
-          const typed = (field.el as HTMLInputElement).type === 'number' ? first.replace(/[^\d.]/g, '') : first;
+          // A number box rejects "$115,000" or "June"; give it digits ("06" for a month box).
+          const numeric = input.type === 'number' || input.getAttribute('role') === 'spinbutton' || input.inputMode === 'numeric';
+          const typed = numeric ? (values.find((v) => /^\d+$/.test(v)) ?? first.replace(/[^\d.]/g, '')) : first;
           rec.outcome = isTypeahead ? await fillTypeahead(field, values) : fillText(field, typed);
           break;
         }
@@ -330,6 +382,12 @@ export class FillSession {
           break;
         case 'combobox':
           rec.outcome = await fillCombobox(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key), topOption, degree: key === 'degree' });
+          break;
+        case 'listbox':
+          rec.outcome = await fillListbox(field, values, { topOption, degree: key === 'degree' });
+          break;
+        case 'prompt':
+          rec.outcome = await fillPrompt(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key), topOption, degree: key === 'degree' });
           break;
         case 'radio':
           rec.outcome = fillRadio(field, values, { degree: key === 'degree' });
@@ -374,15 +432,13 @@ export class FillSession {
       return;
     }
     outline(field.outlineTarget, 'pending');
-    if (this.description === null) {
-      this.description = this.jobInfo.description || (await this.deps.jobDescription(this.jobInfo).catch(() => ''));
-    }
+    await this.loadDescription();
     const res = await this.deps.answer({
       question: field.label,
       characterLimit: characterLimitFor(field.label, field.maxLength),
       company: this.jobInfo.company,
       role: this.jobInfo.role,
-      jobDescription: this.description,
+      jobDescription: this.description ?? '',
     });
     if (!res.ok) {
       rec.flag = true;
@@ -397,6 +453,13 @@ export class FillSession {
     } else {
       rec.flag = true;
     }
+  }
+
+  private async loadDescription() {
+    if (this.description !== null) return;
+    // Multi-step forms move on from the posting; read it again in case this step shows it.
+    if (!this.jobInfo.description && this.adapter.multiStep) this.jobInfo = { ...this.adapter.jobInfo(this.doc), ...pickKnown(this.jobInfo) };
+    this.description = this.jobInfo.description || (await this.deps.jobDescription(this.jobInfo).catch(() => ''));
   }
 
   /** Re-reads every field, sets outlines, and returns the counts shown to the user. */
@@ -434,12 +497,27 @@ function labelFor(field: ScannedField): string {
   return text.length > 90 ? `${text.slice(0, 87)}…` : text;
 }
 
-/** Waits for a client-rendered form (Ashby) to appear. */
+/** Company and role already read, so a later re-read only adds the description. */
+function pickKnown(info: JobInfo): Partial<JobInfo> {
+  return Object.fromEntries(Object.entries(info).filter(([, v]) => v)) as Partial<JobInfo>;
+}
+
+/** True when the page shows an application form (not a sign-in page or a page with a search box). */
+export function formReady(doc: Document, adapter: Adapter): boolean {
+  const root = adapter.formRoot(doc);
+  const fields = scanFields(root).filter((f) => f.kind !== 'yesno');
+  if (fields.length < 2 || isSignInPage(root, fields)) return false;
+  if (!adapter.minProfileFields) return true;
+  const known = fields.filter((f) => classifyField(f, adapter.keys).kind === 'profile').length;
+  return known >= adapter.minProfileFields;
+}
+
+/** Waits for a client-rendered form (Ashby) or the next step of a multi-step application to appear. */
 export async function waitForForm(doc: Document, adapter: Adapter, timeout = 15000): Promise<boolean> {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
-    if (scanFields(adapter.formRoot(doc)).filter((f) => f.kind !== 'yesno').length >= 2) return true;
-    await sleep(300);
+    if (formReady(doc, adapter)) return true;
+    await sleep(timeout > 60000 ? 1000 : 300);
   }
   return false;
 }
