@@ -50,7 +50,7 @@ export function BasicsSection({ profile: p, onChange }: SectionProps) {
             <Input value={p.preferredName} onChange={(e) => set({ preferredName: e.target.value })} />
           </Field>
           <Field label="Pronouns" hint="Optional">
-            <Input value={p.pronouns} onChange={(e) => set({ pronouns: e.target.value })} placeholder="she/her" />
+            <Input value={p.pronouns} onChange={(e) => set({ pronouns: e.target.value })} placeholder="he/him" />
           </Field>
           <Field label="Email" required>
             <Input type="email" value={p.email} onChange={(e) => set({ email: e.target.value })} autoComplete="email" />
