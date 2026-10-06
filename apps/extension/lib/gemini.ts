@@ -12,7 +12,13 @@ export class GeminiError extends Error {
   }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal?.aborted) { reject(new GeminiError('Gemini request was cancelled.')); return; }
+  const finish = () => { signal?.removeEventListener('abort', cancel); resolve(); };
+  const timer = setTimeout(finish, ms);
+  const cancel = () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); reject(new GeminiError('Gemini request was cancelled.')); };
+  signal?.addEventListener('abort', cancel, { once: true });
+});
 
 /** Delay Gemini asks for on 429 ("retryDelay": "23s"), capped so a fill never hangs for long. */
 function retryDelay(body: any, attempt: number): number {
@@ -31,8 +37,9 @@ async function call(apiKey: string, model: string, path: string, init: RequestIn
         headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey, ...(init.headers ?? {}) },
       });
     } catch {
+      if (init.signal?.aborted) throw new GeminiError('Gemini request was cancelled.');
       if (attempt + 1 >= MAX_ATTEMPTS) throw new GeminiError('Could not reach Gemini. Check your connection.');
-      await sleep(retryDelay(null, attempt));
+      await sleep(retryDelay(null, attempt), init.signal ?? undefined);
       continue;
     }
     const body = await res.json().catch(() => null);
@@ -40,7 +47,7 @@ async function call(apiKey: string, model: string, path: string, init: RequestIn
 
     const retryable = res.status === 429 || res.status === 500 || res.status === 503;
     if (retryable && attempt + 1 < MAX_ATTEMPTS) {
-      await sleep(retryDelay(body, attempt));
+      await sleep(retryDelay(body, attempt), init.signal ?? undefined);
       continue;
     }
     const detail = body?.error?.message ?? res.statusText;
@@ -62,10 +69,11 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 
 type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
 
-function generate(apiKey: string, model: string, parts: Part[], generationConfig: object): Promise<string> {
+function generate(apiKey: string, model: string, parts: Part[], generationConfig: object, signal?: AbortSignal): Promise<string> {
   return enqueue(async () => {
     const body = await call(apiKey, model, ':generateContent', {
       method: 'POST',
+      signal,
       body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig }),
     });
     const candidate = body?.candidates?.[0];
@@ -105,18 +113,18 @@ export async function generateJson(
 }
 
 /** JSON reply to a prompt alone (no resume attached). */
-export function generatePromptJson(apiKey: string, model: string, prompt: string, responseSchema: object): Promise<unknown> {
-  return generateStructured(apiKey, model, [{ text: prompt }], responseSchema);
+export function generatePromptJson(apiKey: string, model: string, prompt: string, responseSchema: object, signal?: AbortSignal): Promise<unknown> {
+  return generateStructured(apiKey, model, [{ text: prompt }], responseSchema, signal);
 }
 
-async function generateStructured(apiKey: string, model: string, parts: Part[], responseSchema: object): Promise<unknown> {
+async function generateStructured(apiKey: string, model: string, parts: Part[], responseSchema: object, signal?: AbortSignal): Promise<unknown> {
   const config = { temperature: 0, responseMimeType: 'application/json', responseSchema };
   let text: string;
   try {
-    text = await generate(apiKey, model, parts, { ...config, thinkingConfig: { thinkingLevel: 'low' } });
+    text = await generate(apiKey, model, parts, { ...config, thinkingConfig: { thinkingLevel: 'low' } }, signal);
   } catch (err) {
     if (!(err instanceof GeminiError && err.status === 400 && /thinking/i.test(err.message))) throw err;
-    text = await generate(apiKey, model, parts, config);
+    text = await generate(apiKey, model, parts, config, signal);
   }
   try {
     return JSON.parse(text);

@@ -201,6 +201,12 @@ export interface Application {
   filledCount: number;
   missingCount: number;
   missingLabels: string[];
+  /** Full question aligned with missingLabels; null means a manual-only field. No answers stored here. */
+  missingQuestions?: (string | null)[];
+  /** Selected-field identities, never applicant answers. Stale tokens are rejected after navigation. */
+  reviewFields?: import('./remembered-mappings').ReviewField[];
+  frameId?: number;
+  topUrl?: string;
   sheetRow?: number;
   sheetError?: string;
 }

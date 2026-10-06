@@ -12,9 +12,11 @@ import {
 import { DataSection, DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
 import { Button, cx } from '@/components/ui';
 import { mergeResumeDraft } from '@/lib/resume';
+import { KnowledgeSection } from '@/components/KnowledgeBase';
 
 const NAV = [
   ['profile', 'Profile'],
+  ['knowledge', 'Saved answers'],
   ['documents', 'Documents'],
   ['connections', 'Connections'],
   ['prompt', 'Prompt'],
@@ -110,6 +112,7 @@ export default function Settings() {
           </>
         )}
         {tab === 'prompt' && settings && <PromptSection settings={settings} />}
+        {tab === 'knowledge' && <KnowledgeSection />}
         {tab === 'data' && (
           <DataSection
             onImported={async () => {

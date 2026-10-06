@@ -106,10 +106,11 @@ export type Classification =
   | {
       kind: 'profile';
       key: ProfileKey;
-      source: 'adapter' | 'rule' | 'ai';
+      source: 'adapter' | 'rule' | 'ai' | 'remembered';
       /** Which education or experience entry to read, for fields in a numbered section. */
       index?: number;
     }
+  | { kind: 'saved_answer'; answer: string }
   | { kind: 'free_response' }
   /** Terms, privacy, and certification checkboxes: always left to the user. */
   | { kind: 'consent' }

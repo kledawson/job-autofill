@@ -6,6 +6,24 @@
 - Directory boundaries, architecture, and initial contracts.
 - Contribution workflow, issue/PR templates, and repository checks.
 
+## Implemented remembered mappings
+
+- Explicit capture/confirmation of a selected page answer; missing cards remain teachable after manual entry.
+- Searchable Settings → Saved answers, compact cards, advanced aliases/profile links, and last-used dates.
+- Guided **Improve future matching** sections with editable variation rows, readable scope/meaning help,
+  current profile-value display and a local **Try a variation** preview; answered cards visibly offer
+  **Save this answer**, while empty cards remain white.
+- Local versioned persistence with conservative legacy migration, company/application/site/global scope,
+  approved question meanings and alternate wordings, option equivalents, and conflict checks.
+- Local suggestions for unfamiliar wording require confirmation; optional Gemini aliases require a click
+  and individual approval. No AI calls are required for saved-answer reuse.
+- Reuse before AI responses, including conditional fields, with existing-value preservation and verified dropdown selection.
+- Unit coverage and a real-extension Chromium test for teaching, persistence, reuse, editing, and removal.
+
+Later extensions: mapping import/export, multi-select capture, broader tested local intent/category
+coverage, local embeddings if measurement justifies them, explicit replacement of non-empty page answers,
+and a stricter employer identity registry across platforms. Capture tokens deliberately expire on rerender/navigation.
+
 ## Milestone 1: shared baseline (merge before parallel feature work)
 
 - WXT/React/TypeScript extension scaffold with minimal permissions.

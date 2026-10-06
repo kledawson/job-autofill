@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyField } from '../lib/autofill/classify';
-import { fillSelect } from '../lib/autofill/fill';
+import { comboboxSelectedValues, displayedValue, fillSelect } from '../lib/autofill/fill';
 import { scanFields } from '../lib/autofill/scan';
 import { bestOption } from '../lib/autofill/match';
 import { valueFor } from '../lib/autofill/values';
@@ -12,6 +12,18 @@ function scan(html: string) {
 }
 
 describe('dropdowns', () => {
+  it.each(['select__multi-value', 'css-fixture-multiValue'])('reads one selected chip in %s without its remove control', className => {
+    const [field] = scan(`<label for="q">Active Security Clearance(s)</label><div class="select__container"><div class="select__control"><div class="${className}"><span class="${className}__label">Never held a clearance</span><span class="${className}__remove" role="button" aria-label="Remove Never held a clearance">×<svg><title>Remove</title></svg></span></div><input id="q" role="combobox" aria-expanded="false"></div></div>`);
+    expect(comboboxSelectedValues(field!)).toEqual(['Never held a clearance']);
+    expect(displayedValue(field!)).toBe('Never held a clearance');
+  });
+  it('does not combine multiple chips or capture search text as the selected answer', () => {
+    const [field] = scan('<label for="q">Active Security Clearance(s)</label><div class="select__container"><div class="select__control"><input id="q" role="combobox" aria-expanded="false" value="search text"></div></div>');
+    expect(displayedValue(field!)).toBe('');
+    field!.outlineTarget.insertAdjacentHTML('beforeend', '<div class="select__multi-value"><span>Secret</span><button>×</button></div><div class="select__multi-value"><span>DOE Q</span><button>×</button></div>');
+    expect(comboboxSelectedValues(field!)).toEqual(['Secret', 'DOE Q']);
+    expect(displayedValue(field!)).toBe('');
+  });
   it('picks the top real option when nothing matches', () => {
     const [f] = scan('<label for="l">Location</label><select id="l"><option value="">Select…</option><option value="a">San Jose, CA, United States</option><option value="b">Austin, TX</option></select>');
     expect(fillSelect(f!, ['Palo Alto, CA'], { topOption: true })).toBe('filled');

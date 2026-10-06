@@ -1,4 +1,4 @@
-import { bestDegreeOption, bestOption, isPlaceholderOption, normalize } from './match';
+import { bestDegreeOption, bestOption, bestRememberedOption, isPlaceholderOption, normalize } from './match';
 import { deepAll, OWN_ATTR, promptContainer, type ScannedField } from './scan';
 
 const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
@@ -180,10 +180,13 @@ export interface ChoiceOpts {
   acceptFirstResult?: boolean;
   /** Multi-select lists: add another item even if one is already chosen. */
   allowMore?: boolean;
+  /** Authored literal answers must match exactly (or an unambiguous Yes/No variant). */
+  remembered?: boolean;
 }
 
 function chooser(opts: ChoiceOpts): (candidates: string[], options: string[]) => number {
   if (opts.pick) return (_c, options) => opts.pick!(options);
+  if (opts.remembered) return bestRememberedOption;
   if (opts.degree) return bestDegreeOption;
   return (c, o) => bestOption(c, o, { strict: opts.strict });
 }
@@ -191,7 +194,7 @@ function chooser(opts: ChoiceOpts): (candidates: string[], options: string[]) =>
 export function fillSelect(field: ScannedField, candidates: string[], opts: ChoiceOpts = {}): FillOutcome {
   const select = field.el as HTMLSelectElement;
   const current = select.options[select.selectedIndex];
-  if (current && current.value && select.selectedIndex > 0) return 'already';
+  if (current && current.value && !isPlaceholderOption(current.text)) return 'already';
   const options = Array.from(select.options);
   let idx = chooser(opts)(candidates, options.map((o) => o.text));
   // Nothing fits exactly: take the first real option.
@@ -232,8 +235,13 @@ export function fillCheckbox(field: ScannedField, candidates: string[]): FillOut
   return box.checked ? 'filled' : 'failed';
 }
 
-export function fillCheckboxGroup(field: ScannedField, candidates: string[]): FillOutcome {
-  return fillCheckboxes(field, [candidates]);
+export function fillCheckboxGroup(field: ScannedField, candidates: string[], opts: ChoiceOpts = {}): FillOutcome {
+  const boxes = field.members as HTMLInputElement[];
+  if (boxes.some((b) => b.checked)) return 'already';
+  const box = boxes[chooser(opts)(candidates, field.options)];
+  if (!box) return 'nomatch';
+  clickSafely(box);
+  return box.checked ? 'filled' : 'failed';
 }
 
 /** "Select all that apply": ticks the best box for each answer (each race, for example). */
@@ -246,12 +254,12 @@ export function fillCheckboxes(field: ScannedField, answers: string[][]): FillOu
   return [...picks].every((i) => boxes[i]!.checked) ? 'filled' : 'failed';
 }
 
-export function fillYesNo(field: ScannedField, candidates: string[]): FillOutcome {
+export function fillYesNo(field: ScannedField, candidates: string[], opts: { strict?: boolean; pick?: (options: string[]) => number } = {}): FillOutcome {
   const buttons = field.members;
   if (buttons.some((b) => b.getAttribute('aria-pressed') === 'true' || SELECTED_CLASS.test(b.className))) {
     return 'already';
   }
-  const button = buttons[bestOption(candidates, field.options)];
+  const button = buttons[opts.pick ? opts.pick(field.options) : (opts.strict ? bestRememberedOption : bestOption)(candidates, field.options)];
   if (!button) return 'nomatch';
   clickSafely(button);
   return 'filled';
@@ -291,16 +299,26 @@ export function displayedValue(field: ScannedField): string {
   switch (field.kind) {
     case 'select': {
       const s = field.el as HTMLSelectElement;
-      return s.selectedIndex > 0 ? (s.options[s.selectedIndex]?.text ?? '') : '';
+      return s.selectedIndex >= 0 && fieldHasValue(field) ? (s.options[s.selectedIndex]?.text ?? '') : '';
     }
     case 'listbox':
       return listboxHasValue(field) ? (field.el.textContent ?? '').trim() : '';
     case 'radio':
       return field.options[(field.members as HTMLInputElement[]).findIndex((m) => m.checked)] ?? '';
+    case 'yesno':
+      return field.options[field.members.findIndex(b => b.getAttribute('aria-pressed') === 'true' || SELECTED_CLASS.test(b.className))] ?? '';
+    case 'prompt': {
+      const pills = [...new Set(pillTexts(field))];
+      return pills.length === 1 ? pills[0]! : '';
+    }
     case 'combobox': {
-      const box = field.outlineTarget.closest('[class*="container"], [class*="select"]') ?? field.outlineTarget;
-      const shown = box.querySelector('[class*="single-value"], [class*="singleValue"]');
-      return (shown?.textContent ?? (field.el as HTMLInputElement).value ?? '').trim();
+      const selected = comboboxSelectedValues(field);
+      if (selected.length) return selected.length === 1 ? selected[0]! : '';
+      const input = field.el as HTMLInputElement;
+      const box = comboboxContainer(field);
+      // React-select's text input is only a search query, not a committed selection.
+      if (box.matches('[class*="select__"], [class*="react-select"]') || box.querySelector('[class*="select__"], [class*="react-select"]') || input.getAttribute('aria-expanded') === 'true') return '';
+      return input.value?.trim() ?? '';
     }
     default:
       return (field.el as HTMLInputElement).value ?? '';
@@ -887,11 +905,25 @@ export async function fillPrompt(
   return outcome;
 }
 
+function comboboxContainer(field: ScannedField): Element {
+  return field.outlineTarget.closest('[class*="container"], [class*="select"]') ?? field.outlineTarget;
+}
+
+/** Committed React-select labels, without nested labels or remove-button text counted twice. */
+export function comboboxSelectedValues(field: ScannedField): string[] {
+  const box = comboboxContainer(field);
+  const selector = '[class*="single-value" i], [class*="singleValue" i], [class*="multi-value" i], [class*="multiValue" i]';
+  const matches = Array.from(box.querySelectorAll(selector));
+  const roots = matches.filter(node => !matches.some(other => other !== node && other.contains(node)));
+  return roots.map(node => {
+    const label = node.cloneNode(true) as Element;
+    label.querySelectorAll('button, [role="button"], svg, [class*="remove" i], [aria-hidden="true"]').forEach(control => control.remove());
+    return (label.textContent ?? '').trim();
+  }).filter(Boolean);
+}
+
 export function comboboxHasValue(field: ScannedField): boolean {
-  const input = field.el as HTMLInputElement;
-  const box = field.outlineTarget.closest('[class*="container"], [class*="select"]') ?? field.outlineTarget;
-  const shown = box.querySelector('[class*="single-value"], [class*="singleValue"], [class*="multi-value"], [class*="multiValue"]');
-  return !!(shown && shown.textContent?.trim()) || !!input.value.trim();
+  return comboboxSelectedValues(field).length > 0 || !!(field.el as HTMLInputElement).value.trim();
 }
 
 function closeMenu(input: HTMLElement) {
@@ -962,7 +994,7 @@ export async function fillCombobox(
     let firstResults: HTMLElement[] = [];
     // The list may spell things differently ("University of California - Santa Cruz"), so try the
     // wording as given, then cleaner and shorter searches, until a result matches.
-    const queries = searchQueries(candidates);
+    const queries = opts.strict ? candidates : searchQueries(candidates);
     for (const [i, q] of queries.entries()) {
       setNativeValueKeepFocus(input, q);
       options =

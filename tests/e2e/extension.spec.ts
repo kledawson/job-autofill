@@ -1,6 +1,6 @@
 import { chromium, expect, test, type BrowserContext, type Page, type Worker } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -21,6 +21,17 @@ const geminiPrompts: string[] = [];
 /** Requests asking which profile fact answers a question no rule recognised. */
 const mappingPrompts: string[] = [];
 let resumeUploads = 0;
+const wordingPrompts: string[] = [];
+
+function openSslExecutable(): string {
+  if (process.platform !== 'win32') return 'openssl';
+  const gitOpenSsl = [process.env.ProgramFiles, process.env['ProgramFiles(x86)']]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => join(root, 'Git', 'usr', 'bin', 'openssl.exe'))
+    .find(existsSync);
+  // Git for Windows ships OpenSSL, but its usr/bin folder is not always on PATH in PowerShell.
+  return gitOpenSsl ?? 'openssl.exe';
+}
 
 /** A one-page text PDF. Each row is [left text, right-aligned text?], like a typical resume. */
 function makeResumePdf(rows: [string, string?][]): Buffer {
@@ -93,7 +104,7 @@ test.beforeAll(async () => {
   // other hostname fails to resolve. (Playwright routing alone misses the first navigation of a tab
   // the extension opens.) The service worker's Gemini and Lever API calls are mocked with routes below.
   const dir = mkdtempSync(join(tmpdir(), 'jaf-e2e-'));
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=jobs.lever.co',
+  execFileSync(openSslExecutable(), ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=jobs.lever.co',
     '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')], { stdio: 'ignore' });
   server = createServer({ key: readFileSync(join(dir, 'key.pem')), cert: readFileSync(join(dir, 'cert.pem')) }, (req, res) => {
     if (req.url?.includes('/apply')) {
@@ -132,6 +143,9 @@ test.beforeAll(async () => {
     if (isResume) {
       resumeUploads++;
       reply = { candidates: [{ content: { parts: [{ text: JSON.stringify(RESUME_REPLY) }] } }] };
+    } else if (body && /^Suggest up to five alternative wordings/.test(parts[0]?.text ?? '')) {
+      wordingPrompts.push(parts[0].text);
+      reply = { candidates: [{ content: { parts: [{ text: JSON.stringify(['How did you learn about this position?', 'Are you authorized to work in the US?']) }] } }] };
     } else if (body && /^You match job application form questions/.test(parts[0]?.text ?? '')) {
       mappingPrompts.push(parts[0].text);
       reply = { candidates: [{ content: { parts: [{ text: '[]' }] } }] };
@@ -304,4 +318,395 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   await panel.getByLabel('Job link').fill(`${LEVER_URL}/apply`);
   await panel.getByRole('button', { name: 'Open and fill' }).click();
   await expect(panel.getByText(/You already filled this job/)).toBeVisible();
+});
+
+test('remembered mappings are taught in the panel, persisted, reused, edited and removed', async () => {
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const form = await context.newPage();
+  await form.goto(`${LEVER_URL}/apply?remembered=1`);
+  await form.evaluate(() => {
+    const field = document.createElement('div');
+    field.innerHTML = '<label for="learn-source">Application discovery channel*</label><select id="learn-source" required><option value="">Select…</option><option>Company website</option><option>Referral</option></select>';
+    document.querySelector('form')!.appendChild(field);
+  });
+  await form.bringToFront();
+  expect(await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }))).toMatchObject({ ok: true });
+  await expect(form.locator('#learn-source')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  const missing = panel.getByRole('listitem').filter({ hasText: 'Application discovery channel' });
+  await expect(missing.getByRole('button', { name: 'Remember answer', exact: true })).toHaveClass(/bg-white/);
+  await form.locator('#learn-source').selectOption('Company website');
+  await expect(missing).toContainText('Answer entered');
+  await expect(missing.getByRole('button', { name: 'Save this answer', exact: true })).toHaveClass(/bg-indigo-600/);
+  await form.locator('#learn-source').selectOption('');
+  await expect(missing.getByRole('button', { name: 'Remember answer', exact: true })).toHaveClass(/bg-white/);
+  await form.locator('#learn-source').selectOption('Company website');
+  await expect(missing.getByRole('button', { name: 'Save this answer', exact: true })).toBeVisible();
+  await panel.setViewportSize({ width: 380, height: 1000 });
+  await shot(panel, 'answered-save-cue');
+  if (process.env.SCREENSHOTS) await missing.screenshot({ path: join(process.env.SCREENSHOTS, 'save-this-answer-button.png') });
+  await missing.getByRole('button', { name: 'Save this answer' }).click();
+  await expect(panel.getByLabel('Your answer')).toHaveValue('Company website');
+  await panel.getByLabel('Where should this answer be reused?').selectOption('all');
+  await panel.getByText('Improve future matching', { exact: true }).click();
+  await panel.getByRole('button', { name: 'Add wording', exact: true }).click();
+  await panel.getByLabel('Question wording 1', { exact: true }).fill('How did you discover this opening?');
+  await panel.setViewportSize({ width: 380, height: 1000 });
+  await shot(panel, 'remembered-editor');
+  await panel.getByRole('button', { name: 'Save & apply' }).click();
+  await expect(panel.getByText('Saved for future applications.', { exact: false })).toBeVisible();
+
+  // Reload the extension UI: the mapping must live in IndexedDB, not React state or worker globals.
+  const settings = await context.newPage();
+  await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
+  await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toContainText('Company website');
+  await settings.reload();
+  await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toContainText('How did you discover this opening?');
+  await settings.setViewportSize({ width: 1000, height: 800 });
+  await shot(settings, 'knowledge-base');
+
+  // Reuse the approved alternate wording on a fresh form.
+  await form.reload();
+  await form.evaluate(() => {
+    const field = document.createElement('div');
+    field.innerHTML = '<label for="learn-source">How did you discover this opening?*</label><select id="learn-source" required><option value="">Select…</option><option>Company website</option><option>Referral</option></select>';
+    document.querySelector('form')!.appendChild(field);
+    (window as any).__submits = 0;
+    window.addEventListener('submit', () => (window as any).__submits++, true);
+  });
+  await form.bringToFront();
+  expect(await settings.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }))).toMatchObject({ ok: true });
+  await expect(form.locator('#learn-source')).toHaveValue('Company website', { timeout: 30_000 });
+  await expect(form.locator('#learn-source')).toHaveAttribute('data-jaf-state', 'filled', { timeout: 30_000 });
+
+  // Changing the page answer survives another fill.
+  await form.locator('#learn-source').selectOption('Referral');
+  await settings.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#learn-source')).toHaveValue('Referral');
+  expect(await form.evaluate(() => (window as any).__submits)).toBe(0);
+
+  // Edits persist and re-teaching the same primary question does not duplicate rows.
+  await settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' }).getByRole('button', { name: 'Edit', exact: true }).click();
+  await settings.getByLabel('Your answer').fill('Referral');
+  await settings.getByRole('button', { name: 'Save answer' }).click();
+  await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toContainText('Referral');
+  const saved = await settings.evaluate(() => chrome.runtime.sendMessage({
+    type: 'saveRememberedMapping', mapping: {
+      question: 'Application discovery channel', aliases: ['How did you discover this opening?'], scope: 'all',
+      target: { kind: 'answer', value: 'Referral' },
+    },
+  }));
+  expect(saved).toMatchObject({ ok: true });
+  await settings.reload();
+  await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toHaveCount(1);
+
+  // Only trusted extension pages can create mappings; malformed targets are rejected.
+  const rejected = await settings.evaluate(() => chrome.runtime.sendMessage({
+    type: 'saveRememberedMapping', mapping: {
+      question: 'Invalid target', aliases: [], scope: 'all', target: { kind: 'profile', key: '__proto__' },
+    },
+  }));
+  expect(rejected).toMatchObject({ ok: false });
+  const unrelatedRead = await settings.evaluate(() => chrome.runtime.sendMessage({
+    type: 'getRememberedMappings', questions: ['Application discovery channel'],
+  }));
+  expect(unrelatedRead).toMatchObject({ ok: false });
+  await settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' }).getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(settings.getByText('No saved answers yet.', { exact: false })).toBeVisible();
+  await settings.reload();
+  await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toHaveCount(0);
+});
+
+test('saved meanings match new question and option wording locally, with scope and stale capture checks', async () => {
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const form = await context.newPage();
+  await form.goto(`${LEVER_URL}/apply?semantic=1`);
+  async function inject(label: string, options = ['Company website', 'Referral']) {
+    await form.evaluate(({ label, options }) => {
+      document.querySelector('#semantic-field')?.remove();
+      const wrapper = document.createElement('div'); wrapper.id = 'semantic-field';
+      const l = document.createElement('label'); l.htmlFor = 'semantic-choice'; l.textContent = `${label}*`;
+      const select = document.createElement('select'); select.id = 'semantic-choice'; select.required = true;
+      for (const choice of ['', ...options]) select.add(new Option(choice || 'Select…', choice));
+      wrapper.append(l, select); document.querySelector('form')!.append(wrapper);
+    }, { label, options });
+  }
+  const q = 'Which channel led you to this opening?';
+  await inject(q);
+  await form.bringToFront();
+  await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  const card = panel.getByRole('listitem').filter({ hasText: q });
+  await card.getByRole('button', { name: 'Remember answer', exact: true }).click();
+  await panel.getByLabel('Your answer').selectOption('Company website');
+  await panel.getByLabel('Where should this answer be reused?').selectOption('all');
+  // Editing the page after capture must not be overwritten, even when the save itself succeeds.
+  await form.locator('#semantic-choice').selectOption('Referral');
+  await panel.getByRole('button', { name: 'Save & apply' }).click();
+  await expect(panel.getByText('Answer saved, but could not apply:', { exact: false })).toBeVisible();
+  await expect(form.locator('#semantic-choice')).toHaveValue('Referral');
+
+  await form.reload();
+  const variant = 'Which channel brought you to this opening?';
+  await inject(variant);
+  await form.bringToFront();
+  await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  const suggestion = panel.getByRole('listitem').filter({ hasText: variant });
+  await suggestion.getByRole('button', { name: 'Review suggestion' }).click();
+  await panel.getByRole('button', { name: 'Save & apply' }).click();
+  await expect(form.locator('#semantic-choice')).toHaveValue('Company website', { timeout: 30_000 });
+  await form.reload(); await inject(variant);
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#semantic-choice')).toHaveValue('Company website', { timeout: 30_000 });
+
+  // A confirmed meaning can handle a new wording AND option synonym without Gemini.
+  const learned = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'saveRememberedMapping', mapping: {
+    question: 'How did you hear about this job?', aliases: [], scope: 'all',
+    target: { kind: 'answer', value: 'Company website' }, meaning: { intent: 'source', qualifier: '', negative: false },
+  } }));
+  expect(learned).toMatchObject({ ok: true });
+  await form.reload(); await inject('Where did you discover this opportunity?', ['Careers page', 'Referral']);
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#semantic-choice')).toHaveValue('Careers page', { timeout: 30_000 });
+  await expect(form.locator('#semantic-choice')).toHaveAttribute('data-jaf-state', 'filled', { timeout: 30_000 });
+
+  // A scope on one exact application cannot affect another application URL.
+  const scoped = await panel.evaluate(url => chrome.runtime.sendMessage({ type: 'saveRememberedMapping', mapping: {
+    question: 'Which internal team recommended this role?', aliases: [], scope: `application:${url}`,
+    target: { kind: 'answer', value: 'Referral' },
+  } }), `${LEVER_URL}/apply?semantic=1`);
+  expect(scoped).toMatchObject({ ok: true });
+  await form.goto(`${LEVER_URL}/apply?semantic=2`); await inject('Which internal team recommended this role?');
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#semantic-choice')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await expect(form.locator('#semantic-choice')).toHaveValue('');
+  await panel.getByRole('listitem').filter({ hasText: 'Which internal team recommended' }).getByRole('button', { name: 'Remember answer' }).click();
+  await panel.setViewportSize({ width: 380, height: 1100 });
+  await shot(panel, 'simpler-remember-answer');
+});
+
+test('saves a selected React-select clearance chip and reuses it on an empty dropdown', async () => {
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const form = await context.newPage();
+  await form.goto(`${LEVER_URL}/apply?clearance-chip=1`);
+  async function inject() {
+    await form.evaluate(() => {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = '<label for="chip-clearance">Active Security Clearance(s)*</label><div class="select__container"><div class="select__control"><input id="chip-clearance" role="combobox" aria-expanded="false" aria-multiselectable="true" required></div></div>';
+      document.querySelector('form')!.append(wrapper);
+      const input = wrapper.querySelector('input')!, control = wrapper.querySelector('.select__control')!;
+      input.addEventListener('mousedown', () => {
+        if (control.querySelector('[role="listbox"]')) return;
+        const menu = document.createElement('div'); menu.setAttribute('role', 'listbox');
+        for (const label of ['Never held a clearance', 'Secret', 'DOE Q']) {
+          const option = document.createElement('div'); option.setAttribute('role', 'option'); option.textContent = label;
+          option.onclick = () => {
+            const chip = document.createElement('div'); chip.className = 'select__multi-value';
+            const text = document.createElement('span'); text.className = 'select__multi-value__label'; text.textContent = label;
+            const remove = document.createElement('span'); remove.className = 'select__multi-value__remove'; remove.setAttribute('role', 'button'); remove.setAttribute('aria-label', `Remove ${label}`); remove.textContent = '×';
+            remove.onclick = () => { chip.remove(); input.dispatchEvent(new Event('change', { bubbles: true })); };
+            chip.append(text, remove); control.prepend(chip); menu.remove(); input.value = ''; input.setAttribute('aria-expanded', 'false');
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          };
+          menu.append(option);
+        }
+        input.setAttribute('aria-expanded', 'true'); control.append(menu);
+      });
+    });
+  }
+  await inject();
+  await form.bringToFront();
+  await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('.select__control')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await form.locator('#chip-clearance').click();
+  await form.getByRole('option', { name: 'Never held a clearance', exact: true }).click();
+  const card = panel.getByRole('listitem').filter({ hasText: 'Active Security Clearance(s)' });
+  await card.getByRole('button', { name: 'Save this answer', exact: true }).click();
+  await expect(panel.getByLabel('Your answer')).toHaveValue('Never held a clearance');
+  await expect(panel.getByText('Choose an answer from the dropdown before saving.', { exact: false })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Save & apply', exact: true }).click();
+  await expect(panel.getByText('Saved for future applications.', { exact: false })).toBeVisible();
+  await expect(form.locator('.select__multi-value__label')).toHaveText('Never held a clearance');
+  await expect(form.locator('.select__multi-value')).toHaveCount(1);
+  await form.reload(); await inject();
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('.select__multi-value__label')).toHaveText('Never held a clearance', { timeout: 30_000 });
+  await expect(form.locator('.select__multi-value')).toHaveCount(1);
+  await expect(form.locator('#chip-clearance')).toHaveValue('');
+});
+
+test('optional AI suggests wordings only after a click and requires individual approval', async () => {
+  const settings = await context.newPage();
+  await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
+  await settings.getByRole('button', { name: 'Add answer' }).click();
+  await settings.getByRole('textbox', { name: 'Question', exact: true }).fill('Which recruiting event introduced this team?');
+  await settings.getByLabel('Your answer').fill('Synthetic campus fair');
+  await settings.getByLabel('Where should this answer be reused?').selectOption('company:');
+  await settings.getByLabel('Company name').fill('Contoso Labs');
+  await settings.getByRole('button', { name: 'Save answer' }).click();
+  const created = settings.getByRole('listitem').filter({ hasText: 'Which recruiting event introduced this team?' });
+  await expect(created).toContainText('Company: contoso labs');
+  await created.getByRole('button', { name: 'Remove', exact: true }).click();
+  const count = wordingPrompts.length;
+  const card = settings.getByRole('listitem').filter({ hasText: 'How did you hear about this job?' });
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await settings.getByText('Improve future matching', { exact: true }).click();
+  await settings.getByText('Get optional AI suggestions', { exact: true }).click();
+  expect(wordingPrompts).toHaveLength(count);
+  await settings.getByRole('button', { name: 'Suggest question variations' }).click();
+  const approval = settings.getByRole('checkbox', { name: 'How did you learn about this position?' });
+  await expect(approval).toBeVisible();
+  await expect(approval).not.toBeChecked();
+  await expect(settings.getByLabel('Question wording 1', { exact: true })).toHaveCount(0);
+  expect(wordingPrompts).toHaveLength(count + 1);
+  expect(wordingPrompts.at(-1)).not.toContain('jordan@example.com');
+  expect(wordingPrompts.at(-1)).not.toContain('Company website');
+  await expect(settings.getByRole('checkbox', { name: 'Are you authorized to work in the US?' })).toHaveCount(0);
+  await approval.check();
+  await settings.getByRole('button', { name: 'Save answer' }).click();
+  await settings.reload();
+  await card.getByText('Approved variations').click();
+  await expect(card).toContainText('How did you learn about this position?');
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await settings.getByText('Improve future matching', { exact: true }).click();
+  await settings.getByText('Get optional AI suggestions', { exact: true }).click();
+  await context.route('https://generativelanguage.googleapis.com/**', route => route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ error: { message: 'Rate limit', details: [{ retryDelay: '30s' }] } }) }));
+  await settings.getByRole('button', { name: 'Suggest question variations' }).click();
+  await expect(settings.getByText('Wording suggestions timed out.', { exact: false })).toBeVisible({ timeout: 20000 });
+  await settings.getByLabel('Your answer').fill('Company website');
+  await settings.getByRole('button', { name: 'Save answer' }).click();
+  await expect(settings.getByText('Answer saved.', { exact: true })).toBeVisible();
+});
+
+test('guided variations preview real matching and scope, and profile links show the current value', async () => {
+  const settings = await context.newPage();
+  await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
+  await settings.getByRole('button', { name: 'Add answer' }).click();
+  await settings.getByRole('textbox', { name: 'Question', exact: true }).fill('Which exam result applies?');
+  await settings.getByLabel('Your answer').fill('Not taken');
+  await expect(settings.getByRole('button', { name: 'Add wording', exact: true })).not.toBeVisible();
+  await settings.getByText('Try a variation', { exact: true }).click();
+  await settings.getByLabel('Question to try').fill('Which exam result applies to you?');
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would ask you to confirm', { exact: true })).toBeVisible();
+
+  await settings.getByText('Improve future matching', { exact: true }).click();
+  await settings.getByRole('button', { name: 'Add wording', exact: true }).click();
+  await settings.getByLabel('Question wording 1', { exact: true }).fill('Which exam result applies to you?');
+  // A changed draft invalidates the previous preview.
+  await expect(settings.getByText('Would ask you to confirm', { exact: true })).toHaveCount(0);
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would autofill', { exact: true })).toBeVisible();
+  await settings.getByLabel('This question has a dropdown', { exact: true }).check();
+  await settings.getByRole('button', { name: 'Add dropdown choice' }).click();
+  await settings.getByLabel('Dropdown choice 1', { exact: true }).fill('Did not take');
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would skip', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Add answer label', exact: true }).click();
+  await settings.getByLabel('Answer label 1', { exact: true }).fill('Did not take');
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would autofill', { exact: true })).toBeVisible();
+  await expect(settings.getByText('Answer: Did not take', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Remove answer label 1' }).click();
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would skip', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Add answer label', exact: true }).click();
+  await settings.getByLabel('Answer label 1', { exact: true }).fill('Did not take');
+  await settings.getByRole('button', { name: 'Remove question wording 1' }).click();
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would ask you to confirm', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Add wording', exact: true }).click();
+  await settings.getByLabel('Question wording 1', { exact: true }).fill('Which exam result applies to you?');
+  await settings.getByLabel('Where should this answer be reused?').selectOption('company:');
+  await settings.getByRole('textbox', { name: 'Company name', exact: true }).fill('Contoso Labs');
+  await settings.getByLabel('Test another company or application').check();
+  await settings.getByLabel('Example company', { exact: true }).fill('Different employer');
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would skip', { exact: true })).toBeVisible();
+  await expect(settings.getByText('This example is outside where you chose to reuse the answer.', { exact: true })).toBeVisible();
+  await settings.getByLabel('Example company', { exact: true }).fill('Contoso Labs');
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would autofill', { exact: true })).toBeVisible();
+  await settings.setViewportSize({ width: 1000, height: 950 });
+  await shot(settings, 'guided-answer-matching');
+  // Trying an invalid example must not block saving a valid actual answer.
+  await settings.getByLabel('Example application URL', { exact: true }).fill('invalid example');
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Would skip', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Save answer', exact: true }).click();
+  const card = settings.getByRole('listitem').filter({ hasText: 'Which exam result applies?' });
+  await expect(card).toBeVisible();
+  await settings.reload();
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await settings.getByText('Improve future matching', { exact: true }).click();
+  await expect(settings.getByLabel('Question wording 1', { exact: true })).toHaveValue('Which exam result applies to you?');
+  await expect(settings.getByLabel('Answer label 1', { exact: true })).toHaveValue('Did not take');
+  await settings.getByLabel('Use a value from my profile', { exact: false }).check();
+  await settings.getByLabel('Use this profile detail', { exact: false }).selectOption('phone');
+  await expect(settings.getByText('Current value:', { exact: false })).toContainText('415-555-0100');
+  await expect(settings.getByLabel('Answer label 1', { exact: true })).toHaveCount(0);
+  await settings.getByRole('button', { name: 'Save answer', exact: true }).click();
+  await expect(card).toContainText('Profile → Phone');
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(settings.getByLabel('Use this profile detail', { exact: false })).toHaveValue('phone');
+  await expect(settings.getByText('Current value:', { exact: false })).toContainText('415-555-0100');
+  await settings.getByText('Try a variation', { exact: true }).click();
+  await settings.getByLabel('Question to try').fill('Which exam result applies?');
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Answer: 415-555-0100', { exact: true })).toBeVisible();
+  const profileSettings = await context.newPage();
+  await profileSettings.goto(`chrome-extension://${extensionId}/options.html#profile`);
+  await profileSettings.getByRole('textbox', { name: 'Phone', exact: true }).fill('415-555-0111');
+  await profileSettings.getByRole('button', { name: 'Save profile', exact: true }).click();
+  await expect(settings.getByText('Current value:', { exact: false })).toContainText('415-555-0111');
+  await expect(settings.getByText('Would autofill', { exact: true })).toHaveCount(0);
+  await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
+  await expect(settings.getByText('Answer: 415-555-0111', { exact: true })).toBeVisible();
+  await profileSettings.close();
+  await settings.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await card.getByRole('button', { name: 'Remove', exact: true }).click();
+});
+
+test('upgrades the actual old IndexedDB schema without losing legacy answers or profile data', async () => {
+  // This is the isolated fictional browser profile created by beforeAll, never the person's Chrome profile.
+  const raw = await context.newPage();
+  await raw.goto(`chrome-extension://${extensionId}/manifest.json`);
+  for (const page of context.pages()) if (page !== raw) await page.close();
+  const cdp = await context.newCDPSession(raw);
+  await cdp.send('ServiceWorker.enable');
+  await cdp.send('ServiceWorker.stopAllWorkers');
+  await raw.evaluate(async () => {
+    await new Promise<void>((resolve, reject) => { const r = indexedDB.deleteDatabase('job-autofill'); r.onsuccess = () => resolve(); r.onerror = () => reject(r.error); r.onblocked = () => reject(new Error('Old database is still open')); });
+    // Dexie version 2 corresponds to native IndexedDB version 20.
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('job-autofill', 20);
+      request.onupgradeneeded = () => {
+        const d = request.result;
+        d.createObjectStore('profile', { keyPath: 'id' });
+        d.createObjectStore('files', { keyPath: 'kind' });
+        const answers = d.createObjectStore('savedAnswers', { keyPath: 'id', autoIncrement: true }); answers.createIndex('key', 'key', { unique: true }); answers.createIndex('lastUsed', 'lastUsed');
+        const fields = d.createObjectStore('fieldMappings', { keyPath: 'id', autoIncrement: true }); fields.createIndex('[platform+label]', ['platform', 'label']);
+        const apps = d.createObjectStore('applications', { keyPath: 'id', autoIncrement: true }); for (const k of ['jobKey', 'status', 'tabId', 'filledAt']) apps.createIndex(k, k);
+        const remembered = d.createObjectStore('rememberedMappings', { keyPath: 'id', autoIncrement: true }); remembered.createIndex('scope', 'scope'); remembered.createIndex('updatedAt', 'updatedAt');
+        remembered.add({ id: 7, schemaVersion: 1, updatedAt: 10, question: 'Legacy channel', aliases: ['Approved old alias'], scope: 'lever', target: { kind: 'answer', value: 'Referral' } });
+        request.transaction!.objectStore('profile').put({ id: 'me', firstName: 'Migration', lastName: 'Fixture' });
+      };
+      request.onsuccess = () => { request.result.close(); resolve(); }; request.onerror = () => reject(request.error);
+    });
+  });
+  const settings = await context.newPage();
+  await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
+  await expect(settings.getByRole('listitem').filter({ hasText: 'Legacy channel' })).toContainText('Referral');
+  const result = await raw.evaluate(() => new Promise<any>((resolve, reject) => {
+    const request = indexedDB.open('job-autofill');
+    request.onsuccess = () => {
+      const d = request.result;
+      const tx = d.transaction(['rememberedMappings', 'profile']);
+      const record = tx.objectStore('rememberedMappings').get(7), profile = tx.objectStore('profile').get('me');
+      tx.oncomplete = () => { resolve({ version: d.version, record: record.result, profile: profile.result }); d.close(); };
+    }; request.onerror = () => reject(request.error);
+  }));
+  expect(result).toMatchObject({ version: 30, record: { id: 7, schemaVersion: 2, target: { value: 'Referral' }, aliases: ['Approved old alias'] }, profile: { firstName: 'Migration' } });
+  expect(result.record.meaning).toBeUndefined();
 });

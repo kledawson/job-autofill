@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wxt",
-    "build": "wxt build",
+    "build": "wxt build && node ../../scripts/sync-legacy-extension.mjs",
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
     "test": "vitest run",
