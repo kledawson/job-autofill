@@ -58,6 +58,25 @@ describe('capture and semantic reuse', () => {
     return new FillSession(document, ADAPTERS.greenhouse, d);
   }
   const choice = '<label for="custom">Education selection*</label><select id="custom" required><option value="">Select…</option><option>BS</option><option>BA</option></select>';
+  it('leaves redrawn saved-answer fields empty during watching and keeps them teachable', async () => {
+    const mapping = { ...answer, question: 'Education selection', meaning: undefined };
+    const session = setup(choice, [mapping]);
+    await session.run();
+    const oldField = document.querySelector('select') as HTMLSelectElement;
+    expect(oldField.value).toBe('BS');
+    const redrawn = oldField.cloneNode(true) as HTMLSelectElement;
+    redrawn.value = '';
+    oldField.replaceWith(redrawn);
+    expect(await session.processNew(true)).toBe(0);
+    expect(redrawn.value).toBe('');
+    const review = session.verify().reviewFields!.find(f => f.label === 'Education selection')!;
+    expect(review.token).toEqual(expect.any(String));
+    redrawn.value = 'BA';
+    expect(session.captureAnswer(review.token, review.label).value).toBe('BA');
+    // A new explicit fill still loads saved answers on a blank form.
+    await setup(choice, [mapping]).run();
+    expect((document.querySelector('select') as HTMLSelectElement).value).toBe('BS');
+  });
   it('retains manually answered questions and captures only the selected answer', async () => {
     const session = setup(choice + '<label for="other">Unrelated question*</label><input id="other" required>');
     const result = await session.run();
