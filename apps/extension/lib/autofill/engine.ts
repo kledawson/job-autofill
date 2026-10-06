@@ -2,6 +2,7 @@ import type { AnswerRequest, FieldQuestion, FillContext, Result } from '../messa
 import { AI_MAPPABLE_KEYS } from '../field-map';
 import { payloadToFile } from '../messages';
 import type { Adapter, JobInfo } from './adapters';
+import { readJobDetails, type JobDetails } from '../job-details';
 import { classifyField, type Classification, type ProfileKey } from './classify';
 import {
   clickSafely,
@@ -45,6 +46,8 @@ export interface EngineDeps {
   context: FillContext;
   answer(req: AnswerRequest): Promise<Result<{ answer: string }>>;
   jobDescription(info: JobInfo): Promise<string>;
+  /** Location and work model for postings whose page doesn't show them. Optional. */
+  jobDetails?(remote: NonNullable<JobInfo['remote']>): Promise<JobDetails>;
   /** Asks AI which profile fact (if any) answers each question no rule recognised. Optional. */
   mapFields?(fields: FieldQuestion[]): Promise<Result<{ keys: (string | null)[] }>>;
   rememberedMappings?(questions: string[]): Promise<RememberedMapping[]>;
@@ -95,6 +98,8 @@ export class FillSession {
   private records = new Map<HTMLElement, FieldRecord>();
   private jobInfo: JobInfo;
   private description: string | null = null;
+  private details: JobDetails = { location: '', workMode: '', pay: '' };
+  private detailsFetched = false;
   private busy = false;
   private observer?: MutationObserver;
   private stopWatching?: () => void;
@@ -117,6 +122,30 @@ export class FillSession {
 
   get info(): JobInfo {
     return this.jobInfo;
+  }
+
+  /** Where the job is, whether it is remote, and its pay. Keeps what an earlier step found when a later page shows less. */
+  async jobDetails(): Promise<JobDetails> {
+    const merge = (next: Partial<JobDetails>) => {
+      this.details = {
+        location: next.location || this.details.location,
+        workMode: next.workMode || this.details.workMode,
+        pay: next.pay || this.details.pay,
+      };
+    };
+    const read = () => merge(readJobDetails(this.doc, this.description ?? this.jobInfo.description, this.jobInfo.role));
+    read();
+    const remote = this.jobInfo.remote;
+    if (remote && this.deps.jobDetails && !this.detailsFetched && !(this.details.location && this.details.workMode && this.details.pay)) {
+      this.detailsFetched = true;
+      merge((await this.deps.jobDetails(remote).catch(() => null)) ?? {});
+    }
+    if (!this.details.pay) {
+      // The posted range is often only in the description, which some platforms fetch separately.
+      await this.loadDescription().catch(() => undefined);
+      read();
+    }
+    return this.details;
   }
 
   /** Only an explicit request reads an answer; unresolved metadata contains no values. */

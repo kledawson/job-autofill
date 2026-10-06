@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
 import { ALL_SITES, ATS_MATCHES } from './lib/platforms';
@@ -8,7 +9,15 @@ import { ALL_SITES, ATS_MATCHES } from './lib/platforms';
 const EXTENSION_KEY =
   'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4ULs90+KZc+yY/5E8mcP/jIo8fil7rKNr83qz4/mG8/JVfmoh/WU4W4T5LXAYzAzUjpkCvPzwPNEzfLflwSbWdGsptUQw1CO6RnfMx1ZcmKQbiwMDwJIvLgtxRYG2yvKmr2CaZLFXSJW4zmLzf7rdOfTAWRLXCT+aonlie0VFmOlU7O5T6xZZ5PaMiMdm0eXbRLN8zc0TELl3nMJoLZrCOcAatNZB1KCy3t4i9E22785U1E4iSH2VJ76qbOqyAKDF1ySPg4mjcsAZfc2yN/pwaNeT3uKBcdL+n7imMprN+Tbwgj1MENSQKTZYQ5y5sDcywZdrBp1NsHdy8DAyOPJeQIDAQAB';
 
-// Google OAuth client ID (type "Chrome Extension") for Sheets sync. See README.
+// The config runs before WXT loads .env, so read it here (Node 22+). Variables already set win.
+try {
+  process.loadEnvFile(fileURLToPath(new URL('./.env', import.meta.url)));
+} catch {
+  // no .env file
+}
+
+// Google OAuth client ID (type "Chrome Extension") for Sheets sync. The spreadsheets scope lets the
+// extension write to a sheet the person links; drive.file would only reach files the extension created. See README.
 const GOOGLE_CLIENT_ID = process.env.WXT_GOOGLE_CLIENT_ID ?? '';
 
 export default defineConfig({
@@ -44,7 +53,7 @@ export default defineConfig({
       ? {
           oauth2: {
             client_id: GOOGLE_CLIENT_ID,
-            scopes: ['https://www.googleapis.com/auth/drive.file'],
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
           },
         }
       : {}),

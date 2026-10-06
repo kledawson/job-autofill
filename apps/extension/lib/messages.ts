@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import type { Platform, Profile } from './types';
 import type { PublicSettings } from './settings';
+import type { JobDetails } from './job-details';
 import type { ResumeDraft } from './resume';
 import type { CapturedAnswer, MappingDraft, RememberedMapping, ReviewField, SavedField } from './remembered-mappings';
 
@@ -72,12 +73,17 @@ export interface BackgroundMessages {
       reviewFields?: ReviewField[];
       memoryQuestions?: string[];
       usedMappingIds?: number[];
+      location?: string;
+      workMode?: string;
+      basePay?: string;
     };
     res: {};
   };
   /** Replaces this tab's status in the side panel. */
   setPageStatus: { req: { status: PageStatus; origin: string }; res: {} };
   jobDescription: { req: { platform: 'lever' | 'ashby'; org: string; jobId: string }; res: string };
+  /** Location and work model from the platform's public posting API, for apply pages that don't show them. */
+  jobDetails: { req: { platform: 'lever' | 'ashby'; org: string; jobId: string }; res: JobDetails };
   /** Tabs opened from a pasted link are marked pending; `commit` consumes the mark. */
   claimPendingFill: { req: { commit: boolean }; res: { fill: boolean } };
   // From extension pages
@@ -105,7 +111,9 @@ export interface BackgroundMessages {
     req: { text?: string; sections?: ('education' | 'experience' | 'skills')[] };
     res: Result<{ draft: ResumeDraft }>;
   };
-  connectSheets: { req: {}; res: Result<{ sheetUrl: string }> };
+  /** Links the spreadsheet at `url` after checking the signed-in Google account can open it. */
+  connectSheets: { req: { url: string }; res: Result<{ sheetUrl: string }> };
+  disconnectSheets: { req: {}; res: {} };
   getPublicSettings: { req: {}; res: PublicSettings };
   deleteAllData: { req: {}; res: {} };
 }

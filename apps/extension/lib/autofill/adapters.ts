@@ -1,6 +1,7 @@
 import type { Platform, Profile } from '../types';
 import type { AdapterKeys } from './classify';
 import { addEntries } from './entries';
+import { findJobPosting } from '../job-details';
 
 export interface JobInfo {
   company: string;
@@ -181,30 +182,15 @@ function stripHtml(html: string): string {
 const meta = (doc: Document, prop: string) =>
   (doc.querySelector(`meta[property="${prop}"], meta[name="${prop}"]`)?.getAttribute('content') ?? '').trim();
 
-/** schema.org JobPosting data, which most careers sites embed for search engines. */
 function jobPostingData(doc: Document): { title: string; company: string; description: string } | null {
-  const visit = (node: any): any => {
-    if (!node || typeof node !== 'object') return null;
-    if (Array.isArray(node)) return node.map(visit).find(Boolean) ?? null;
-    const type = node['@type'];
-    if (type === 'JobPosting' || (Array.isArray(type) && type.includes('JobPosting'))) return node;
-    return visit(node['@graph']);
+  const job = findJobPosting(doc);
+  if (!job) return null;
+  const org = job.hiringOrganization;
+  return {
+    title: String(job.title ?? '').trim(),
+    company: String((typeof org === 'string' ? org : org?.name) ?? '').trim(),
+    description: stripHtml(String(job.description ?? '')).slice(0, 8000),
   };
-  for (const script of Array.from(doc.querySelectorAll('script[type="application/ld+json"]'))) {
-    try {
-      const job = visit(JSON.parse(script.textContent ?? ''));
-      if (!job) continue;
-      const org = job.hiringOrganization;
-      return {
-        title: String(job.title ?? '').trim(),
-        company: String((typeof org === 'string' ? org : org?.name) ?? '').trim(),
-        description: stripHtml(String(job.description ?? '')).slice(0, 8000),
-      };
-    } catch {
-      // Malformed JSON-LD is common; ignore it.
-    }
-  }
-  return null;
 }
 
 /** "careers.acme.com" → "Acme". */
