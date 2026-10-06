@@ -15,8 +15,9 @@ import {
 import { detectPlatform, platformFor, isWebUrl, jobKey, toApplicationUrl } from '@/lib/platforms';
 import { clampToLimit, renderPrompt } from '@/lib/prompt';
 import { getSettings, updateSettings, type PublicSettings } from '@/lib/settings';
-import { appendApplication, createTrackingSheet, sheetsConfigured, updateApplication } from '@/lib/sheets';
+import { appendApplication, openSheet, parseSheetUrl, sheetsConfigured } from '@/lib/sheets';
 import type { Application, StoredFile } from '@/lib/types';
+import { formatLocation, formatPay, normalizeWorkMode, WORK_MODELS } from '@/lib/job-details';
 import { questionMeaning, sameMeaning } from '@/lib/answer-semantics';
 
 type Sender = Browser.runtime.MessageSender;
@@ -53,20 +54,47 @@ async function refreshBadge() {
   await browser.action.setBadgeBackgroundColor({ color: '#4f46e5' });
 }
 
-/** Writes the application to the sheet; failures are recorded, never thrown. */
+/**
+ * Adds a submitted application to the linked sheet, once. Failures are recorded on the
+ * application (shown in the side panel with a retry), never thrown.
+ */
+const syncingSheet = new Set<number>();
+
 async function syncSheet(id: number) {
+  if (syncingSheet.has(id)) return;
+  syncingSheet.add(id);
+  try {
+    await writeSheetRow(id);
+  } finally {
+    syncingSheet.delete(id);
+  }
+}
+
+async function writeSheetRow(id: number) {
+  console.info(`[Job Autofill] adding application ${id} to the sheet`);
   const { sheetId } = await getSettings();
   const app = await db.applications.get(id);
-  if (!sheetId || !app || !sheetsConfigured()) return;
+  if (!app || app.status !== 'Submitted') return;
+  if (app.sheetRow) {
+    console.info(`[Job Autofill] application ${id} is already in the sheet (row ${app.sheetRow})`);
+    return;
+  }
+  const skip = !sheetId
+    ? 'No sheet is connected. Connect one in Settings → Connections, then retry.'
+    : !sheetsConfigured()
+      ? 'Google sign-in is not configured in this build.'
+      : '';
+  if (skip) {
+    console.info(`[Job Autofill] sheet row skipped: ${skip}`);
+    await db.applications.update(id, { sheetError: skip });
+    return;
+  }
   try {
-    if (app.sheetRow) {
-      await updateApplication(sheetId, app);
-      await db.applications.update(id, { sheetError: undefined });
-    } else {
-      const sheetRow = await appendApplication(sheetId, app);
-      await db.applications.update(id, { sheetRow, sheetError: undefined });
-    }
+    const sheetRow = await appendApplication(sheetId, app);
+    console.info(`[Job Autofill] application ${id} added to the sheet at row ${sheetRow}`);
+    await db.applications.update(id, { sheetRow, sheetError: undefined });
   } catch (err) {
+    console.info('[Job Autofill] sheet write failed', err);
     await db.applications.update(id, { sheetError: errorText(err) });
   }
 }
@@ -397,15 +425,15 @@ const handlers: Handlers = {
       missingQuestions: req.missingQuestions,
       reviewFields: req.reviewFields === undefined ? undefined : parseReviewFields(req.reviewFields),
       memoryQuestions,
+      location: (typeof req.location === 'string' && formatLocation(req.location)) || app.location,
+      workMode: WORK_MODELS.find((m) => m === req.workMode) ?? app.workMode,
+      basePay: (typeof req.basePay === 'string' && req.basePay.trim().length <= 60 && req.basePay.trim()) || app.basePay,
       ...(first ? { status: 'Ready for review' as const, filledAt: Date.now() } : {}),
     });
     const updated = (await db.applications.get(app.id))!;
     if (first) {
       await notifyReady(updated);
       await refreshBadge();
-      await syncSheet(app.id);
-    } else if (updated.aiAnswers !== app.aiAnswers && updated.sheetRow) {
-      await syncSheet(app.id);
     }
     return {};
   },
@@ -424,6 +452,32 @@ const handlers: Handlers = {
       return (job?.descriptionPlain ?? '').slice(0, 8000);
     } catch {
       return '';
+    }
+  },
+
+  async jobDetails({ platform, org, jobId }, sender) {
+    const none = { location: '', workMode: '' as const, pay: '' };
+    if (sender.id !== browser.runtime.id) return none;
+    try {
+      if (platform === 'lever') {
+        const res = await fetch(`https://api.lever.co/v0/postings/${encodeURIComponent(org)}/${encodeURIComponent(jobId)}`);
+        const job = await res.json();
+        const range = job.salaryRange;
+        const hourly = /hour/i.test(String(range?.interval ?? ''));
+        const pay =
+          Number(range?.min) > 0 && Number(range?.max) >= Number(range?.min)
+            ? formatPay({ low: Number(range.min), high: Number(range.max), hourly, currency: range.currency && range.currency !== 'USD' ? String(range.currency) : '' })
+            : '';
+        return { location: formatLocation(String(job.categories?.location ?? '')), workMode: normalizeWorkMode(String(job.workplaceType ?? '')), pay };
+      }
+      const res = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(org)}?includeCompensation=true`);
+      const board = await res.json();
+      const job = (board.jobs ?? []).find((j: any) => j.id === jobId);
+      const workMode = normalizeWorkMode(String(job?.workplaceType ?? '')) || (job?.isRemote ? 'Remote' : '');
+      const summary = String(job?.compensation?.compensationTierSummary ?? '').split('•')[0]!.trim();
+      return { location: formatLocation(String(job?.location ?? '')), workMode, pay: summary.length <= 60 ? summary : '' };
+    } catch {
+      return none;
     }
   },
 
@@ -487,8 +541,11 @@ const handlers: Handlers = {
   async markSubmitted({ applicationId }) {
     const app = await db.applications.get(applicationId);
     if (!app) return { ok: false, error: 'Application not found.' };
-    await db.applications.update(applicationId, { status: 'Submitted', submittedAt: Date.now() });
-    await refreshBadge();
+    // Calling this again for a submitted application only retries a failed sheet write.
+    if (app.status !== 'Submitted') {
+      await db.applications.update(applicationId, { status: 'Submitted', submittedAt: Date.now() });
+      await refreshBadge();
+    }
     await syncSheet(applicationId);
     return { ok: true };
   },
@@ -530,26 +587,27 @@ const handlers: Handlers = {
     }
   },
 
-  async connectSheets() {
+  async connectSheets({ url }) {
     if (!sheetsConfigured()) {
       return {
         ok: false,
         error: 'Google sign-in is not set up in this build. Add a Google OAuth client ID (see README) and rebuild.',
       };
     }
+    const sheetId = parseSheetUrl(url);
+    if (!sheetId) return { ok: false, error: 'That is not a Google Sheets link. It should look like https://docs.google.com/spreadsheets/d/…' };
     try {
-      const settings = await getSettings();
-      if (settings.sheetId) return { ok: true, sheetUrl: settings.sheetUrl };
-      const sheet = await createTrackingSheet();
-      await updateSettings({ sheetId: sheet.id, sheetUrl: sheet.url });
-      // Backfill applications filled before the sheet existed.
-      for (const app of await db.applications.toArray()) {
-        if (app.id && app.status !== 'Filling') await syncSheet(app.id);
-      }
+      const sheet = await openSheet(sheetId, true);
+      await updateSettings({ sheetId, sheetUrl: sheet.url });
       return { ok: true, sheetUrl: sheet.url };
     } catch (err) {
-      return { ok: false, error: errorText(err) };
+      return { ok: false, error: `Could not open that sheet with your Google account: ${errorText(err)}` };
     }
+  },
+
+  async disconnectSheets() {
+    await updateSettings({ sheetId: '', sheetUrl: '' });
+    return {};
   },
 
   async getPublicSettings() {

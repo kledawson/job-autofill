@@ -285,6 +285,7 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
 }
 
 export function SheetsSection({ settings }: { settings: PublicSettings | null }) {
+  const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   if (!settings) return null;
@@ -292,38 +293,59 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
   async function connect() {
     setBusy(true);
     setError('');
-    const res = await sendToBackground('connectSheets', {});
-    if (!res.ok) setError(res.error);
+    const res = await sendToBackground('connectSheets', { url: link });
+    if (res.ok) setLink('');
+    else setError(res.error);
     setBusy(false);
   }
 
   return (
     <Card
       title="Google Sheets tracking"
-      description="Adds a row to a “Job Applications” sheet in your Drive for each application. The extension can only see the sheet it creates."
+      description="When you click “Mark as submitted”, the extension adds one row to your sheet in the first empty row of your sheet, filling the columns it recognizes."
     >
-      {settings.sheetId ? (
-        <div className="flex flex-wrap items-center gap-3">
-          <Notice tone="success">Connected.</Notice>
-          <a className="text-sm font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
-            Open tracking sheet
-          </a>
-        </div>
-      ) : settings.sheetsAvailable ? (
-        <Button onClick={connect} disabled={busy}>
-          {busy ? 'Connecting…' : 'Sign in with Google and create sheet'}
-        </Button>
-      ) : (
-        <Notice tone="warn">
-          Google sign-in is not configured in this build, so tracking is off. Filling still works. See the README to add
-          an OAuth client ID.
-        </Notice>
-      )}
-      {error && (
-        <div className="mt-3">
-          <Notice tone="error">{error}</Notice>
-        </div>
-      )}
+      <div className="space-y-4">
+        {!settings.sheetsAvailable && (
+          <Notice tone="warn">
+            Google sign-in is not configured in this build, so tracking is off until you add an OAuth client ID. Filling still
+            works. See the README.
+          </Notice>
+        )}
+        {settings.sheetId ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Notice tone="success">Connected.</Notice>
+            <a className="text-sm font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
+              Open tracking sheet
+            </a>
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                await sendToBackground('disconnectSheets', {});
+              }}
+            >
+              Disconnect
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <Field
+              label="Google Sheets link"
+              hint="Create a blank sheet in Google Sheets, then paste its link. You’ll be asked to let the extension edit your spreadsheets."
+            >
+              <Input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/…" autoComplete="off" />
+            </Field>
+            <Button onClick={connect} disabled={busy || !link.trim() || !settings.sheetsAvailable}>
+              {busy ? 'Connecting…' : 'Connect sheet'}
+            </Button>
+          </div>
+        )}
+        <p className="text-xs text-slate-500">
+          The extension reads your sheet’s header row and fills the columns it recognizes: company, position, date
+          applied (and “Found”), link, location, work model, base pay, and application status (set to “Applied”). Other
+          columns are left alone. An empty sheet gets these headers added.
+        </p>
+        {error && <Notice tone="error">{error}</Notice>}
+      </div>
     </Card>
   );
 }

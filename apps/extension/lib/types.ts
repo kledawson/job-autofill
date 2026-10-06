@@ -207,8 +207,14 @@ export interface Application {
   reviewFields?: import('./remembered-mappings').ReviewField[];
   /** Current eligible questions, including completed fields; never contains page answers. */
   memoryQuestions?: string[];
+  /** "City, State" read from the posting; blank when the page doesn't say. */
+  location?: string;
+  workMode?: 'Remote' | 'Hybrid' | 'On-site';
+  /** Posted pay range as text, blank when the posting has none. */
+  basePay?: string;
   frameId?: number;
   topUrl?: string;
+  /** Set once the submitted application's row is in the sheet; prevents duplicate rows. */
   sheetRow?: number;
   sheetError?: string;
 }

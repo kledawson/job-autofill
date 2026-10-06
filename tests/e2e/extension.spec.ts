@@ -233,7 +233,9 @@ test('onboarding reads the resume into the profile, then collects the rest', asy
   await page.getByLabel('API key').fill('test-key');
   await page.getByRole('button', { name: 'Save and test' }).click();
   await expect(page.getByText('Connected. Gemini will write your free responses.')).toBeVisible();
-  await expect(page.getByText(/Google sign-in is not configured/)).toBeVisible();
+  // Sheets: the link box shows whether or not this build has a Google client ID; nothing can connect without a link.
+  await expect(page.getByLabel('Google Sheets link')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Connect sheet' })).toBeDisabled();
   await shot(page, 'onboarding-connect');
   await page.getByRole('button', { name: 'Continue' }).click();
 

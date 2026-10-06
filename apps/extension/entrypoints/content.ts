@@ -50,6 +50,7 @@ export default defineContentScript({
           answer: (req) => sendToBackground('generateAnswer', req),
           jobDescription: async (info) =>
             info.remote ? sendToBackground('jobDescription', info.remote) : ((await adapter.fetchDescription?.(document)) ?? ''),
+          jobDetails: (remote) => sendToBackground('jobDetails', remote),
           mapFields: (fields) => sendToBackground('mapFields', { fields }),
           matchSavedAnswers: async (fields) => {
             const res = await sendToBackground('matchSavedAnswers', { fields });
@@ -126,6 +127,7 @@ export default defineContentScript({
       if (summary.aiNote) lines.push(summary.aiNote);
       if (adapter.multiStep) lines.push('Review this page, then continue. Each next page is filled when it opens.');
       showStatus({ title: 'Ready for review', lines, tone: 'done' });
+      const details = await session.jobDetails().catch(() => null);
       await sendToBackground('fillFinished', {
         applicationId: currentId,
         company: session.info.company,
@@ -137,6 +139,9 @@ export default defineContentScript({
         reviewFields: summary.reviewFields,
         memoryQuestions: summary.memoryQuestions,
         usedMappingIds: summary.usedMappingIds,
+        location: details?.location,
+        workMode: details?.workMode,
+        basePay: details?.pay,
       });
     }
 

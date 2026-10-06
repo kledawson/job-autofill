@@ -193,7 +193,7 @@ export default function SidePanel() {
       </section>
 
       {current ? (
-        <CurrentApplication key={current.id} app={current} pageStatus={pageStatus} />
+        <CurrentApplication key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} />
       ) : (
         pageStatus && (
           <section className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
@@ -253,7 +253,7 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
   );
 }
 
-function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus: PageStatus | null }) {
+function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string }) {
   const [showMissing, setShowMissing] = useState(true);
   const [error, setError] = useState('');
   const [teaching, setTeaching] = useState<{ capture: CapturedAnswer; initial: MappingDraft; id?: number }>();
@@ -361,7 +361,31 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
         </>
       )}
       {app.status === 'Filling' && <p className="text-slate-500">Filling… AI answers can take a few seconds each.</p>}
-      {app.sheetError && <Notice tone="warn">Sheet not updated: {app.sheetError}</Notice>}
+      {app.status === 'Submitted' && app.sheetRow && sheetUrl && (
+        <Notice tone="success">
+          Added to your sheet (row {app.sheetRow}).{' '}
+          <a className="underline" href={`${sheetUrl}#range=A${app.sheetRow}`} target="_blank" rel="noreferrer">
+            Open sheet
+          </a>
+        </Notice>
+      )}
+      {app.sheetError && (
+        <>
+          <Notice tone="warn">Sheet not updated: {app.sheetError}</Notice>
+          {app.status === 'Submitted' && (
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={async () => {
+                const res = await sendToBackground('markSubmitted', { applicationId: app.id! });
+                if (!res.ok) setError(res.error);
+              }}
+            >
+              Retry adding to sheet
+            </Button>
+          )}
+        </>
+      )}
       {error && <Notice tone="error">{error}</Notice>}
     </section>
   );

@@ -30,11 +30,23 @@ Sheets sync needs a Google OAuth client. Filling works without it.
 
 1. In Google Cloud Console, create a project and enable the **Google Sheets API**.
 2. Configure the OAuth consent screen (External, add yourself as a test user) with the
-   `https://www.googleapis.com/auth/drive.file` scope.
+   `https://www.googleapis.com/auth/spreadsheets` scope.
 3. Create an OAuth client ID of type **Chrome Extension** with item ID `kjepjmmbimmbpdfinkippakkmhbglccc`.
 4. Copy `apps/extension/.env.example` to `apps/extension/.env`, set `WXT_GOOGLE_CLIENT_ID`, and run `npm run build` again.
 
-Then use **Sign in with Google and create sheet** in onboarding or Settings → Connections.
+Then, in onboarding or Settings → Connections → Google Sheets tracking:
+
+Create a sheet in Google Sheets, paste its link, and choose **Connect sheet** and approve access. There is nothing
+else to configure: the sheet's headers decide what is saved.
+
+When you click **Mark as submitted** in the side panel, one row is added to the first tab, in the topmost row with
+no company or position, and the side panel shows the row number with a link. The extension reads the header row and
+fills the columns it recognizes, whatever their order: company name, position, date applied (and a "Found" column,
+which gets the same date), link, location, work model, base pay (the pay range posted on the job page, when it
+has one), and application status (set to "Applied"). Other columns, such as Referral or Next action, and cells
+such as dropdowns are left alone, and a detail with no matching column is skipped. If the sheet is empty,
+those headers are written first. Nothing is written when an application is only filled. If the write fails, the
+side panel offers **Retry adding to sheet**.
 
 ## Gemini (optional)
 
