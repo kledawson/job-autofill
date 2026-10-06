@@ -5,6 +5,7 @@ import { assertNoMappingConflict, normalizeQuestion, parseMappingDraft, SavedAns
 import { bestDegreeOption, bestOption, bestRememberedOption, isPlaceholderOption } from './autofill/match';
 import { valueFor } from './autofill/values';
 import { platformFor } from './platforms';
+import { resolveRememberedSelections } from './selection-matching';
 
 /** Shared by the actual writer and local preview. Profile facts are positive, literal responses are not. */
 export function rememberedChoice(mapping: MappingDraft, candidates: string[], label: string) {
@@ -61,10 +62,10 @@ export function previewContextFor(scope: MappingScope, current?: MappingContext)
   return { company: scope.startsWith('company:') ? scope.slice(8) : 'Example company', url, platform: platformFor(url) };
 }
 
-export interface AnswerPreview { outcome: 'fill' | 'confirm' | 'skip'; reason: string; answer?: string }
+export interface AnswerPreview { outcome: 'fill' | 'confirm' | 'skip'; reason: string; answer?: string; answers?: string[] }
 /** Uses the production index and option rules; does not save, read a page or contact AI. */
 export function previewSavedAnswer(raw: MappingDraft, label: string, options: string[] | null, context: MappingContext,
-  profile: Profile | undefined, records: RememberedMapping[], editingId?: number): AnswerPreview {
+  profile: Profile | undefined, records: RememberedMapping[], editingId?: number, multiple = false): AnswerPreview {
   try {
     const url = new URL(context.url);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Enter an application URL starting with https:// or http://.');
@@ -74,13 +75,18 @@ export function previewSavedAnswer(raw: MappingDraft, label: string, options: st
     // Saving an existing primary question updates that record, as in the database transaction.
     const existingId = editingId ?? records.find(m => normalizeQuestion(m.question) === normalizeQuestion(draft.question) && m.scope === draft.scope)?.id;
     assertNoMappingConflict(draft, records, existingId);
-    const record: RememberedMapping = { ...draft, schemaVersion: 2, id: existingId ?? Math.max(0, ...records.map(m => m.id)) + 1, updatedAt: 0 };
+    const record: RememberedMapping = { ...draft, schemaVersion: 3, id: existingId ?? Math.max(0, ...records.map(m => m.id)) + 1, updatedAt: 0 };
     if (scopeRank(record.scope, context) < 0) return { outcome: 'skip', reason: 'This example is outside where you chose to reuse the answer.' };
     const match = new SavedAnswerIndex([...records.filter(m => m.id !== record.id), record], context)
-      .match({ label, kind: options ? 'select' : 'text', options: options ?? [] });
+      .match({ label, kind: options ? 'select' : 'text', options: options ?? [], selectionMode: multiple && options ? 'multiple' : 'single' });
     if (match.suggestionId === record.id) return { outcome: 'confirm', reason: 'The question is similar, but this wording has not been approved. Confirm it on the application or add it as another wording.' };
-    if (!match.mapping) return { outcome: 'skip', reason: match.reason.startsWith('Conflicting') ? 'More than one saved answer matches. Edit the conflicting answers before reusing this one.' : 'This question does not match the original question, approved variations, or a recognized equivalent meaning.' };
-    if (match.mapping.id !== record.id) return { outcome: 'skip', reason: 'Another saved answer has priority for this example. Check your other saved answers and where they apply.' };
+    if (!match.mapping) return { outcome: 'skip', reason: match.reason.startsWith('Conflicting') ? 'More than one memory matches. Edit the conflicting answers before reusing this one.' : 'This question does not match the original question, approved variations, or a recognized equivalent meaning.' };
+    if (match.mapping.id !== record.id) return { outcome: 'skip', reason: 'Another memory has priority for this example. Check your other memories and where they apply.' };
+    if (draft.target.kind === 'answers') {
+      if (!options || !multiple) return { outcome: 'skip', reason: 'Choose a multiple-selection example and add its choices.' };
+      const plan = resolveRememberedSelections(draft.target.selections, options);
+      return plan.ok ? { outcome: 'fill', answers: plan.labels, answer: plan.labels.join(' · '), reason: plan.reason } : { outcome: 'skip', reason: plan.reason };
+    }
     if (draft.target.kind === 'profile' && !profile) return { outcome: 'skip', reason: 'Your profile is still loading. Try again in a moment.' };
     const candidates = draft.target.kind === 'answer' ? [draft.target.value] : valueFor(draft.target.key, profile!, { label, options: options ?? [], company: context.company });
     if (!candidates?.[0]) return { outcome: 'skip', reason: 'This profile detail has no reusable value. Add it in Settings → Profile.' };

@@ -58,6 +58,15 @@ describe('capture and semantic reuse', () => {
     return new FillSession(document, ADAPTERS.greenhouse, d);
   }
   const choice = '<label for="custom">Education selection*</label><select id="custom" required><option value="">Select…</option><option>BS</option><option>BA</option></select>';
+  it('reports completed eligible question labels for memory management without page answers or upload fields', async () => {
+    const session = setup('<label for="email">Email*</label><input id="email" type="email" required><label for="upload">Academic transcript</label><input id="upload" type="file">');
+    const result = await session.run();
+    expect(result.memoryQuestions).toContain('Email');
+    expect(result.memoryQuestions).not.toContain('Academic transcript');
+    expect(JSON.stringify(result.memoryQuestions)).not.toContain(sampleProfile().email);
+    document.querySelector('#email')!.remove();
+    expect(session.verify().memoryQuestions).not.toContain('Email');
+  });
   it('leaves redrawn saved-answer fields empty during watching and keeps them teachable', async () => {
     const mapping = { ...answer, question: 'Education selection', meaning: undefined };
     const session = setup(choice, [mapping]);
@@ -73,7 +82,7 @@ describe('capture and semantic reuse', () => {
     expect(review.token).toEqual(expect.any(String));
     redrawn.value = 'BA';
     expect(session.captureAnswer(review.token, review.label).value).toBe('BA');
-    // A new explicit fill still loads saved answers on a blank form.
+    // A new explicit fill still loads memories on a blank form.
     await setup(choice, [mapping]).run();
     expect((document.querySelector('select') as HTMLSelectElement).value).toBe('BS');
   });
@@ -89,7 +98,7 @@ describe('capture and semantic reuse', () => {
     expect(session.verify().reviewFields).not.toEqual(expect.arrayContaining([expect.objectContaining({ value: 'BS' })]));
     expect(await session.applyAnswer(review.token, capture.captureId, { ...answer, question: review.label, meaning: undefined })).toContain('kept');
   });
-  it('applies the saved answer to the one captured empty field without rerunning essays', async () => {
+  it('applies the memory to the one captured empty field without rerunning essays', async () => {
     const session = setup(choice + '<label for="other">Other empty field*</label><input id="other" required>');
     const result = await session.run();
     const review = result.reviewFields![0]!;
@@ -126,12 +135,12 @@ describe('capture and semantic reuse', () => {
     expect(document.querySelectorAll('.select__multi-value')).toHaveLength(1);
     expect(document.querySelector('.select__multi-value__label')!.textContent).toBe('Never held a clearance');
   });
-  it('rejects multiple selected chips and changes to a chip after capture', async () => {
+  it('captures multiple selected chips and rejects later changes to a chip after capture', async () => {
     const session = setup('<label for="q">Active Security Clearance(s)*</label><div class="select__container"><div class="select__control"><input id="q" role="combobox" aria-expanded="false" required></div></div>');
     const review = (await session.run()).reviewFields![0]!;
     const control = document.querySelector('.select__control')!;
     control.insertAdjacentHTML('afterbegin', '<div class="select__multi-value">Secret</div><div class="select__multi-value">DOE Q</div>');
-    expect(() => session.captureAnswer(review.token, review.label)).toThrow('several selected');
+    expect(session.captureAnswer(review.token, review.label).values?.sort()).toEqual(['DOE Q', 'Secret']);
     Array.from(control.querySelectorAll('.select__multi-value')).find(chip => chip.textContent === 'DOE Q')!.remove();
     const captured = session.captureAnswer(review.token, review.label);
     expect(captured.value).toBe('Secret');

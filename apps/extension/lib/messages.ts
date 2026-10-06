@@ -70,6 +70,7 @@ export interface BackgroundMessages {
       missingLabels: string[];
       missingQuestions?: (string | null)[];
       reviewFields?: ReviewField[];
+      memoryQuestions?: string[];
       usedMappingIds?: number[];
     };
     res: {};
@@ -89,6 +90,8 @@ export interface BackgroundMessages {
   getRememberedMappings: { req: { questions: string[] }; res: Result<{ mappings: RememberedMapping[] }> };
   matchSavedAnswers: { req: { fields: SavedField[] }; res: Result<{ matches: { mapping: RememberedMapping | null; suggestionId?: number; reason: string }[] }> };
   capturePageAnswer: { req: { applicationId: number; token: string; suggestionId?: number }; res: Result<{ capture: CapturedAnswer; suggestion?: RememberedMapping }> };
+  capturePageAnswers: { req: { applicationId: number; tokens: string[] }; res: Result<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }> };
+  savePageAnswers: { req: { applicationId: number; entries: { token: string; captureId: string; mapping: MappingDraft }[] }; res: Result<{ count: number; note: string }> };
   applySavedAnswer: { req: { applicationId: number; token: string; captureId: string; mappingId: number }; res: Result<{ note: string }> };
   suggestAnswerWordings: { req: { question: string }; res: Result<{ aliases: string[] }> };
   saveRememberedMapping: { req: { mapping: MappingDraft; id?: number }; res: Result<{ id: number }> };
@@ -121,6 +124,9 @@ export function sendToBackground<K extends keyof BackgroundMessages>(
 /** Messages handled by the content script. */
 export type ContentMessage = { type: 'fill'; applicationId?: number } | { type: 'ping' } |
   { type: 'captureAnswer'; token: string; question: string } |
+  { type: 'captureAnswers'; fields: { token: string; label: string }[] } |
+  { type: 'validateCaptures'; entries: { token: string; captureId: string }[] } |
+  { type: 'finishRemembering'; entries: { token: string; captureId: string }[] } |
   { type: 'applyAnswer'; token: string; captureId: string; mapping: RememberedMapping };
 
 export function fileToPayload(file: { name: string; type: string }, bytes: ArrayBuffer): FilePayload {

@@ -135,17 +135,21 @@ export default defineContentScript({
         missingLabels: summary.missingLabels,
         missingQuestions: summary.missingQuestions,
         reviewFields: summary.reviewFields,
+        memoryQuestions: summary.memoryQuestions,
         usedMappingIds: summary.usedMappingIds,
       });
     }
 
     browser.runtime.onMessage.addListener((msg: ContentMessage, sender, sendResponse) => {
       if (sender.id !== browser.runtime.id) return false;
-      if (msg.type === 'captureAnswer' || msg.type === 'applyAnswer') {
+      if (msg.type === 'captureAnswer' || msg.type === 'applyAnswer' || msg.type === 'captureAnswers' || msg.type === 'validateCaptures' || msg.type === 'finishRemembering') {
         void (async () => {
           try {
             if (!session || filling) throw new Error('Click Fill this page and wait for it to finish first.');
             if (msg.type === 'captureAnswer') sendResponse({ ok: true, capture: session.captureAnswer(msg.token, msg.question) });
+            else if (msg.type === 'captureAnswers') sendResponse({ ok: true, ...session.captureAnswers(msg.fields) });
+            else if (msg.type === 'validateCaptures') { session.validateCaptures(msg.entries); sendResponse({ ok: true }); }
+            else if (msg.type === 'finishRemembering') { session.finishRemembering(msg.entries); sendResponse({ ok: true }); }
             else sendResponse({ ok: true, note: await session.applyAnswer(msg.token, msg.captureId, msg.mapping) });
           } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not read this field.' }); }
         })();

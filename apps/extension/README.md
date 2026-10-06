@@ -91,11 +91,32 @@ multiple specific choices such as BA and BS, the extension leaves that choice fo
 3. Choose **Where should this answer be reused?**: all applications, this company, this application, or this site.
    Known general facts default to all applications; unknown/employer-specific answers default narrowly.
 4. Click **Save & apply**. It saves locally and writes only that empty selected field. Existing page
-   answers are preserved. A changed/rerendered field requires a fresh capture, while the saved answer remains safe.
+   answers are preserved. A changed/rerendered field requires a fresh capture, while the memory remains safe.
 
-Use **Settings → Saved answers** to search, add, edit, or remove mappings, including questions that are
-optional or have already been answered on the page. Saving is explicit; page edits are not silently
-collected. Mapping changes affect the next fill attempt and preserve existing page answers.
+To remember several questions at once:
+
+1. Wait for autofill to finish, then answer the remaining review questions on the application page.
+2. Click **Save all answered questions (N)** above the review list. The button becomes active as you answer.
+3. Check the captured answers and where each should be reused. Uncheck any you want to leave out.
+4. Click **Remember N answered questions** once. Your page answers stay as you entered them.
+
+Only answered questions in the review list are captured, up to 100 per batch. Empty or unreadable fields
+are skipped. If an answer changes while you review, cancel and capture again. A conflicting existing
+answer stops the entire save; exclude that question or edit its record in **Settings → Memories**.
+Equivalent existing answers reuse their records without removing approved variations.
+
+After filling, **Memories for this page** in the sidebar shows relevant memories, including completed
+questions. Click **Edit** on a card, change the answer/selections or reuse scope, then **Save memory**.
+The editor opens in that card and focuses the answer. **Cancel** keeps the original memory. **Delete**
+asks for confirmation; **Keep memory** cancels deletion. Changes affect future fills and preserve the
+current page answer. **All memories** also lets you manage unrelated memories without leaving the sidebar.
+
+**Settings → Memories** offers the same card editor plus **Add memory**, answer-type filters and sorting
+by update, question or use date. Search accepts multiple words across question wordings, answers,
+alternate choice labels, profile details and companies; case and accents do not matter. Result counts,
+**Clear filters**, empty states and dismissible notifications explain each action. Filters stay disabled
+while editing so a draft cannot vanish. Existing `#knowledge` bookmarks open Memories.
+Saving is explicit; page edits are not silently collected.
 
 Recognised question meanings reuse locally with country, timeframe, subject, education-level and
 negation checks. Unfamiliar wording offers **Review suggestion**; compare the old/new questions and save
@@ -124,11 +145,16 @@ choose application scope when uncertain. Site scope can cover multiple employers
 Remembered values are filled before AI free responses, including conditional follow-up fields. Literal
 dropdown answers accept exact/approved equivalents, unambiguous Yes/No options, BS/B.Sc./Bachelor of Science
 and small tested category dictionaries. Unknown or ambiguous options stay manual. Files, standalone
-checkboxes, checkbox groups, consent controls, and anti-bot challenges stay outside remembered mapping
+checkboxes, consent controls, and anti-bot challenges stay outside remembered mapping
 support. Review the resulting application before submitting.
-React-select dropdowns can remember one selected chip, such as **Never held a clearance**. Remove-button
-text is excluded, and typing a search query alone is not a saved selection. Remembering several selected
-chips together remains unsupported; select a single reusable answer when appropriate.
+Native multiple-select lists, clearly labeled checkbox groups, and supported React-select dropdowns can
+remember several choices together. Answered cards show their selection count and **Save these answers**.
+Remove-button text and search queries are excluded. In Memories, edit each selected answer and its
+approved alternate labels under **Improve future matching**. **Try a variation** can also test several
+choices. On reuse, every choice must have a distinct matching enabled option; missing or ambiguous
+choices leave an initially empty field unchanged. A widget that rejects a later choice remains marked
+for review. Existing selections are preserved. Workday multi-select prompts and profile-linked lists
+are not supported by this feature yet.
 Repeatable entries beyond the first use per-entry profile matching rather than generic remembered answers.
 
 Mappings live in the extension's local IndexedDB. They are separate from profile JSON import/export

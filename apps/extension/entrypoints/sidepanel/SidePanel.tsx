@@ -7,7 +7,8 @@ import { db, getProfile } from '@/lib/db';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
 import { ALL_SITES, detectPlatform, PLATFORM_NAMES } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
-import { defaultScope, MappingEditor } from '@/components/KnowledgeBase';
+import { draftForCapture, MappingEditor, MemoryLibrary } from '@/components/KnowledgeBase';
+import { BatchRemember } from '@/components/BatchRemember';
 import type { CapturedAnswer, MappingDraft, ReviewField } from '@/lib/remembered-mappings';
 
 const STATUS_STYLE: Record<ApplicationStatus, string> = {
@@ -258,6 +259,7 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
   const [teaching, setTeaching] = useState<{ capture: CapturedAnswer; initial: MappingDraft; id?: number }>();
   const [remembered, setRemembered] = useState('');
   const [capturing, setCapturing] = useState<string>();
+  const [batch, setBatch] = useState<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }>();
   const context = { platform: app.platform, company: app.company, url: app.url };
   async function remember(field: ReviewField, suggestion = false) {
     setCapturing(field.token); setError(''); setRemembered('');
@@ -267,11 +269,21 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
       if (!res.ok) throw new Error(res.error);
       setTeaching({ capture: res.capture, id: res.suggestion?.id, initial: res.suggestion ?
         { ...res.suggestion, aliases: [...new Set([...res.suggestion.aliases, res.capture.label])] } :
-        { question: res.capture.label, aliases: [], scope: defaultScope(res.capture.label, context), target: { kind: 'answer', value: res.capture.value } } });
+        draftForCapture(res.capture, context) });
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not capture this answer.'); }
     finally { setCapturing(undefined); }
   }
   const reviewFields = app.reviewFields ?? [];
+  const answered = reviewFields.filter(f => f.answered);
+  async function rememberAll() {
+    setCapturing('all'); setError(''); setRemembered('');
+    try {
+      const result = await sendToBackground('capturePageAnswers', { applicationId: app.id!, tokens: answered.slice(0, 100).map(f => f.token) });
+      if (!result.ok) throw new Error(result.error);
+      setBatch({ captures: result.captures, skipped: result.skipped });
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not read the answered questions.'); }
+    finally { setCapturing(undefined); }
+  }
   return (
     <section className="space-y-3 rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-2">
@@ -285,7 +297,7 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
 
       {app.status !== 'Filling' && (
         <div className="grid grid-cols-3 gap-2 text-center">
-          <Stat value={app.filledCount} label="Profile / saved" color="text-green-700" />
+          <Stat value={app.filledCount} label="Profile / memories" color="text-green-700" />
           <Stat value={app.aiAnswers} label="AI-written" color="text-blue-700" />
           <Stat value={app.missingCount} label="Need you" color={app.missingCount ? 'text-red-700' : 'text-slate-400'} />
         </div>
@@ -294,18 +306,21 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
       {/* The pill already names the status, so a matching title is left out. */}
       {pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
 
-      {!teaching && (app.missingLabels.length > 0 || reviewFields.length > 0) && (
+      {!teaching && !batch && (app.missingLabels.length > 0 || reviewFields.length > 0) && (
         <div>
+          <Button className="mb-3 w-full" variant={answered.length ? 'primary' : 'secondary'} disabled={!answered.length || !!capturing || app.status === 'Filling'} onClick={() => void rememberAll()}>{capturing === 'all' ? 'Reading answered questions…' : `Save all answered questions (${Math.min(answered.length, 100)})`}</Button>
+          <p className="mb-2 text-xs text-slate-500">Answer the missing questions on the page, then save them together. You can review and exclude answers first.{answered.length > 100 ? ' Save up to 100 questions per batch.' : ''}</p>
           <button className="text-xs font-medium text-slate-600 underline" onClick={() => setShowMissing((s) => !s)}>
             {showMissing ? 'Hide' : 'Show'} questions to review
           </button>
           {showMissing && (
-            <ul className="mt-2 space-y-2">
+            <ul aria-label="Questions to review" className="mt-2 space-y-2">
               {reviewFields.map(field => <li key={field.token} className={cx('rounded-lg border p-3 text-xs text-slate-700', field.answered ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-white')}>
                 <p className="font-medium break-words">{field.label}</p>
-                <p className="mt-1 text-slate-600">{field.answered ? 'Answer entered — ready to save for next time.' : field.suggestionId ? 'A similar saved question is available. Confirm it before reuse.' : 'Answer on the page, then remember it here.'}</p>
+                <p className="mt-1 text-slate-600">{field.answered ? field.selectionMode === 'multiple' ? `${field.selectedCount ?? 0} answers selected — ready to save for next time.` : 'Answer entered — ready to save for next time.' : field.suggestionId ? 'A similar saved question is available. Confirm it before reuse.' : 'Answer on the page, then remember it here.'}</p>
+                {field.reason && <p className="mt-1 text-slate-600">{field.reason}</p>}
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <Button className="px-2 py-1 text-xs" variant={field.answered ? 'primary' : 'secondary'} disabled={!!capturing || app.status === 'Filling'} onClick={() => void remember(field)}>{capturing === field.token ? 'Reading field…' : field.answered ? 'Save this answer' : 'Remember answer'}</Button>
+                  <Button className="px-2 py-1 text-xs" variant={field.answered ? 'primary' : 'secondary'} disabled={!!capturing || app.status === 'Filling'} onClick={() => void remember(field)}>{capturing === field.token ? 'Reading field…' : field.selectionMode === 'multiple' ? field.answered ? 'Save these answers' : 'Remember answers' : field.answered ? 'Save this answer' : 'Remember answer'}</Button>
                   {field.suggestionId && !field.answered && <Button className="px-2 py-1 text-xs" variant="secondary" disabled={!!capturing} onClick={() => void remember(field, true)}>Review suggestion</Button>}
                 </div>
               </li>)}
@@ -315,6 +330,7 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
         </div>
       )}
 
+      {batch && <BatchRemember applicationId={app.id!} context={context} {...batch} onCancel={() => setBatch(undefined)} onSaved={(note, count) => { setBatch(undefined); setRemembered(`${count} question${count === 1 ? '' : 's'} remembered. ${note}`); }} />}
       {teaching && (
         <div className="space-y-3 border-t border-slate-200 pt-3">
           <MappingEditor key={teaching.capture.captureId} id={teaching.id} capture={teaching.capture} context={context} initial={teaching.initial}
@@ -326,7 +342,9 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
             }} />
         </div>
       )}
-      {remembered && <div role="status"><Notice tone="success">{remembered} Manage it in Settings → Saved answers.</Notice></div>}
+      {remembered && <div role="status"><Notice tone="success">{remembered} Edit it in Memories below.</Notice></div>}
+
+      {!teaching && !batch && app.status !== 'Filling' && <MemoryLibrary context={context} questions={app.memoryQuestions ?? [...reviewFields.map(f => f.label), ...(app.missingQuestions ?? []).filter((q): q is string => !!q)]} />}
 
       {app.status === 'Ready for review' && (
         <>

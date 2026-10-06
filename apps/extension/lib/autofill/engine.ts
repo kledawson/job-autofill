@@ -36,8 +36,10 @@ import { composedCompare, isSignInPage, scanFields, type ScannedField } from './
 import { WITH_CODE_RE } from './classify';
 import { pickLocationPreference, raceChoices, SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
 import { isPlaceholderOption } from './match';
-import { resolveRememberedMapping, type RememberedMapping, type SavedField, type SavedMatch, type ReviewField, type CapturedAnswer } from '../remembered-mappings';
+import { parseSelections, resolveRememberedMapping, type RememberedMapping, type SavedField, type SavedMatch, type ReviewField, type CapturedAnswer } from '../remembered-mappings';
 import { rememberedChoice } from '../saved-answer-preview';
+import { fillRememberedSelections, reacquireSelectionField, selectedValues, selectionMode } from './selections';
+import { sameSelections } from '../selection-matching';
 
 export interface EngineDeps {
   context: FillContext;
@@ -57,6 +59,7 @@ export interface FillSummary {
   missingLabels: string[];
   missingQuestions: (string | null)[];
   reviewFields?: ReviewField[];
+  memoryQuestions?: string[];
   usedMappingIds?: number[];
   /** Why free responses were skipped, when they were. */
   aiNote?: string;
@@ -73,6 +76,8 @@ interface FieldRecord {
   review?: boolean;
   saved?: RememberedMapping;
   suggestionId?: number;
+  selectionLabels?: string[];
+  selectionReason?: string;
 }
 
 /** Questions whose answer is known to reveal a follow-up directly beneath them. */
@@ -97,7 +102,7 @@ export class FillSession {
   private resumeFile: File | null;
   private coverLetterFile: File | null;
   private transcriptFile: File | null;
-  private captures = new Map<string, { rec: FieldRecord; value: string; question: string }>();
+  private captures = new Map<string, { rec: FieldRecord; value: string; question: string; values: string[]; members: HTMLElement[]; mode: string }>();
 
   constructor(
     private doc: Document,
@@ -115,35 +120,81 @@ export class FillSession {
   }
 
   /** Only an explicit request reads an answer; unresolved metadata contains no values. */
-  captureAnswer(token: string, question: string): CapturedAnswer {
+  captureAnswer(token: string, question: string, reset = true): CapturedAnswer {
     if (this.busy || this.stopped) throw new Error('Wait for autofill to finish, then try again.');
     const rec = [...this.records.values()].find(r => r.token === token);
     const field = rec && scanFields(this.root()).find(f => f.el === rec.field.el);
     if (!rec || !field || field.label !== question || !canRemember({ ...rec, field })) throw new Error('This field changed. Click Fill this page to refresh it.');
     rec.field = field;
-    if (field.kind === 'combobox' && comboboxSelectedValues(field).length > 1) throw new Error('This field has several selected answers. Remembering multiple selections is not supported yet.');
-    const value = fieldHasValue(field) ? displayedValue(field).trim() : '';
-    if (fieldHasValue(field) && !value) throw new Error('Choose an answer from the dropdown before saving. If the selected answer cannot be read, add it in Settings → Saved answers.');
+    const mode = selectionMode(field);
+    const values = mode === 'multiple' ? selectedValues(field) : [];
+    const value = mode === 'multiple' ? (values.length === 1 ? values[0]! : '') : fieldHasValue(field) ? displayedValue(field).trim() : '';
+    if (mode !== 'multiple' && fieldHasValue(field) && !value) throw new Error('Choose an answer from the dropdown before saving. If the selected answer cannot be read, add it in Settings → Memories.');
+    if (values.length) parseSelections(values.map(value => ({ value, aliases: [] })));
     const captureId = crypto.randomUUID();
+    if (reset) this.captures.clear();
+    this.captures.set(captureId, { rec, value, question, values, members: [...field.members], mode });
+    return { token, captureId, label: field.label, kind: field.kind, options: field.options.filter(o => !isPlaceholderOption(o)).slice(0, 200), value, selectionMode: mode, ...(mode === 'multiple' ? { values } : {}) };
+  }
+
+  captureAnswers(fields: { token: string; label: string }[]) {
+    if (!Array.isArray(fields) || fields.length > 100 || new Set(fields.map(f => f.token)).size !== fields.length) throw new Error('Choose up to 100 distinct questions.');
     this.captures.clear();
-    this.captures.set(captureId, { rec, value, question });
-    return { token, captureId, label: field.label, kind: field.kind, options: field.options.filter(o => !isPlaceholderOption(o)).slice(0, 200), value };
+    const captures: CapturedAnswer[] = [];
+    const skipped: { label: string; reason: string }[] = [];
+    for (const field of fields) {
+      try {
+        const rec = [...this.records.values()].find(r => r.token === field.token);
+        if (!rec?.review) throw new Error('This question is no longer in the review list.');
+        const capture = this.captureAnswer(field.token, field.label, false);
+        if (!capture.value && !capture.values?.length) { this.captures.delete(capture.captureId); skipped.push({ label: field.label, reason: 'No committed answer yet.' }); }
+        else captures.push(capture);
+      } catch { skipped.push({ label: field.label, reason: 'This field changed or its selected answer could not be read. Capture it individually.' }); }
+    }
+    return { captures, skipped };
+  }
+
+  validateCaptures(entries: { token: string; captureId: string }[]) {
+    if (this.stopped || this.busy || !Array.isArray(entries) || !entries.length || entries.length > 100 || new Set(entries.map(e => e.captureId)).size !== entries.length) throw new Error('These captures expired. Read the answers again.');
+    for (const entry of entries) this.checkedCapture(entry.token, entry.captureId);
+  }
+
+  finishRemembering(entries: { token: string; captureId: string }[]) {
+    this.validateCaptures(entries);
+    for (const entry of entries) {
+      const snapshot = this.checkedCapture(entry.token, entry.captureId);
+      snapshot.rec.review = false;
+      snapshot.rec.outcome = 'already';
+      snapshot.rec.selectionReason = undefined;
+      this.captures.delete(entry.captureId);
+    }
+    this.deps.onProgress?.(this.verify());
+  }
+
+  private checkedCapture(token: string, captureId: string) {
+    const snapshot = this.captures.get(captureId);
+    if (!snapshot || snapshot.rec.token !== token || this.stopped || this.busy) throw new Error('This capture expired. Remember the answer again.');
+    const current = scanFields(this.root()).find(f => f.el === snapshot.rec.field.el);
+    if (!current || current.label !== snapshot.question || selectionMode(current) !== snapshot.mode ||
+      current.members.length !== snapshot.members.length || current.members.some((m, i) => m !== snapshot.members[i]) ||
+      (snapshot.mode === 'multiple' ? !sameSelections(selectedValues(current), snapshot.values) : displayedValue(current).trim() !== snapshot.value)) throw new Error('The page answer changed after capture. Read the answers again.');
+    snapshot.rec.field = current;
+    return snapshot;
   }
 
   async applyAnswer(token: string, captureId: string, mapping: RememberedMapping): Promise<string> {
-    const snapshot = this.captures.get(captureId);
-    if (!snapshot || snapshot.rec.token !== token || this.stopped || this.busy) throw new Error('This capture expired. Remember the answer again.');
+    const snapshot = this.checkedCapture(token, captureId);
     this.captures.delete(captureId);
     const { rec } = snapshot;
     const current = scanFields(this.root()).find(f => f.el === rec.field.el);
-    if (!current || current.label !== snapshot.question || displayedValue(current).trim() !== snapshot.value) throw new Error('The page answer changed after capture. Your saved answer is safe; capture again to apply it.');
+    if (!current) throw new Error('The page field changed. Capture it again.');
     rec.field = current;
     // Never replace an answer entered by the person. Saving and applying an empty field is sufficient.
-    if (fieldHasValue(current)) { rec.review = false; this.deps.onProgress?.(this.verify()); return 'Saved for future applications. Your page answer was kept.'; }
+    if (fieldHasValue(current)) { rec.review = false; rec.outcome = 'already'; rec.selectionReason = undefined; this.deps.onProgress?.(this.verify()); return 'Saved for future applications. Your page answer was kept.'; }
     this.busy = true;
     try {
       rec.saved = mapping;
-      rec.cls = mapping.target.kind === 'profile' ? { kind: 'profile', key: mapping.target.key, source: 'remembered' } : { kind: 'saved_answer', answer: mapping.target.value };
+      rec.cls = mapping.target.kind === 'profile' ? { kind: 'profile', key: mapping.target.key, source: 'remembered' } : mapping.target.kind === 'answer' ? { kind: 'saved_answer', answer: mapping.target.value } : { kind: 'unknown', askAi: false };
       await this.fillRecord(rec);
       if (rec.outcome === 'filled' && fieldHasValue(rec.field)) rec.review = false;
     } finally { this.busy = false; }
@@ -264,7 +315,7 @@ export class FillSession {
       if (this.deps.matchSavedAnswers) {
         for (let i = 0; i < eligible.length; i += 200) {
           const batch = eligible.slice(i, i + 200);
-          const matches = await this.deps.matchSavedAnswers(batch.map(r => ({ label: r.field.label, kind: r.field.kind, options: r.field.options.slice(0, 200) })));
+          const matches = await this.deps.matchSavedAnswers(batch.map(r => ({ label: r.field.label, kind: r.field.kind, options: r.field.options.slice(0, 200), selectionMode: selectionMode(r.field) })));
           const current = new Map(scanFields(this.root()).map(f => [f.el, f]));
           batch.forEach((rec, index) => {
             const field = current.get(rec.field.el);
@@ -272,11 +323,12 @@ export class FillSession {
             rec.field = field;
             const match = matches[index];
             rec.suggestionId = match?.suggestionId;
+            if (match?.reason.includes('saved list')) { rec.selectionReason = match.reason; rec.flag = true; }
             if (!match?.mapping) return;
             rec.saved = match.mapping;
             rec.cls = match.mapping.target.kind === 'profile'
               ? { kind: 'profile', key: match.mapping.target.key, source: 'remembered' }
-              : { kind: 'saved_answer', answer: match.mapping.target.value };
+              : match.mapping.target.kind === 'answer' ? { kind: 'saved_answer', answer: match.mapping.target.value } : { kind: 'unknown', askAi: false };
           });
         }
         return;
@@ -298,9 +350,10 @@ export class FillSession {
         if (!canRemember(rec)) continue;
         const mapping = resolveRememberedMapping([...mappings.values()], this.adapter.platform, rec.field.label);
         if (!mapping) continue;
+        rec.saved = mapping;
         rec.cls = mapping.target.kind === 'profile'
           ? { kind: 'profile', key: mapping.target.key, source: 'remembered' }
-          : { kind: 'saved_answer', answer: mapping.target.value };
+          : mapping.target.kind === 'answer' ? { kind: 'saved_answer', answer: mapping.target.value } : { kind: 'unknown', askAi: false };
       }
     } catch {
       // A storage/worker failure must not stop profile filling or expose applicant answers in logs.
@@ -416,6 +469,20 @@ export class FillSession {
 
   /** Fills one field of the top-to-bottom pass, whatever kind of answer it takes. */
   private async fillRecord(rec: FieldRecord) {
+    if (rec.saved?.target.kind === 'answers') {
+      try {
+        const original = rec.field;
+        const result = await fillRememberedSelections(() => {
+          if (this.stopped) return undefined;
+          const field = reacquireSelectionField(this.root(), original);
+          if (field && field.el !== rec.field.el) { this.records.delete(rec.field.el); rec.field = field; this.records.set(field.el, rec); }
+          return field;
+        }, rec.saved.target.selections);
+        rec.outcome = result.outcome; rec.selectionLabels = result.labels; rec.selectionReason = result.reason;
+        rec.flag = result.outcome === 'failed' || result.outcome === 'nomatch';
+      } catch { rec.outcome = 'failed'; rec.flag = true; rec.selectionReason = 'Could not verify every selected answer. Review this field.'; }
+      return;
+    }
     if (rec.cls.kind === 'free_response') return this.fillFreeResponse(rec);
     if (rec.cls.kind !== 'profile' && rec.cls.kind !== 'saved_answer') return;
     const before = openLists(this.doc);
@@ -702,17 +769,24 @@ export class FillSession {
     const missingLabels: string[] = [];
     const missingQuestions: (string | null)[] = [];
     const reviewFields: ReviewField[] = [];
+    const memoryQuestions = new Set<string>();
     for (const [el, rec] of this.records) {
       if (!el.isConnected) {
         this.records.delete(el);
         continue;
       }
       const { field } = rec;
+      if (canRemember(rec)) memoryQuestions.add(field.label);
       const weFilled = rec.outcome === 'filled';
       // Yes/No buttons and file inputs do not always expose their state; trust our own fill there.
-      const has = fieldHasValue(field) || (weFilled && (field.kind === 'yesno' || field.kind === 'file'));
+      const mode = selectionMode(field);
+      const selected = mode === 'multiple' ? selectedValues(field) : [];
+      const has = mode === 'multiple' ? selected.length > 0 : fieldHasValue(field) || (weFilled && (field.kind === 'yesno' || field.kind === 'file'));
+      const incomplete = rec.saved?.target.kind === 'answers' && rec.outcome !== 'already' &&
+        (rec.outcome !== 'filled' || !sameSelections(selected, rec.selectionLabels ?? []));
       let state: ReviewState | null = null;
-      if (rec.ai && has) state = 'ai';
+      if (incomplete) state = 'missing';
+      else if (rec.ai && has) state = 'ai';
       else if (weFilled && has) state = 'filled';
       else if (!has && (field.required || rec.flag)) state = 'missing';
 
@@ -723,22 +797,22 @@ export class FillSession {
         missingQuestions.push(canRemember(rec) ? field.label : null);
         if (canRemember(rec)) rec.review = true;
       }
-      if (rec.review && canRemember(rec)) reviewFields.push({ token: rec.token!, label: field.label, answered: has, ...(rec.suggestionId ? { suggestionId: rec.suggestionId } : {}) });
+      if (rec.review && canRemember(rec)) reviewFields.push({ token: rec.token!, label: field.label, answered: has, selectionMode: mode, ...(mode === 'multiple' ? { selectedCount: selected.length } : {}), ...(rec.selectionReason ? { reason: rec.selectionReason } : {}), ...(rec.suggestionId ? { suggestionId: rec.suggestionId } : {}) });
 
       if (state) outline(field.outlineTarget, state);
       else if (field.outlineTarget.hasAttribute('data-jaf-state')) clearOutline(field.outlineTarget);
     }
-    return { filledCount, aiAnswers, missingLabels, missingQuestions, reviewFields: reviewFields.slice(0, 200),
-      usedMappingIds: [...new Set([...this.records.values()].filter(r => r.saved && r.outcome === 'filled' && fieldHasValue(r.field)).map(r => r.saved!.id))].slice(0, 200), aiNote: this.aiNote };
+    return { filledCount, aiAnswers, missingLabels, missingQuestions, reviewFields: reviewFields.slice(0, 200), memoryQuestions: [...memoryQuestions].slice(0, 200),
+      usedMappingIds: [...new Set([...this.records.values()].filter(r => r.saved && r.outcome === 'filled' && fieldHasValue(r.field) && (r.saved.target.kind !== 'answers' || sameSelections(selectedValues(r.field), r.selectionLabels ?? []))).map(r => r.saved!.id))].slice(0, 200), aiNote: this.aiNote };
   }
 }
 
 function canRemember(rec: FieldRecord): boolean {
   return !!rec.field.label.trim() && rec.field.label.length <= 700 &&
     (rec.field.section?.index ?? 0) === 0 &&
-    !(rec.field.el instanceof HTMLSelectElement && rec.field.el.multiple) &&
+    (rec.field.kind !== 'checkboxGroup' || selectionMode(rec.field) === 'multiple') &&
     (rec.field.kind === 'combobox' || rec.field.el.getAttribute('aria-multiselectable') !== 'true') &&
-    !['file', 'checkbox', 'checkboxGroup'].includes(rec.field.kind) &&
+    !['file', 'checkbox'].includes(rec.field.kind) &&
     rec.cls.kind !== 'challenge' && rec.cls.kind !== 'consent';
 }
 

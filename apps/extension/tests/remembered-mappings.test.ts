@@ -54,7 +54,7 @@ describe('mapping runtime validation', () => {
   ])('rejects invalid input %j', (value) => expect(() => parseMappingDraft(value)).toThrow());
   it('ignores invalid persisted versions and IDs', () => {
     expect(parseStoredMapping(mapping())).toEqual(mapping());
-    for (const patch of [{ schemaVersion: 3 }, { id: -1 }, { id: NaN }, { updatedAt: Infinity }]) {
+    for (const patch of [{ schemaVersion: 4 }, { schemaVersion: '3' }, { id: -1 }, { id: NaN }, { updatedAt: Infinity }]) {
       expect(parseStoredMapping({ ...mapping(), ...patch })).toBeNull();
     }
     expect(parseStoredMapping({ ...mapping(), target: { kind: 'profile', key: '__proto__' } })).toBeNull();

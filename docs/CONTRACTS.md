@@ -38,10 +38,14 @@ Fill attempts store counts, adapter version, and non-sensitive failure categorie
 - IndexedDB schema version 2 adds `rememberedMappings`; version 3 adds `lastUsed` and upgrades record
   `schemaVersion` to 2 without adding inferred meanings. Existing answers, aliases, scopes and other tables remain intact.
   The original `savedAnswers` and `fieldMappings` tables were unused placeholders and remain intact.
-- Each mapping has `schemaVersion: 2`, numeric `id`, `updatedAt`, optional `lastUsed`, full `question`, up to 20 `aliases`,
+- New mappings have `schemaVersion: 3`, numeric `id`, `updatedAt`, optional `lastUsed`, full `question`, up to 20 `aliases`,
   `scope` (`all`, `company:<normalised company>`, `application:<URL without fragment>`, `site:<origin>`, or a preserved
   legacy platform scope), and a discriminated `target`: `{kind: 'answer', value}`
-  or `{kind: 'profile', key}`. Profile keys are allowlisted existing engine keys; computed consent and
+  or `{kind: 'profile', key}` or `{kind: 'answers', selections: {value, aliases}[]}`. Fixed lists have
+  1–20 unique selections, at most 20 aliases each, labels of 1–1000 characters, and a 20,000-character
+  aggregate limit. Duplicate/overlapping labels and mixed known exclusive choices are rejected.
+  Lists require record version 3; legacy scalar versions 1 and 2 remain readable without splitting strings.
+  Profile keys are allowlisted existing engine keys; computed consent and
   file-upload keys are excluded. Questions are limited to 700 characters and answers to 10,000.
   Optional approved `meaning: {intent, qualifier, negative}` uses a closed local vocabulary; inferred meaning
   must match the original question's parser result. Optional `answerAliases` contains up to 20 authored option equivalents.
@@ -52,7 +56,10 @@ Fill attempts store counts, adapter version, and non-sensitive failure categorie
   boolean inverses can flip an answer. Application scope wins over company, site, legacy platform, then global.
   Ambiguous same-scope matches are skipped. Save checks alias/meaning conflicts in a
   transaction; saving the same primary question/scope updates the existing record.
-- `matchSavedAnswers({fields})` accepts at most 200 `{label, kind, options}` descriptors. An authorised
+- `matchSavedAnswers({fields})` accepts at most 200 `{label, kind, options, selectionMode?}` descriptors.
+  Selection mode is `single`, `multiple` or `unknown`. A saved list cannot fall through an incompatible
+  narrow scope to a broader scalar record. Unknown combobox mode can be probed, but writing requires
+  positive multiple-choice evidence. An authorised
   content sender receives one exact/meaning match or suggestion ID per field. Unknown similarity never
   approves reuse. The local index is rebuilt per batch from persisted data; worker restarts do not lose it.
   Company context comes from the matching tracked tab/frame/URL, not a caller-supplied company.
@@ -61,19 +68,40 @@ Fill attempts store counts, adapter version, and non-sensitive failure categorie
   extension-page sender and return `Result`. New payloads and IDs are validated before persistence.
 - `fillFinished` may include `missingQuestions: (string|null)[]`, aligned with `missingLabels`, which is
   retained on the application record. Null marks a manual-only control. Old tracker records remain valid
-  without this property. Optional `reviewFields: {token, label, answered, suggestionId?}[]` keeps manually
+  without this property. Optional `reviewFields: {token, label, answered, suggestionId?, selectionMode?, selectedCount?, reason?}[]` keeps manually
   entered unresolved fields teachable. Metadata contains no answers. Optional `usedMappingIds` updates last-used
   times after verified writes. Sender tab/frame ownership and metadata are checked before tracker updates.
+- Optional `fillFinished.memoryQuestions: string[]` records at most 200 current eligible question labels,
+  each 1–700 characters, including completed questions. It contains no applicant answers. Validation uses
+  `parseQuestionList` before any metadata/usage writes; each new fill clears stale labels. Old applications
+  without it fall back to review/missing questions. It supports read-only scoped sidebar memory browsing;
+  fuzzy search does not change approved matching. The existing mapping mutation messages support inline
+  editing/deletion from both trusted UIs. Store/table/message identifiers remain compatible with older data.
 - `capturePageAnswer({applicationId, token, suggestionId?})` requires a trusted extension page and checks
   the current tab URL. It routes to the specific frame, returning a selected-field capture with current
   question, value, kind, options, token and single-use `captureId`. No other answers are read.
   `applySavedAnswer({applicationId, token, captureId, mappingId})` checks scope, live element identity,
   question, and unchanged captured value. It preserves non-empty values and writes only an empty selected
   field; a stale capture reports that save succeeded but application needs a fresh capture.
-  React-select single-value labels and one selected multi-value chip can be captured. Chip labels are
-  read without remove buttons/icons or double-counting nested label elements. A search query alone is
-  not a selected answer. Several selected chips are rejected explicitly; native multiple-selects and
-  checkbox groups remain outside the single-answer capture contract.
+  Captures include `selectionMode`; multiple captures add `values: string[]`. Native multiple-selects,
+  clearly labeled checkbox groups and supported React-select chips are captured as fixed lists, including
+  a one-item list. Search queries/remove buttons are not answers. Live validation compares the complete
+  normalized set, mode, question, element and checkbox member identities.
+- `capturePageAnswers({applicationId, tokens})` accepts 1–100 distinct review tokens from a trusted
+  extension page. It routes one explicit batch to the tracked frame, returning validated captures and
+  skipped-field reasons. It never reads unrelated fields. Captures remain ephemeral in the live session.
+  `savePageAnswers({applicationId, entries: {token, captureId, mapping}[]})` checks every included snapshot
+  before one atomic database transaction. A stale capture, conflicting answer or invalid draft rejects
+  the whole batch. Equivalent same-question/scope targets reuse existing IDs and preserve aliases; new
+  conflicts never silently replace a record. It returns unique saved-record count and an actionable note.
+  Successful persistence survives a subsequent page change; failure to clear review cards then requests
+  a fresh fill. Batch saving preserves all page values and never invokes AI.
+- Fixed selection lists use a pure one-to-one option resolver with per-selection approved aliases.
+  Every choice must exist and be enabled before writing begins. Native multiple selects, labeled checkbox
+  groups and proved React-select widgets are supported. Existing groups are preserved. A partial runtime
+  write stays incomplete, suppresses last-used success and does not blindly roll back page values.
+  React-select option discovery/write is bounded to eight seconds and scoped to its owned menu/container.
+  Unsupported/custom prompt widgets and profile-linked arrays remain deferred.
 - Recognised dropdown equivalents include bachelor's degree variants without confusing BS/BA, unambiguous
   Yes/No expansions and inverses, positively saved US-citizen category/boolean renderings, and small tested
   category dictionaries. A false citizen answer never infers another visa/status. Authored answer aliases
@@ -97,7 +125,8 @@ Fill attempts store counts, adapter version, and non-sensitive failure categorie
 
 - The editor's local matching preview validates an unsaved draft with the production validators, checks
   save conflicts and scope, uses `SavedAnswerIndex` plus the writer's shared `rememberedChoice`, and reads
-  only the local saved profile/records in a trusted extension page. It returns a fill/confirm/skip outcome,
+  only the local saved profile/records in a trusted extension page. Multiple-choice examples use the same
+  pure selection resolver and return the complete proposed list. It returns a fill/confirm/skip outcome,
   explanatory reason and, for this draft only, a proposed answer. Another record's private answer is not
   exposed in the result. It neither mutates storage nor adds messages, network calls or permissions.
   Example dropdown choices are not saved as aliases. Real widget handling, required-field formatting,

@@ -333,7 +333,7 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
   await form.bringToFront();
   expect(await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }))).toMatchObject({ ok: true });
   await expect(form.locator('#learn-source')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
-  const missing = panel.getByRole('listitem').filter({ hasText: 'Application discovery channel' });
+  const missing = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Application discovery channel' });
   await expect(missing.getByRole('button', { name: 'Remember answer', exact: true })).toHaveClass(/bg-white/);
   await form.locator('#learn-source').selectOption('Company website');
   await expect(missing).toContainText('Answer entered');
@@ -358,7 +358,7 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
 
   // Reload the extension UI: the mapping must live in IndexedDB, not React state or worker globals.
   const settings = await context.newPage();
-  await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
+  await settings.goto(`chrome-extension://${extensionId}/options.html#memories`);
   await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toContainText('Company website');
   await settings.reload();
   await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toContainText('How did you discover this opening?');
@@ -388,7 +388,7 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
   // Edits persist and re-teaching the same primary question does not duplicate rows.
   await settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' }).getByRole('button', { name: 'Edit', exact: true }).click();
   await settings.getByLabel('Your answer').fill('Referral');
-  await settings.getByRole('button', { name: 'Save answer' }).click();
+  await settings.getByRole('button', { name: 'Save memory' }).click();
   await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toContainText('Referral');
   const saved = await settings.evaluate(() => chrome.runtime.sendMessage({
     type: 'saveRememberedMapping', mapping: {
@@ -411,8 +411,9 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
     type: 'getRememberedMappings', questions: ['Application discovery channel'],
   }));
   expect(unrelatedRead).toMatchObject({ ok: false });
-  await settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' }).getByRole('button', { name: 'Remove', exact: true }).click();
-  await expect(settings.getByText('No saved answers yet.', { exact: false })).toBeVisible();
+  await settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' }).getByRole('button', { name: 'Delete', exact: true }).click();
+  await settings.getByRole('button', { name: 'Delete memory', exact: true }).click();
+  await expect(settings.getByText('No memories yet.', { exact: false })).toBeVisible();
   await settings.reload();
   await expect(settings.getByRole('listitem').filter({ hasText: 'Application discovery channel' })).toHaveCount(0);
 });
@@ -436,7 +437,7 @@ test('saved meanings match new question and option wording locally, with scope a
   await inject(q);
   await form.bringToFront();
   await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
-  const card = panel.getByRole('listitem').filter({ hasText: q });
+  const card = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: q });
   await card.getByRole('button', { name: 'Remember answer', exact: true }).click();
   await panel.getByLabel('Your answer').selectOption('Company website');
   await panel.getByLabel('Where should this answer be reused?').selectOption('all');
@@ -451,7 +452,7 @@ test('saved meanings match new question and option wording locally, with scope a
   await inject(variant);
   await form.bringToFront();
   await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
-  const suggestion = panel.getByRole('listitem').filter({ hasText: variant });
+  const suggestion = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: variant });
   await suggestion.getByRole('button', { name: 'Review suggestion' }).click();
   await panel.getByRole('button', { name: 'Save & apply' }).click();
   await expect(form.locator('#semantic-choice')).toHaveValue('Company website', { timeout: 30_000 });
@@ -480,26 +481,27 @@ test('saved meanings match new question and option wording locally, with scope a
   await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
   await expect(form.locator('#semantic-choice')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
   await expect(form.locator('#semantic-choice')).toHaveValue('');
-  await panel.getByRole('listitem').filter({ hasText: 'Which internal team recommended' }).getByRole('button', { name: 'Remember answer' }).click();
+  await panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Which internal team recommended' }).getByRole('button', { name: 'Remember answer' }).click();
   await panel.setViewportSize({ width: 380, height: 1100 });
   await shot(panel, 'simpler-remember-answer');
 });
 
-test('saves a selected React-select clearance chip and reuses it on an empty dropdown', async () => {
+test('saves React-select answers and reuses both one-chip and multiple-chip lists', async () => {
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
   const form = await context.newPage();
   await form.goto(`${LEVER_URL}/apply?clearance-chip=1`);
-  async function inject() {
-    await form.evaluate(() => {
+  async function inject(question = 'Active Security Clearance(s)', choices = ['Never held a clearance', 'Secret', 'DOE Q']) {
+    await form.evaluate(({ question, choices }) => {
       const wrapper = document.createElement('div');
       wrapper.innerHTML = '<label for="chip-clearance">Active Security Clearance(s)*</label><div class="select__container"><div class="select__control"><input id="chip-clearance" role="combobox" aria-expanded="false" aria-multiselectable="true" required></div></div>';
+      wrapper.querySelector('label')!.textContent = `${question}*`;
       document.querySelector('form')!.append(wrapper);
       const input = wrapper.querySelector('input')!, control = wrapper.querySelector('.select__control')!;
       input.addEventListener('mousedown', () => {
         if (control.querySelector('[role="listbox"]')) return;
         const menu = document.createElement('div'); menu.setAttribute('role', 'listbox');
-        for (const label of ['Never held a clearance', 'Secret', 'DOE Q']) {
+        for (const label of choices) {
           const option = document.createElement('div'); option.setAttribute('role', 'option'); option.textContent = label;
           option.onclick = () => {
             const chip = document.createElement('div'); chip.className = 'select__multi-value';
@@ -513,7 +515,7 @@ test('saves a selected React-select clearance chip and reuses it on an empty dro
         }
         input.setAttribute('aria-expanded', 'true'); control.append(menu);
       });
-    });
+    }, { question, choices });
   }
   await inject();
   await form.bringToFront();
@@ -521,9 +523,9 @@ test('saves a selected React-select clearance chip and reuses it on an empty dro
   await expect(form.locator('.select__control')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
   await form.locator('#chip-clearance').click();
   await form.getByRole('option', { name: 'Never held a clearance', exact: true }).click();
-  const card = panel.getByRole('listitem').filter({ hasText: 'Active Security Clearance(s)' });
-  await card.getByRole('button', { name: 'Save this answer', exact: true }).click();
-  await expect(panel.getByLabel('Your answer')).toHaveValue('Never held a clearance');
+  const card = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Active Security Clearance(s)' });
+  await card.getByRole('button', { name: 'Save these answers', exact: true }).click();
+  await expect(panel.getByLabel('Selected answer 1', { exact: true })).toHaveValue('Never held a clearance');
   await expect(panel.getByText('Choose an answer from the dropdown before saving.', { exact: false })).toHaveCount(0);
   await panel.getByRole('button', { name: 'Save & apply', exact: true }).click();
   await expect(panel.getByText('Saved for future applications.', { exact: false })).toBeVisible();
@@ -534,20 +536,249 @@ test('saves a selected React-select clearance chip and reuses it on an empty dro
   await expect(form.locator('.select__multi-value__label')).toHaveText('Never held a clearance', { timeout: 30_000 });
   await expect(form.locator('.select__multi-value')).toHaveCount(1);
   await expect(form.locator('#chip-clearance')).toHaveValue('');
+  await form.reload(); await inject('Fictional coding tools', ['Python', 'TS', 'SQL']);
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('.select__control')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  for (const label of ['Python', 'TS']) {
+    await form.locator('#chip-clearance').click(); await form.getByRole('option', { name: label, exact: true }).click();
+  }
+  const multiple = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Fictional coding tools' });
+  await multiple.getByRole('button', { name: 'Save these answers', exact: true }).click();
+  await expect(panel.getByLabel('Selected answer 1', { exact: true })).toHaveValue('TS');
+  await expect(panel.getByLabel('Selected answer 2', { exact: true })).toHaveValue('Python');
+  await panel.getByRole('button', { name: 'Save & apply', exact: true }).click();
+  await expect(panel.getByText('Saved for future applications.', { exact: false })).toBeVisible();
+  await form.reload(); await inject('Fictional coding tools', ['SQL', 'TS', 'Python']);
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('.select__multi-value__label')).toHaveCount(2, { timeout: 30_000 });
+  expect((await form.locator('.select__multi-value__label').allTextContents()).sort()).toEqual(['Python', 'TS']);
+  await expect(form.locator('.select__control')).toHaveAttribute('data-jaf-state', 'filled');
+  await expect(form.locator('#chip-clearance')).toHaveValue('');
+});
+
+test('Save all confirms native, checkbox and text answers together, persists them and reuses every choice', async () => {
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await panel.setViewportSize({ width: 420, height: 1000 });
+  // Opening a new tab invalidates the panel's current-tab capture. Keep this observer tab
+  // open before starting the application so checking storage does not abandon the review.
+  const settings = await context.newPage(); await settings.goto(`chrome-extension://${extensionId}/options.html#memories`);
+  const form = await context.newPage();
+  await form.goto(`${LEVER_URL}/apply?batch=1`);
+  const inject = async () => form.evaluate(() => {
+    document.querySelector('form')!.innerHTML = `<label for="languages">Tools used professionally*</label><select id="languages" multiple required><option>Python</option><option>TS</option><option>SQL</option></select>
+      <fieldset><legend>Preferred fictional office regions*</legend><label><input type="checkbox" name="regions" value="North" required>North</label><label><input type="checkbox" name="regions" value="West">West</label><label><input type="checkbox" name="regions" value="East">East</label></fieldset>
+      <label for="batch-code">Fictional project reference*</label><input id="batch-code" required>
+      <label for="leave-empty">Untouched fictional question*</label><input id="leave-empty" required>`;
+  });
+  await inject(); await form.bringToFront();
+  await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  const saveAll = panel.getByRole('button', { name: /^Save all answered questions/ });
+  await expect(form.locator('#languages')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await expect(form.locator('#batch-code')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await expect(panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Fictional project reference' })).toBeVisible();
+  await expect(saveAll).toBeDisabled({ timeout: 30_000 });
+  await form.locator('#languages').selectOption(['Python', 'TS']);
+  await form.getByLabel('North', { exact: true }).check(); await form.getByLabel('West', { exact: true }).check();
+  await form.locator('#batch-code').fill('Synthetic reference');
+  await expect(saveAll).toHaveText('Save all answered questions (3)');
+  await saveAll.click();
+  const review = panel.getByRole('region', { name: 'Review answers to remember' });
+  await expect(review).toContainText('Python · TS');
+  await expect(review).toContainText('North · West');
+  await expect(review.getByLabel('Untouched fictional question')).toHaveCount(0);
+  await review.getByLabel('Reuse answers for question 1').selectOption('all');
+  await review.getByLabel('Reuse answers for question 2').selectOption('all');
+  await review.getByLabel('Reuse answers for question 3').selectOption('all');
+  await shot(panel, 'save-all-review');
+  // All captured snapshots must be current; one changed answer prevents the entire save.
+  await form.locator('#batch-code').fill('Changed synthetic reference');
+  await review.getByRole('button', { name: 'Remember 3 answered questions' }).click();
+  await expect(review.getByRole('alert')).toContainText('page answer changed');
+  await settings.reload();
+  await expect(settings.getByRole('listitem').filter({ hasText: 'Tools used professionally' })).toHaveCount(0);
+  await review.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await saveAll.click();
+  for (const index of [1, 2, 3]) await review.getByLabel(`Reuse answers for question ${index}`).selectOption('all');
+  await review.getByRole('button', { name: 'Remember 3 answered questions' }).click();
+  await expect(panel.getByText('3 questions remembered.', { exact: false })).toBeVisible();
+  await expect(form.locator('#batch-code')).toHaveValue('Changed synthetic reference');
+  await settings.reload();
+  const tools = settings.getByRole('listitem').filter({ hasText: 'Tools used professionally' });
+  await expect(tools).toContainText('2 remembered selections');
+  await expect(tools).toContainText('Python · TS');
+  await tools.getByRole('button', { name: 'Edit', exact: true }).click();
+  await settings.getByText('Improve future matching', { exact: true }).click();
+  await settings.getByRole('button', { name: 'Add label for answer 2', exact: true }).click();
+  await settings.getByLabel('Answer 2 label 1', { exact: true }).fill('TypeScript');
+  await settings.getByRole('button', { name: 'Save memory', exact: true }).click();
+  await form.reload(); await inject();
+  await form.evaluate(() => document.querySelectorAll('#languages option')[1]!.textContent = 'TypeScript');
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#batch-code')).toHaveValue('Changed synthetic reference', { timeout: 30_000 });
+  await expect.poll(() => form.locator('#languages').evaluate((s: HTMLSelectElement) => [...s.selectedOptions].map(o => o.text))).toEqual(['Python', 'TypeScript']);
+  await expect(form.getByLabel('North', { exact: true })).toBeChecked(); await expect(form.getByLabel('West', { exact: true })).toBeChecked();
+  await expect(form.getByLabel('East', { exact: true })).not.toBeChecked();
+  // A missing saved choice must leave the initially empty group alone.
+  await form.reload(); await inject(); await form.evaluate(() => document.querySelectorAll('#languages option')[1]!.remove());
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#languages')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await expect.poll(() => form.locator('#languages').evaluate((s: HTMLSelectElement) => s.selectedOptions.length)).toBe(0);
+  await expect(panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Tools used professionally' })).toContainText('unavailable');
+});
+
+test('bulk conflicts roll back all new mappings and allow excluding the conflicting question', async () => {
+  const settings = await context.newPage(); await settings.goto(`chrome-extension://${extensionId}/options.html#memories`);
+  const tools = settings.getByRole('listitem').filter({ hasText: 'Tools used professionally' });
+  await tools.getByRole('button', { name: 'Edit', exact: true }).click();
+  await settings.getByLabel('Selected answer 1', { exact: true }).fill('Unavailable fictional choice');
+  await settings.getByRole('button', { name: 'Save memory', exact: true }).click();
+  const panel = await context.newPage(); await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const form = await context.newPage(); await form.goto(`${LEVER_URL}/apply?batch-conflict=1`);
+  await form.evaluate(() => {
+    document.querySelector('form')!.innerHTML = '<label for="first">Unique atomic batch reference*</label><input id="first" required><label for="tools">Tools used professionally*</label><select id="tools" multiple required><option>Python</option><option>TS</option></select>';
+  });
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#tools')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await form.locator('#first').fill('Atomic synthetic answer'); await form.locator('#tools').selectOption(['Python', 'TS']);
+  await panel.getByRole('button', { name: 'Save all answered questions (2)' }).click();
+  const review = panel.getByRole('region', { name: 'Review answers to remember' });
+  for (const index of [1, 2]) await review.getByLabel(`Reuse answers for question ${index}`).selectOption('all');
+  await review.getByRole('button', { name: 'Remember 2 answered questions' }).click();
+  await expect(review.getByRole('alert')).toContainText('different memory');
+  await settings.reload(); await expect(settings.getByRole('listitem').filter({ hasText: 'Unique atomic batch reference' })).toHaveCount(0);
+  await review.getByLabel('Tools used professionally', { exact: true }).uncheck();
+  await review.getByRole('button', { name: 'Remember 1 answered question', exact: true }).click();
+  await expect(panel.getByText('1 question remembered.', { exact: false })).toBeVisible();
+  await settings.reload(); await expect(settings.getByRole('listitem').filter({ hasText: 'Unique atomic batch reference' })).toContainText('Atomic synthetic answer');
+  // Two identical question/answer pairs in one batch create one durable mapping.
+  await form.reload(); await form.evaluate(() => {
+    document.querySelector('form')!.innerHTML = '<label for="duplicate-one">Duplicate fictional reference*</label><input id="duplicate-one" required><label for="duplicate-two">Duplicate fictional reference*</label><input id="duplicate-two" required>';
+  });
+  await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#duplicate-two')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await form.locator('#duplicate-one').fill('Same synthetic answer'); await form.locator('#duplicate-two').fill('Same synthetic answer');
+  await panel.getByRole('button', { name: 'Save all answered questions (2)' }).click();
+  for (const index of [1, 2]) await review.getByLabel(`Reuse answers for question ${index}`).selectOption('all');
+  await review.getByRole('button', { name: 'Remember 2 answered questions' }).click();
+  await expect(panel.getByText('1 question remembered.', { exact: false })).toBeVisible();
+  await settings.reload(); await expect(settings.getByRole('listitem').filter({ hasText: 'Duplicate fictional reference' })).toHaveCount(1);
+});
+
+
+test('Memories supports visible inline editing, useful search and confirmed deletion without leaving the sidebar', async () => {
+  const settings = await context.newPage(); await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
+  await expect(settings).toHaveURL(/#memories$/); // Old bookmarks still work.
+  await expect(settings.getByRole('button', { name: 'Memories', exact: true })).toHaveAttribute('aria-current', 'page');
+  const seeded = await settings.evaluate(async () => {
+    const ids: number[] = [];
+    for (let i = 1; i <= 22; i++) {
+      const result = await chrome.runtime.sendMessage({ type: 'saveRememberedMapping', mapping: {
+        question: `UX memory question ${String(i).padStart(2, '0')}`, aliases: [], scope: 'all',
+        target: { kind: 'answer', value: `Synthetic answer ${i}` },
+      } });
+      if (!result.ok) throw new Error(result.error);
+      ids.push(result.id);
+    }
+    return ids;
+  });
+  await settings.setViewportSize({ width: 1000, height: 720 });
+  await settings.getByLabel('Search memories').fill('UX memory');
+  await settings.getByLabel('Sort by').selectOption('question');
+  await expect(settings.getByRole('list', { name: 'Memories', exact: true }).getByRole('listitem')).toHaveCount(22);
+  const last = settings.getByRole('listitem').filter({ hasText: 'UX memory question 22' });
+  await last.getByRole('button', { name: 'Edit', exact: true }).click();
+  const editor = last.getByRole('form', { name: 'Edit memory' });
+  await expect(editor.getByLabel('Your answer')).toBeFocused();
+  expect(await settings.evaluate(() => window.scrollY)).toBeGreaterThan(1000);
+  const box = await editor.getByLabel('Your answer').boundingBox();
+  expect(box!.y).toBeGreaterThanOrEqual(0); expect(box!.y + box!.height).toBeLessThanOrEqual(720);
+  await expect(settings.getByLabel('Search memories')).toBeDisabled();
+  await editor.getByLabel('Your answer').fill('Wrong unsaved draft');
+  await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(last).toContainText('Synthetic answer 22');
+  await expect(last.getByRole('button', { name: 'Edit', exact: true })).toBeFocused();
+  await expect(settings.getByRole('status').filter({ hasText: 'Changes canceled.' })).toBeVisible();
+  await last.getByRole('button', { name: 'Edit', exact: true }).click();
+  await editor.getByLabel('Your answer').fill('Updated synthetic answer');
+  await editor.getByRole('button', { name: 'Save memory', exact: true }).click();
+  await expect(last).toContainText('Updated synthetic answer');
+  await expect(settings.getByText('Memory saved.', { exact: true })).toBeVisible();
+  await settings.reload();
+  await settings.getByLabel('Search memories').fill('UPDATED question 22');
+  await expect(settings.getByRole('list', { name: 'Memories', exact: true }).getByRole('listitem')).toHaveCount(1);
+  await settings.getByLabel('Answer type').selectOption('answers');
+  await expect(settings.getByText('No memories match these filters.', { exact: false })).toBeVisible();
+  await settings.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(settings.getByLabel('Search memories')).toHaveValue('');
+  await settings.getByLabel('Search memories').fill('UX memory');
+  if (process.env.SCREENSHOTS) { await settings.getByLabel('Search memories').fill('UX memory question 22'); await settings.screenshot({ path: join(process.env.SCREENSHOTS, 'memories-search.png') }); await settings.getByLabel('Search memories').fill('UX memory'); }
+  await last.getByRole('button', { name: 'Delete', exact: true }).click();
+  await last.getByRole('button', { name: 'Keep memory', exact: true }).click();
+  await expect(last).toContainText('Updated synthetic answer');
+  // An edit stays reachable if another open extension window deletes its record.
+  const first = settings.getByRole('listitem').filter({ hasText: 'UX memory question 01' });
+  await first.getByRole('button', { name: 'Edit', exact: true }).click();
+  await settings.evaluate(id => chrome.runtime.sendMessage({ type: 'removeRememberedMapping', id }), seeded[0]);
+  await expect(first.getByRole('form', { name: 'Edit memory' })).toBeVisible();
+  await first.getByRole('button', { name: 'Save memory', exact: true }).click();
+  await expect(first.getByRole('alert')).toContainText('deleted in another window');
+  await first.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(first).toHaveCount(0);
+
+  const panel = await context.newPage(); await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await panel.setViewportSize({ width: 380, height: 760 });
+  const form = await context.newPage(); await form.goto(`${LEVER_URL}/apply?memory-management=1`);
+  const inject = () => form.evaluate(() => {
+    document.querySelector('form')!.innerHTML = '<label for="remembered-ux">UX memory question 22*</label><input id="remembered-ux" required><label for="ux-email">Email*</label><input id="ux-email" type="email" required>';
+  });
+  await inject(); await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#remembered-ux')).toHaveValue('Updated synthetic answer', { timeout: 30_000 });
+  const library = panel.getByRole('region', { name: 'Page memories', exact: true });
+  const card = library.getByRole('listitem').filter({ hasText: 'UX memory question 22' });
+  await expect(card).toBeVisible(); // Completed fields remain manageable.
+  await expect(card).toContainText('Last used');
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(card.getByLabel('Your answer')).toBeFocused();
+  await card.getByLabel('Your answer').fill('Sidebar correction');
+  await card.getByRole('button', { name: 'Save memory', exact: true }).click();
+  await expect(library.getByText('Memory saved for future fills.', { exact: false })).toBeVisible();
+  await expect(card).toContainText('Last used');
+  await expect(form.locator('#remembered-ux')).toHaveValue('Updated synthetic answer');
+  await panel.reload(); await form.bringToFront();
+  await expect(card).toContainText('Sidebar correction');
+  await form.reload(); await inject(); await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+  await expect(form.locator('#remembered-ux')).toHaveValue('Sidebar correction', { timeout: 30_000 });
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await shot(panel, 'memories-sidebar-edit');
+  await card.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await card.getByRole('button', { name: 'Delete', exact: true }).click();
+  await card.getByRole('button', { name: 'Delete memory', exact: true }).click();
+  await expect(card).toHaveCount(0);
+  await expect(library.getByText('Memory deleted.', { exact: false })).toBeVisible();
+  await expect(form.locator('#remembered-ux')).toHaveValue('Sidebar correction');
+  await library.getByRole('button', { name: /^All memories/ }).click();
+  await library.getByLabel('Search memories').fill('UX memory question 21');
+  await expect(library.getByRole('listitem')).toHaveCount(1);
+  await settings.reload(); await settings.getByLabel('Search memories').fill('UX memory question 22');
+  await expect(last).toHaveCount(0);
+  // Do not leak synthetic records into subsequent tests.
+  await settings.evaluate(async ids => { for (const id of ids) await chrome.runtime.sendMessage({ type: 'removeRememberedMapping', id }); }, seeded);
 });
 
 test('optional AI suggests wordings only after a click and requires individual approval', async () => {
   const settings = await context.newPage();
-  await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
-  await settings.getByRole('button', { name: 'Add answer' }).click();
+  await settings.goto(`chrome-extension://${extensionId}/options.html#memories`);
+  await settings.getByRole('button', { name: 'Add memory' }).click();
   await settings.getByRole('textbox', { name: 'Question', exact: true }).fill('Which recruiting event introduced this team?');
   await settings.getByLabel('Your answer').fill('Synthetic campus fair');
   await settings.getByLabel('Where should this answer be reused?').selectOption('company:');
   await settings.getByLabel('Company name').fill('Contoso Labs');
-  await settings.getByRole('button', { name: 'Save answer' }).click();
+  await settings.getByRole('button', { name: 'Save memory' }).click();
   const created = settings.getByRole('listitem').filter({ hasText: 'Which recruiting event introduced this team?' });
   await expect(created).toContainText('Company: contoso labs');
-  await created.getByRole('button', { name: 'Remove', exact: true }).click();
+  await created.getByRole('button', { name: 'Delete', exact: true }).click();
+  await settings.getByRole('button', { name: 'Delete memory', exact: true }).click();
   const count = wordingPrompts.length;
   const card = settings.getByRole('listitem').filter({ hasText: 'How did you hear about this job?' });
   await card.getByRole('button', { name: 'Edit', exact: true }).click();
@@ -564,7 +795,7 @@ test('optional AI suggests wordings only after a click and requires individual a
   expect(wordingPrompts.at(-1)).not.toContain('Company website');
   await expect(settings.getByRole('checkbox', { name: 'Are you authorized to work in the US?' })).toHaveCount(0);
   await approval.check();
-  await settings.getByRole('button', { name: 'Save answer' }).click();
+  await settings.getByRole('button', { name: 'Save memory' }).click();
   await settings.reload();
   await card.getByText('Approved variations').click();
   await expect(card).toContainText('How did you learn about this position?');
@@ -575,14 +806,14 @@ test('optional AI suggests wordings only after a click and requires individual a
   await settings.getByRole('button', { name: 'Suggest question variations' }).click();
   await expect(settings.getByText('Wording suggestions timed out.', { exact: false })).toBeVisible({ timeout: 20000 });
   await settings.getByLabel('Your answer').fill('Company website');
-  await settings.getByRole('button', { name: 'Save answer' }).click();
-  await expect(settings.getByText('Answer saved.', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: 'Save memory' }).click();
+  await expect(settings.getByText('Memory saved.', { exact: true })).toBeVisible();
 });
 
 test('guided variations preview real matching and scope, and profile links show the current value', async () => {
   const settings = await context.newPage();
-  await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
-  await settings.getByRole('button', { name: 'Add answer' }).click();
+  await settings.goto(`chrome-extension://${extensionId}/options.html#memories`);
+  await settings.getByRole('button', { name: 'Add memory' }).click();
   await settings.getByRole('textbox', { name: 'Question', exact: true }).fill('Which exam result applies?');
   await settings.getByLabel('Your answer').fill('Not taken');
   await expect(settings.getByRole('button', { name: 'Add wording', exact: true })).not.toBeVisible();
@@ -634,7 +865,7 @@ test('guided variations preview real matching and scope, and profile links show 
   await settings.getByLabel('Example application URL', { exact: true }).fill('invalid example');
   await settings.getByRole('button', { name: 'Check matching', exact: true }).click();
   await expect(settings.getByText('Would skip', { exact: true })).toBeVisible();
-  await settings.getByRole('button', { name: 'Save answer', exact: true }).click();
+  await settings.getByRole('button', { name: 'Save memory', exact: true }).click();
   const card = settings.getByRole('listitem').filter({ hasText: 'Which exam result applies?' });
   await expect(card).toBeVisible();
   await settings.reload();
@@ -646,8 +877,9 @@ test('guided variations preview real matching and scope, and profile links show 
   await settings.getByLabel('Use this profile detail', { exact: false }).selectOption('phone');
   await expect(settings.getByText('Current value:', { exact: false })).toContainText('415-555-0100');
   await expect(settings.getByLabel('Answer label 1', { exact: true })).toHaveCount(0);
-  await settings.getByRole('button', { name: 'Save answer', exact: true }).click();
-  await expect(card).toContainText('Profile → Phone');
+  await settings.getByRole('button', { name: 'Save memory', exact: true }).click();
+  await expect(card).toContainText('Linked profile detail');
+  await expect(card).toContainText('Phone');
   await card.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(settings.getByLabel('Use this profile detail', { exact: false })).toHaveValue('phone');
   await expect(settings.getByText('Current value:', { exact: false })).toContainText('415-555-0100');
@@ -665,7 +897,8 @@ test('guided variations preview real matching and scope, and profile links show 
   await expect(settings.getByText('Answer: 415-555-0111', { exact: true })).toBeVisible();
   await profileSettings.close();
   await settings.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await card.getByRole('button', { name: 'Remove', exact: true }).click();
+  await card.getByRole('button', { name: 'Delete', exact: true }).click();
+  await settings.getByRole('button', { name: 'Delete memory', exact: true }).click();
 });
 
 test('upgrades the actual old IndexedDB schema without losing legacy answers or profile data', async () => {
@@ -696,7 +929,7 @@ test('upgrades the actual old IndexedDB schema without losing legacy answers or 
     });
   });
   const settings = await context.newPage();
-  await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
+  await settings.goto(`chrome-extension://${extensionId}/options.html#memories`);
   await expect(settings.getByRole('listitem').filter({ hasText: 'Legacy channel' })).toContainText('Referral');
   const result = await raw.evaluate(() => new Promise<any>((resolve, reject) => {
     const request = indexedDB.open('job-autofill');

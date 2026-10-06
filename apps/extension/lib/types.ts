@@ -205,6 +205,8 @@ export interface Application {
   missingQuestions?: (string | null)[];
   /** Selected-field identities, never applicant answers. Stale tokens are rejected after navigation. */
   reviewFields?: import('./remembered-mappings').ReviewField[];
+  /** Current eligible questions, including completed fields; never contains page answers. */
+  memoryQuestions?: string[];
   frameId?: number;
   topUrl?: string;
   sheetRow?: number;
