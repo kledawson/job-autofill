@@ -30,6 +30,27 @@ export type ProfileKey =
   | 'website'
   | 'currentCompany'
   | 'currentTitle'
+  | 'previousCompany'
+  | 'previousTitle'
+  /** "Current or previous employer": the current one, else the previous one. */
+  | 'recentCompany'
+  | 'recentTitle'
+  /** "First / second / third location preference": ranked office choices, never repeated. */
+  | 'locationPreference'
+  /** "Are you a current or former employee of the U.S. government?" */
+  /** "Skills": every saved skill, one chip each on Workday. */
+  | 'skills'
+  /** "Are you a current or former employee of Ernst & Young?": checked against the work history. */
+  | 'employedAt'
+  /** "Are you subject to any non-compete or non-solicitation restrictions?" */
+  | 'nonCompete'
+  | 'govEmployee'
+  /** "Are you a citizen of any other country?" */
+  | 'otherCitizenship'
+  /** Export control: "citizen, national or resident of Iran, Cuba, North Korea, Syria, Crimea...?" */
+  | 'sanctionedCountry'
+  /** One of the person's links, for a numbered Websites entry. */
+  | 'link'
   | 'school'
   | 'degree'
   | 'major'
@@ -39,6 +60,10 @@ export type ProfileKey =
   | 'eduEndMonth'
   | 'eduEndYear'
   | 'gradDate'
+  /** "Are you graduating ... in 2027?": compared with the saved graduation date. */
+  | 'graduatingIn'
+  /** "Is your degree in Computer Science?": compared with the saved major. */
+  | 'majorIs'
   | 'authorized'
   | 'sponsorship'
   | 'usCitizen'
@@ -100,6 +125,15 @@ export const WITH_CODE_RE = /(includ\w*|with|plus|add)\s+(the\s+|your\s+)?(count
 
 // Order matters: specific phrases come before the generic ones they contain.
 const RULES: Rule[] = [
+  // Export-control screening lists named countries; it is not a work-authorization question.
+  ['sanctionedCountry', /(citizen|national|resident).{0,80}\b(iran|cuba|north korea|syria|crimea|donetsk|luhansk|sudan)\b|\b(embargoed|sanctioned) (countr|nation)/],
+  // Before the employer rules: "...at your current or most recent employer" is about an agreement, not a name.
+  ['nonCompete', /non-?compete|non-?solicit|restrictive covenant|non-?disclosure agreement.*(prevent|restrict)|(agreement|restriction)s? (that|which) (would )?(prevent|restrict|limit)/],
+  ['govEmployee', /(current|former|previous|past)[\w\s,/-]{0,30}(employee|employed|official|worker)[\w\s,/-]{0,20}(of|by|with) (the )?(u\.?s\.?|united states|federal|us) (federal )?government|\b(u\.?s\.?|federal) government employee|government official/],
+  // "Have you previously worked for Workday?", "Are you a current or former employee of Ernst & Young, LLP?" — the
+  // person's own employment there (a relative's or friend's is not), checked against the work history.
+  ['employedAt', /^(?!.*\b(relative|family|friend|spouse|partner'?s|referr|know anyone|related to)\b)(are|have|were|is|did|do)\b.{0,120}(\b(employee|employed|worked|partner|principal|contractor|intern|consultant)\b.{0,40}\b(of|for|by|at|with)|\bwork(ing)? for)\s+(?!(your|my|a|an|any|another)\b)\S/],
+  ['otherCitizenship', /citizen(ship)? of (any|an)other country|(other|additional|dual|second) citizenships?\b|citizen of more than one country|hold (an)?other citizenship/],
   // One question that covers both: authorized to work without needing sponsorship.
   ['authorizedNoSponsor', /^(?=.*(authori[sz]ed|eligible|legally|permitted|right) .*work)(?=.*(without|not (be )?requir|no (need|requirement)|not need).*sponsor)/],
   // "What is your current visa status?" asks for a status, not whether you need sponsorship.
@@ -149,24 +183,34 @@ const RULES: Rule[] = [
   ['cityState', /^city,?\s*(and\s*)?(state|province)\b(?!.*(zip|postal))/],
   ['zip', /zip|postal code|postcode/],
   ['address', /street|^address( line)?( 1)?$|mailing address|home address/],
+  ['locationPreference', /\b(location|office|site) (preference|choice)\b|\b(preferred|desired) (office|work) location|\b(first|second|third|1st|2nd|3rd|top) (choice|preference)\b.*\b(location|office)/],
+  // "Please select the country where you currently reside"
+  ['country', /\bcountry (where|in which|that) you (currently )?(live|reside|are based|are located)|which country (do )?you (currently )?(live|reside)|what country (do )?you (currently )?(live|reside)|country of (current )?residen/],
   ['location', /location|where (are you|do you) (currently )?(based|located|live)|where do you plan (on|to) work|current city/],
   ['city', /^city\b/],
   ['state', /^(state|province|state\/province|region)\b/],
   ['country', /^country\b|country of residence/],
+  ['recentTitle', /current or (previous|most recent|last|former) (job )?(title|role|position)|(job )?title.*current or (previous|past|most recent)/],
+  ['recentCompany', /current or (previous|most recent|last|former) (company|employer|organi[sz]ation)/],
+  ['previousTitle', /(previous|former|past|last|prior) (job )?(title|role|position)/],
+  ['previousCompany', /(previous|former|past|last|prior) (company|employer|organi[sz]ation)/],
   ['currentTitle', /current (job )?(title|role|position|occupation)|^(job )?title$/],
   ['currentCompany', /current (company|employer|organization)|most recent (company|employer)|^(company|employer|organization)$/],
   ['gpa', /\bgpa\b|grade point/],
+  ['skills', /^(type to add )?(your |key |technical |relevant )?skills\b|^(add|list) (your )?skills|skills? \((comma|separated)/],
   ['eduStartMonth', /start (date )?month/],
   ['eduStartYear', /start (date )?year/],
   ['eduEndMonth', /(end|graduation) (date )?month/],
   ['eduEndYear', /(end|graduation|grad) (date )?year|year of graduation|class year/],
+  ['graduatingIn', /^(are|will) you\b.*\bgraduat\w*\b.*\b20\d\d\b|^(is|will) your (expected )?graduation\b.*\b20\d\d\b/],
+  ['majorIs', /^(is|was) your (\w+'?s? )?(degree|major)\b.* in |^are you (currently )?(studying|majoring|pursuing a degree) in /],
   ['gradDate', /graduation date|expected graduation|when do you graduate/],
   ['degree', /degree/],
   ['major', /major|discipline|field of study|area of study|concentration/],
   ['school', /school|university|college|institution/],
   ['salary', /salary|compensation|pay (range|expectation)|desired pay/],
   ['noticePeriod', /notice period/],
-  ['startDate', /start date|available to start|earliest (start|available)|when (can|could|would) you (start|begin)/],
+  ['startDate', /start date|available to start|earliest (start|available)|when (can|could|would) you (start|begin)|date available|availability date/],
   ['workMode', /remote|on-?site|hybrid|in[- ]office|work arrangement/],
 ];
 
@@ -177,8 +221,11 @@ const CONSENT_RE = /\b(i )?(agree|acknowledge|consent|certify|attest|confirm tha
 const TEXT_CONSENT_RE = /text message|\bsms\b|text updates|receive texts/;
 const BUNDLED_CONSENT_RE = /terms|privacy|certify|attest/;
 /** "Acknowledge, confirm, and agree to the following statements": always answered Yes, as the user asked. */
-const ACKNOWLEDGE_RE = /acknowledge,?\s+confirm,?\s+(and|&)\s+agree/;
+const ACKNOWLEDGE_RE =
+  /acknowledge,?\s+confirm,?\s+(and|&)\s+agree|\b(i|we) (hereby )?(acknowledge|certify|attest|affirm)\b|\b(enter|select|type|answer|choose) .{0,3}yes.{0,3} if you (acknowledge|agree|confirm|understand)|^(do you )?acknowledge\b|\backnowledg(e|ement)\b.{0,40}\b(read|understood|reviewed|truthful|accurate)/;
 const CHALLENGE_RE = /not a (bot|robot)|prove (that )?you('| a)re (human|not)|figure out the (correct )?secret|captcha/;
+/** Trap fields for bots ("Please leave this field blank"): filling one can get the application discarded. */
+const HONEYPOT_RE = /leave (this|it)( field| box)? (blank|empty)|do not (fill|enter|type)|don.?t (fill|enter|type)|if you are (a )?human/;
 const BLOB_RE = /[A-Za-z0-9+/=]{80,}/;
 const FREE_TEXT_INPUT_RE = /^(why|describe|tell us|explain|please (describe|explain|share|tell)|what (interests|excites|motivates|draws))|why do you want|why are you interested/;
 const SKIP_OPTIONAL_TEXTAREA_RE = /additional information|anything else|cover letter|additional comments|comments/;
@@ -224,7 +271,9 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
 
   const label = field.label.toLowerCase();
 
-  if (field.section && field.kind !== 'file') {
+  // Generic "URL" boxes under a Websites heading; specific ones ("LinkedIn URL" under Lever's "Links") use the rules below.
+  if (field.section?.kind === 'website' && field.kind === 'text' && /^(url|website|web ?address|link|website url)\b/.test(label)) return { kind: 'profile', key: 'link', source: 'rule', index: field.section.index };
+  if (field.section && field.section.kind !== 'website' && field.kind !== 'file') {
     const rules = field.section.kind === 'experience' ? EXPERIENCE_RULES : EDUCATION_RULES;
     for (const [key, re] of rules) {
       if (re.test(label)) return { kind: 'profile', key, source: 'rule', index: field.section.index };
@@ -244,11 +293,14 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
   if (OTHER_PERSON_RE.test(label)) return { kind: 'unknown' };
 
   // "Phone Extension" would otherwise take the phone number.
-  if (/\bextension\b|^ext\.?$/.test(label)) return { kind: 'unknown' };
+  if (label.length < 40 && /\bextension\b|^ext\.?$/.test(label)) return { kind: 'unknown' };
+
+  if (HONEYPOT_RE.test(label) || /honeypot|hpcs|beecatcher/i.test(field.name + field.id + field.path)) return { kind: 'challenge' };
+
+  // Acknowledgments are always answered Yes (as the person asked), however long the statement before them.
+  if (ACKNOWLEDGE_RE.test(label) && !CHALLENGE_RE.test(label)) return { kind: 'profile', key: 'acknowledge', source: 'rule' };
 
   if (CHALLENGE_RE.test(label) || BLOB_RE.test(field.label) || field.label.length > 700) return { kind: 'challenge' };
-
-  if (ACKNOWLEDGE_RE.test(label)) return { kind: 'profile', key: 'acknowledge', source: 'rule' };
 
   if (TEXT_CONSENT_RE.test(label) && !(field.kind === 'checkbox' && BUNDLED_CONSENT_RE.test(label))) {
     return { kind: 'profile', key: 'textConsent', source: 'rule' };

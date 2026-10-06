@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>BambooHR</title></head>
+<body>
+<!-- Synthetic form shaped like a BambooHR careers application: honeypot, styled selects over hidden native
+     selects, and file inputs labelled only "file-input" with the question in a nearby <p>. -->
+<form>
+  <div><label for="nickname_x1">Please leave this field blank</label><input id="nickname_x1" name="nickname_x1" type="text"></div>
+  <div><label for="firstName">First Name<span aria-hidden="true"> *</span></label><input id="firstName" name="firstName" type="text"></div>
+  <div><label for="lastName">Last Name<span aria-hidden="true"> *</span></label><input id="lastName" name="lastName" type="text"></div>
+  <div><label for="email">Email<span aria-hidden="true"> *</span></label><input id="email" name="email" type="text"></div>
+  <div><label for="phone">Phone<span aria-hidden="true"> *</span></label><input id="phone" name="phone" type="text"></div>
+  <div data-fabric-component="SelectField InputWrapper">
+    <div><label for="fab-select1">State</label></div>
+    <div><div data-fabric-component="Select"><div><div>
+      <button id="state-btn" data-menu-id="fab-menu1" aria-expanded="false" aria-haspopup="true" aria-label="State –Select–" type="button"><div>–Select–</div></button>
+    </div></div>
+    <select id="fab-select1" name="state.value" style="display: none;"><option value=""></option></select></div></div>
+  </div>
+  <div data-fabric-component="Flex">
+    <p>Resume*</p>
+    <div data-fabric-component="FileUpload"><div data-fabric-component="FileUploadInput">
+      <div><div><button type="button"><span></span><span>Choose File*</span></button><div><p>No file selected</p></div></div></div>
+      <input aria-label="file-input" required type="file" style="display: none;"></div>
+      <input name="resumeFileId" type="hidden" value=""></div>
+  </div>
+  <div><label for="date-available">Date Available</label><input id="date-available" type="text"></div>
+  <div><label for="educationInstitutionName">College/University<span> *</span></label><input id="educationInstitutionName" name="educationInstitutionName" type="text"></div>
+  <div data-fabric-component="Flex">
+    <p>Latest Transcripts*</p>
+    <div data-fabric-component="LayoutBox"><div data-fabric-component="FileUploadInput">
+      <div><div><button type="button"><span></span><span>Choose Files*</span></button><div><p>No files selected</p></div></div></div>
+      <input aria-label="file-input" multiple required type="file" style="display: none;"></div>
+      <input name="customQuestionAnswers.file_61" type="hidden" value=""></div>
+  </div>
+  <div><label for="gpa">GPA<span> *</span></label><input id="gpa" name="customQuestionAnswers.short_73" type="text"></div>
+  <button type="submit">Submit Application</button>
+</form>
+</body>
+</html>

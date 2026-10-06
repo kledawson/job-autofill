@@ -15,7 +15,7 @@ export type FieldKind =
 
 /** A numbered, repeatable block such as "Work Experience 2" or "Education 1". */
 export interface Section {
-  kind: 'experience' | 'education';
+  kind: 'experience' | 'education' | 'website';
   /** Zero-based entry number. */
   index: number;
 }
@@ -46,7 +46,10 @@ export interface ScannedField {
 export const OWN_ATTR = 'data-jaf';
 
 const TEXT_TYPES = new Set(['', 'text', 'email', 'tel', 'url', 'number', 'search', 'date', 'month']);
-const GENERIC_LABELS = /^(attach|upload|upload file|browse|enter manually|choose file|select files?|(or )?drop files? here)$/i;
+const GENERIC_LABELS =
+  /^(attach|upload|upload file|browse|enter manually|choose files?|select files?|(or )?drop files? here|file[- ]?input|file|no files? selected|click to upload.*)$/i;
+/** Elements that count as a field of their own when looking for the text of the question before a control. */
+const CONTROLS = 'input:not([type="hidden"]), select, textarea, button[aria-haspopup]';
 /** Labels that name only part of a date ("Month"); the question is the label of the group around it. */
 const DATE_PART_RE = /^(month|year|day|mm|yyyy|yy|dd)$/i;
 const HEADINGS = 'h1, h2, h3, h4, h5, h6, legend, [role="heading"]';
@@ -68,9 +71,23 @@ function textOf(el: Element | null | undefined): string {
   return el ? cleanLabel((el as HTMLElement).innerText ?? el.textContent ?? '') : '';
 }
 
+/** Site chrome (language pickers, job search boxes) is never part of the application. */
+const CHROME = 'header, nav, [role="banner"], [role="navigation"]';
+
+/** Workday date boxes sit under a drawn "MM/YYYY" display, tiny or marked aria-hidden, but they are the real fields. */
+const isDatePart = (el: HTMLElement) => /^dateSection(Month|Day|Year)/.test(el.getAttribute('data-automation-id') ?? '');
+
 function isHidden(el: HTMLElement): boolean {
   if (el.closest(`[${OWN_ATTR}]`)) return true;
+  if (el.closest(CHROME)) return true;
+  if (isDatePart(el)) return isDisplayNone(el);
   if (el.getAttribute('aria-hidden') === 'true') return true;
+  // Bot traps are often shrunk to a pixel rather than hidden (Workday's "beecatcher").
+  const rect = el.getClientRects?.()[0];
+  // Only text boxes: radios and checkboxes are often shrunk on purpose under a styled replacement.
+  const textBox = el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && TEXT_TYPES.has((el.getAttribute('type') ?? '').toLowerCase()));
+  const laidOut = (el.ownerDocument.body?.getBoundingClientRect().width ?? 0) > 0;
+  if (textBox && laidOut && rect && (rect.width <= 2 || rect.height <= 2)) return true;
   let node: HTMLElement | null = el;
   for (let depth = 0; node && depth < 12; depth++, node = node.parentElement) {
     if (node.hidden) return true;
@@ -80,15 +97,43 @@ function isHidden(el: HTMLElement): boolean {
   return false;
 }
 
+function isDisplayNone(el: HTMLElement): boolean {
+  for (let node: HTMLElement | null = el, depth = 0; node && depth < 12; depth++, node = node.parentElement) {
+    if (node.hidden || node.ownerDocument.defaultView?.getComputedStyle(node).display === 'none') return true;
+  }
+  return false;
+}
+
 function precedes(a: Node, b: Node): boolean {
   return !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 }
 
-/** Nearest preceding label-like element inside an enclosing container. */
+/**
+ * Nearest preceding label-like element inside an enclosing container. Forms that caption fields with plain
+ * text (`<span>First name</span>`, `<p>Resume*</p>`) are covered by the text just before the control,
+ * whichever of the two is closer.
+ */
 function precedingLabel(el: HTMLElement, group: HTMLElement[], skip: RegExp = GENERIC_LABELS): { text: string; labelEl: Element | null } {
   const groupIds = new Set(group.map((g) => g.id).filter(Boolean));
   let ancestor = el.parentElement;
-  for (let depth = 0; ancestor && depth < 7; depth++, ancestor = ancestor.parentElement) {
+  let node: HTMLElement = el;
+  let siblingsOpen = true;
+  for (let depth = 0; ancestor && depth < 7; depth++, node = ancestor, ancestor = ancestor.parentElement) {
+    let caption: Element | null = null;
+    // Previous siblings of the branch holding the control, nearest first, up to the previous field.
+    for (let sib = siblingsOpen ? node.previousElementSibling : null; sib; sib = sib.previousElementSibling) {
+      if (sib.closest(`[${OWN_ATTR}]`)) continue;
+      if (sib.matches(CONTROLS) || sib.querySelector(CONTROLS)) {
+        siblingsOpen = false;
+        break;
+      }
+      // Upload buttons and links ("Choose File") are not the question.
+      if (sib.closest('a, button') || sib.querySelector('a, button')) continue;
+      const t = textOf(sib);
+      if (!t || t.length > 300 || skip.test(t) || GENERIC_LABELS.test(t)) continue;
+      caption = sib;
+      break;
+    }
     const candidates = Array.from(ancestor.querySelectorAll(LABELISH)).filter((c) => {
       if (c.closest(`[${OWN_ATTR}]`)) return false;
       if (group.some((g) => c.contains(g))) return false;
@@ -100,7 +145,9 @@ function precedingLabel(el: HTMLElement, group: HTMLElement[], skip: RegExp = GE
     });
     const last = candidates[candidates.length - 1];
     const t = textOf(last);
-    if (last && t && !skip.test(t) && !GENERIC_LABELS.test(t)) return { text: t, labelEl: last };
+    const labelOk = !!last && !!t && !skip.test(t) && !GENERIC_LABELS.test(t);
+    if (caption && (!labelOk || precedes(last!, caption))) return { text: textOf(caption), labelEl: caption };
+    if (labelOk) return { text: t, labelEl: last };
   }
   return { text: '', labelEl: null };
 }
@@ -121,9 +168,31 @@ function dateGroupLabel(el: HTMLElement): string {
   return precedingLabel(el, [el], DATE_PART_RE).text;
 }
 
-/** The numbered entry ("Work Experience 2") a field sits in, from the nearest heading above it or a Workday id. */
+/** "From" / "To" for a Workday date box, from its field's label or the field's id (formField-startDate). */
+function workdayDateGroup(el: HTMLElement): string {
+  const field = el.closest('[data-automation-id^="formField-"]');
+  const label = field?.querySelector('label, legend');
+  const text = label ? textOf(label).replace(/\b(month|day|year)\b/gi, '').trim() : '';
+  if (text) return text;
+  const id = field?.getAttribute('data-automation-id') ?? '';
+  if (/start|from|firstYear/i.test(id)) return 'From';
+  if (/end|to\b|lastYear/i.test(id)) return 'To';
+  return dateGroupLabel(el);
+}
+
+/** Workday entry panels (workExperience-3, education-1), counted in page order. */
+const PANEL_RE = /^(workExperience|education)-\d+$/;
+
+/** The numbered entry ("Work Experience 2") a field sits in, from its Workday panel, the nearest heading above it, or a Workday id. */
 export function sectionOf(el: HTMLElement): Section | undefined {
   const doc = el.ownerDocument;
+  const panel = Array.from(doc.querySelectorAll('[data-automation-id]')).filter((p) => PANEL_RE.test(p.getAttribute('data-automation-id')!) && p.contains(el)).pop();
+  if (panel) {
+    const kind = panel.getAttribute('data-automation-id')!.startsWith('education') ? 'education' : 'experience';
+    const prefix = kind === 'education' ? 'education-' : 'workExperience-';
+    const siblings = Array.from(doc.querySelectorAll(`[data-automation-id^="${prefix}"]`)).filter((p) => PANEL_RE.test(p.getAttribute('data-automation-id')!));
+    return { kind, index: Math.max(0, siblings.indexOf(panel)) };
+  }
   let nearest: Element | undefined;
   for (const h of Array.from(doc.querySelectorAll(HEADINGS))) {
     if (h.closest(`[${OWN_ATTR}]`)) continue;
@@ -131,6 +200,15 @@ export function sectionOf(el: HTMLElement): Section | undefined {
     // A legend usually names one question ("From"), not the entry; only a numbered one counts.
     if (h.tagName === 'LEGEND' && !SECTION_HEADING_RE.test(textOf(h))) continue;
     nearest = h;
+  }
+  // Workday "Websites": entries have no numbered heading, so count the URL boxes since the heading.
+  const site = /^(websites?|links?|social (networks|media)? ?urls?)(\s*#?\s*(\d+))?$/i.exec(textOf(nearest));
+  if (site?.[4]) return { kind: 'website', index: Math.max(0, parseInt(site[4], 10) - 1) };
+  if (site && nearest) {
+    const boxes = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="text"], input[type="url"], input:not([type])')).filter(
+      (b) => precedes(nearest!, b) && !isHidden(b) && (b === el || precedes(b, el)),
+    );
+    if (el.tagName === 'INPUT' && boxes.includes(el as HTMLInputElement)) return { kind: 'website', index: boxes.length - 1 };
   }
   const m = SECTION_HEADING_RE.exec(textOf(nearest));
   if (m) {
@@ -161,16 +239,18 @@ export function findLabel(el: HTMLElement, group: HTMLElement[] = [el]): { text:
     if (el.id) {
       const forLabel = doc.querySelector(`label[for="${CSS.escape(el.id)}"]`);
       const t = textOf(forLabel);
-      if (t && !GENERIC_LABELS.test(t)) return { text: t, labelEl: forLabel };
+      if (withoutPrompt(t) && !GENERIC_LABELS.test(t)) return { text: t, labelEl: forLabel };
     }
+    // Workday names its dropdown buttons "Select One Required"; that is the prompt, not the question, so
+    // it is dropped and the question is read from the text before the button instead.
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
-      const els = labelledBy.split(/\s+/).map((id) => doc.getElementById(id)).filter(Boolean);
-      const t = cleanLabel(els.map((e) => textOf(e)).join(' '));
+      const els = labelledBy.split(/\s+/).map((id) => doc.getElementById(id)).filter((e) => e && e !== el);
+      const t = withoutPrompt(cleanLabel(els.map((e) => textOf(e)).join(' ')));
       if (t) return { text: t, labelEl: els[0] ?? null };
     }
-    const aria = el.getAttribute('aria-label');
-    if (aria && !GENERIC_LABELS.test(aria.trim())) return { text: cleanLabel(aria), labelEl: null };
+    const aria = withoutPrompt(cleanLabel(el.getAttribute('aria-label') ?? ''));
+    if (aria && !GENERIC_LABELS.test(aria)) return { text: aria, labelEl: null };
   } else {
     const fieldset = el.closest('fieldset');
     const legend = fieldset?.querySelector('legend');
@@ -200,8 +280,16 @@ export function findLabel(el: HTMLElement, group: HTMLElement[] = [el]): { text:
   return { text: '', labelEl: null };
 }
 
+/** A label with a dropdown's own prompt removed: "Degree Select One Required" → "Degree"; "Select One Required" → "". */
+export function withoutPrompt(text: string): string {
+  return text
+    .replace(/[–—-]{1,2}\s*select\s*[–—-]{1,2}|\b(select one|choose one|please select|select an option|select)\b|\brequired\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function isRequired(members: HTMLElement[], labelEl: Element | null): boolean {
-  if (members.some((m) => (m as HTMLInputElement).required || m.getAttribute('aria-required') === 'true')) {
+  if (members.some((m) => (m as HTMLInputElement).required || m.getAttribute('aria-required') === 'true' || /\brequired\b/i.test(m.getAttribute('aria-label') ?? ''))) {
     return true;
   }
   if (!labelEl) return false;
@@ -246,7 +334,10 @@ function makeField(kind: FieldKind, el: HTMLElement, members: HTMLElement[], opt
   const found = findLabel(el, members);
   const { labelEl } = found;
   let text = found.text;
-  if (DATE_PART_RE.test(text)) {
+  // Workday date boxes: the id says which part, the field around it says which date ("From", "To").
+  const part = /^dateSection(Month|Day|Year)/.exec(el.getAttribute('data-automation-id') ?? '')?.[1];
+  if (part) text = `${workdayDateGroup(el) || text.replace(/\b(month|day|year)$/i, '').trim()} ${part}`.trim();
+  else if (DATE_PART_RE.test(text)) {
     const group = dateGroupLabel(el);
     if (group && !DATE_PART_RE.test(group)) text = `${group} ${text}`;
   }
@@ -273,6 +364,7 @@ function makeField(kind: FieldKind, el: HTMLElement, members: HTMLElement[], opt
 export function scanFields(root: ParentNode): ScannedField[] {
   const fields: ScannedField[] = [];
   const seenGroups = new Set<string>();
+  const seenLoose = new Set<HTMLElement>();
   const yesNoContainers = new Set<Element>();
 
   // Yes/No button pairs (Ashby). Their hidden checkbox is skipped below.
@@ -288,8 +380,10 @@ export function scanFields(root: ParentNode): ScannedField[] {
   }
 
   // Buttons that open a list (Workday "Select One"). Their text shows the current choice.
+  const seenButtons = new Set<HTMLElement>();
   for (const btn of Array.from(root.querySelectorAll<HTMLElement>('button[aria-haspopup="listbox"]'))) {
     if (isHidden(btn) || (btn as HTMLButtonElement).disabled) continue;
+    seenButtons.add(btn);
     fields.push(makeField('listbox', btn, [btn], [], btn));
   }
 
@@ -301,6 +395,19 @@ export function scanFields(root: ParentNode): ScannedField[] {
     if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'reset' || type === 'image') continue;
     if (/captcha/i.test(name) || /captcha/i.test(el.id)) continue;
     if (el.parentElement && yesNoContainers.has(el.parentElement)) continue;
+    // A styled dropdown keeps the real <select> hidden next to the button people click (BambooHR).
+    if (tag === 'SELECT' && isHidden(el)) {
+      const button = menuButtonFor(el);
+      if (button && !seenButtons.has(button)) {
+        seenButtons.add(button);
+        const field = makeField('listbox', button, [button], [], button);
+        // The select's own label ("State") beats the button's text ("State –Select–").
+        field.label = findLabel(el).text || field.label;
+        field.required ||= isRequired([el], el.id ? el.ownerDocument.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null);
+        fields.push(field);
+      }
+      continue;
+    }
     if (type !== 'file' && isHidden(el)) continue;
     if ((el as HTMLInputElement).disabled) continue;
 
@@ -318,11 +425,19 @@ export function scanFields(root: ParentNode): ScannedField[] {
         ? Array.from(wrapper.querySelectorAll<HTMLInputElement>(`input[type="${type}"]`)).filter((m) => !isHidden(m))
         : [];
       const grouped = inWrapper.length > 1 && (type === 'radio' ? !name : true);
+      // Unnamed radios outside any fieldset: the choices are the radios in the nearest container holding several.
+      // Checkboxes sharing a name are already one question; otherwise look for a loose list.
+      const sameName = name ? (el.closest('form') ?? root).querySelectorAll(`input[type="checkbox"][name="${CSS.escape(name)}"]`).length : 0;
+      const loose = grouped ? null : type === 'radio' ? (!name ? looseRadioGroup(el) : null) : sameName > 1 ? null : looseCheckboxGroup(el);
+      if (loose && seenLoose.has(loose[0]!)) continue;
+      if (loose) for (const m of loose) seenLoose.add(m);
       const key = grouped ? `wrap:${type}:${inWrapper[0]!.id || inWrapper[0]!.name}:${inWrapper.length}` : `${type}:${name || el.id}`;
       if ((name || grouped) && seenGroups.has(key)) continue;
       seenGroups.add(key);
       const scope = el.closest('form') ?? root;
-      const members = grouped
+      const members = loose
+        ? loose
+        : grouped
         ? inWrapper
         : name
           ? Array.from(scope.querySelectorAll<HTMLInputElement>(`input[type="${type}"][name="${CSS.escape(name)}"]`)).filter(
@@ -388,4 +503,42 @@ export function promptContainer(el: HTMLElement): HTMLElement {
 export function isSignInPage(root: ParentNode, fields: ScannedField[] = scanFields(root)): boolean {
   const passwords = Array.from(root.querySelectorAll<HTMLElement>('input[type="password"]')).filter((p) => !isHidden(p));
   return passwords.length > 0 && fields.filter((f) => f.kind !== 'checkbox' && f.kind !== 'yesno').length <= 3;
+}
+
+/** The radios of one question when they share no name or fieldset: those in the nearest container with several. */
+function looseRadioGroup(el: HTMLElement): HTMLInputElement[] | null {
+  let node = el.parentElement;
+  for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+    const radios = Array.from(node.querySelectorAll<HTMLInputElement>('input[type="radio"]')).filter((r) => !isHidden(r));
+    if (radios.length > 1) return radios.every((r) => !r.name) ? radios : null;
+  }
+  return null;
+}
+
+/**
+ * A "select all that apply" list with no fieldset (Workday's race question): the checkboxes in the nearest
+ * container holding three or more. Agreement boxes are never grouped; each stays its own question.
+ */
+function looseCheckboxGroup(el: HTMLElement): HTMLInputElement[] | null {
+  let node = el.parentElement;
+  for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+    const boxes = Array.from(node.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).filter((b) => !isHidden(b));
+    if (boxes.length < 2) continue;
+    if (boxes.length < 3) return null;
+    const texts = boxes.map(optionText);
+    if (texts.some((t) => t.length > 150 || /\b(agree|consent|acknowledge|certify|attest|terms|privacy)\b/i.test(t))) return null;
+    return boxes;
+  }
+  return null;
+}
+
+/** The visible button that opens the menu for a hidden native select, if the two sit together. */
+function menuButtonFor(select: HTMLElement): HTMLElement | null {
+  let node = select.parentElement;
+  for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
+    const buttons = Array.from(node.querySelectorAll<HTMLElement>('button[aria-haspopup]')).filter((b) => !isHidden(b));
+    if (buttons.length === 1) return buttons[0]!;
+    if (buttons.length > 1 || node.querySelectorAll('select').length > 1) return null;
+  }
+  return null;
 }

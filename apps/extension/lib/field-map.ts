@@ -41,6 +41,8 @@ const DESCRIPTIONS: Partial<Record<ProfileKey, string>> = {
   usCitizen: 'is a US citizen (yes/no)',
   visaStatus: 'current visa / immigration status',
   clearance: 'security clearance level held',
+  govEmployee: 'is or was an employee of the U.S. government (yes/no)',
+  otherCitizenship: 'holds citizenship of another country (yes/no)',
   relocate: 'willing to relocate (yes/no)',
   salary: 'desired salary / compensation',
   startDate: 'earliest start date / availability',

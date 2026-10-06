@@ -8,6 +8,9 @@ import {
   comboboxHasValue,
   fieldHasValue,
   fillCheckboxGroup,
+  fillCheckboxes,
+  displayedValue,
+  type ChoiceOpts,
   fillCombobox,
   fillFile,
   fillListbox,
@@ -28,7 +31,7 @@ import { clearOutline, outline, type ReviewState } from './highlight';
 import { characterLimitFor } from './match';
 import { isSignInPage, scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE } from './classify';
-import { SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
+import { pickLocationPreference, raceChoices, SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
 import { isPlaceholderOption } from './match';
 
 export interface EngineDeps {
@@ -115,7 +118,9 @@ export class FillSession {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const rescan = () => {
       clearTimeout(timer);
+      if (this.stopped) return;
       timer = setTimeout(async () => {
+        if (this.stopped) return;
         if (this.busy) return rescan();
         const added = await this.processNew();
         if (added) this.deps.onProgress?.(this.verify());
@@ -139,11 +144,26 @@ export class FillSession {
     root.addEventListener('change', onEdit, true);
     root.addEventListener('input', onEdit, true);
     root.addEventListener('click', onEdit, true);
+    this.stopWatching = () => {
+      clearTimeout(timer);
+      clearTimeout(editTimer);
+      root.removeEventListener('change', onEdit, true);
+      root.removeEventListener('input', onEdit, true);
+      root.removeEventListener('click', onEdit, true);
+    };
   }
 
+  /** Stops watching for good: a rescan already scheduled does not run, so a newer session has the page to itself. */
   disconnect() {
+    this.stopped = true;
     this.observer?.disconnect();
+    this.stopWatching?.();
   }
+
+  private stopped = false;
+  /** Repeatable sections already given their entries in this session. */
+  private expanded = new WeakSet<Element>();
+  private stopWatching?: () => void;
 
   /** Polls until new fields show up or the time runs out. */
   private async waitForFresh(maxMs: number): Promise<FieldRecord[]> {
@@ -158,12 +178,14 @@ export class FillSession {
   /** Registers fields that appeared since the last scan, in document order. */
   private collectFresh(): FieldRecord[] {
     const fresh: FieldRecord[] = [];
+    if (this.stopped) return fresh;
     const fields = scanFields(this.root());
     // Sign-in pages are left alone; the form after them is new and gets filled then.
     if (isSignInPage(this.root(), fields)) return fresh;
     for (const field of fields) {
       if (this.records.has(field.el)) continue;
       const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys) };
+      if (rec.cls.kind !== 'profile') console.info(`[Job Autofill] "${field.label.slice(0, 60) || '(no label)'}" (${field.kind}): ${rec.cls.kind}`);
       this.records.set(field.el, rec);
       fresh.push(rec);
     }
@@ -172,22 +194,21 @@ export class FillSession {
 
   /** Fills fields not seen before. Returns how many new fields were found. */
   async processNew(): Promise<number> {
-    if (this.busy) return 0;
+    if (this.busy || this.stopped) return 0;
     this.busy = true;
     try {
       // Add one work-experience / education entry per profile entry before reading the fields.
-      await this.adapter.prepare?.(this.root(), this.deps.context.profile).catch((err) => console.warn('[Job Autofill] could not add entries', err));
+      await this.adapter.prepare?.(this.root(), this.deps.context.profile, this.expanded).catch((err) => console.warn('[Job Autofill] could not add entries', err));
       const fresh = this.collectFresh();
       if (!fresh.length) return 0;
 
-      // Resume first: some sites (Ashby, Lever) parse it and prefill fields, and we only fill empty ones.
-      const files = fresh.filter((r) => r.field.kind === 'file');
-      for (const rec of files) await this.fillProfileField(rec);
-      if (files.some((r) => r.outcome === 'filled')) await sleep(this.adapter.platform === 'greenhouse' ? 300 : timing.afterUpload);
+      // Questions no rule recognised are matched (from their wording) before filling starts, so the pass
+      // below can go strictly top to bottom.
+      await this.mapUnknown(fresh);
 
       const watcher = this.watchForCleared();
-      // Walk the form top to bottom. A question revealed by an answer (race after Hispanic/Latino) is
-      // slotted in right after the field that revealed it, so it is filled before moving further down.
+      // Walk the form top to bottom, uploads and AI-written answers included, never going back up. A question
+      // revealed by an answer (race after Hispanic/Latino) is slotted in right after the field that revealed it.
       let added = false;
       const grow = new MutationObserver((mutations) => {
         if (mutations.some((m) => Array.from(m.addedNodes).some((n) => n.nodeType === 1 && !(n as Element).closest('[data-jaf]')))) {
@@ -195,23 +216,27 @@ export class FillSession {
         }
       });
       grow.observe(this.root() as Node, { childList: true, subtree: true });
-      const queue = fresh.filter((r) => r.field.kind !== 'file');
+      const queue = [...fresh].sort(byDocumentOrder);
       try {
         for (let i = 0; i < queue.length; i++) {
+          // A disconnected session (a newer Fill, or the page moved on) stops mid-pass.
+          if (this.stopped) break;
           const rec = queue[i]!;
           added = false;
-          await this.fillProfileField(rec);
+          await this.fillRecord(rec);
           const reveals = REVEALS_RE.test(rec.field.label);
           if (!added && !reveals) continue;
           // The follow-up can render a beat after the answer lands, so a known reveal question is
           // polled before moving on; other DOM changes get one short settle.
           const more = await this.waitForFresh(reveals ? timing.reveal : timing.settle);
           if (!more.length) continue;
+          await this.mapUnknown(more);
           fresh.push(...more);
-          const rest = [...queue.slice(i + 1), ...more.filter((r) => r.field.kind !== 'file')].sort(byDocumentOrder);
+          // Fields that appeared above the current one (a page re-render) are not gone back for.
+          const below = more.filter((r) => byDocumentOrder(rec, r) < 0);
+          const rest = [...queue.slice(i + 1), ...below].sort(byDocumentOrder);
           queue.length = i + 1;
           queue.push(...rest);
-          for (const r of more) if (r.field.kind === 'file') await this.fillProfileField(r);
         }
       } finally {
         grow.disconnect();
@@ -222,10 +247,6 @@ export class FillSession {
       this.traceDropdowns('end of pass');
       watcher.disconnect();
       await this.closeOpenDropdowns();
-      await this.mapUnknown(fresh);
-      for (const rec of fresh) {
-        if (rec.cls.kind === 'free_response') await this.fillFreeResponse(rec);
-      }
       return fresh.length;
     } finally {
       this.busy = false;
@@ -248,7 +269,7 @@ export class FillSession {
           label: r.field.label.slice(0, 300),
           kind: r.field.kind,
           options: r.field.options.filter((o) => !isPlaceholderOption(o)).slice(0, 30).map((o) => o.slice(0, 120)),
-          section: r.field.section?.kind,
+          section: r.field.section?.kind === 'website' ? undefined : r.field.section?.kind,
         })),
       )
       .catch((err) => ({ ok: false as const, error: String(err) }));
@@ -261,12 +282,21 @@ export class FillSession {
       if (!key || !AI_MAPPABLE_KEYS.has(key as ProfileKey)) continue;
       const index = rec.field.section?.index;
       rec.cls = { kind: 'profile', key: key as ProfileKey, source: 'ai', ...(index !== undefined ? { index } : {}) };
-      await this.fillProfileField(rec);
-      if (rec.outcome === 'filled') {
-        rec.ai = true;
-        outline(rec.field.outlineTarget, 'ai');
-      }
     }
+  }
+
+  /** Fills one field of the top-to-bottom pass, whatever kind of answer it takes. */
+  private async fillRecord(rec: FieldRecord) {
+    if (rec.cls.kind === 'free_response') return this.fillFreeResponse(rec);
+    if (rec.cls.kind !== 'profile') return;
+    await this.fillProfileField(rec);
+    if (rec.outcome !== 'filled') return;
+    if (rec.cls.source === 'ai') {
+      rec.ai = true;
+      outline(rec.field.outlineTarget, 'ai');
+    }
+    // Some sites read an uploaded resume and prefill the fields below it; let that finish first.
+    if (rec.field.kind === 'file') await sleep(this.adapter.platform === 'greenhouse' ? 300 : timing.afterUpload);
   }
 
   /** Leaves every dropdown closed; a question we could not answer is flagged red instead of left open. */
@@ -338,8 +368,63 @@ export class FillSession {
         required: field.required,
         options: field.options,
         index: rec.cls.index,
+        company: this.jobInfo.company,
       });
       const topOption = TOP_OPTION_KEYS.has(key);
+      const choice: ChoiceOpts = {
+        topOption,
+        degree: key === 'degree',
+        // "University of California" is not "University of California, Santa Cruz".
+        strict: STRICT_KEYS.has(key),
+        acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key),
+      };
+      if (key === 'locationPreference') {
+        // Ranked office choices: never repeat an earlier preference; see pickLocationPreference.
+        const rank = preferenceRank(field.label);
+        const chosen = [...this.records.values()]
+          .filter((r) => r !== rec && r.cls.kind === 'profile' && r.cls.key === 'locationPreference' && r.field.el.isConnected)
+          .map((r) => displayedValue(r.field))
+          .filter(Boolean);
+        choice.pick = (options) => pickLocationPreference(options, profile, rank, chosen);
+        choice.topOption = false;
+      }
+      // Skill pickers (Workday "Type to Add Skills"): add each saved skill as its own chip.
+      if (key === 'skills' && field.kind === 'prompt') {
+        let added = 0;
+        for (const [i, skill] of profile.skills.slice(0, 15).entries()) {
+          const out = await fillPrompt(field, [skill], { allowMore: i > 0, strict: true });
+          if (i === 0 && out === 'already') {
+            added = -1;
+            break;
+          }
+          if (out === 'filled') added++;
+        }
+        rec.outcome = added < 0 ? 'already' : added ? 'filled' : 'nomatch';
+        if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
+        console.info(`[Job Autofill] "${field.label.slice(0, 60)}" (prompt) as skills: ${added > 0 ? `${added} added` : rec.outcome}`);
+        return;
+      }
+      // "Select all that apply" race lists get every saved race; single-choice ones get one answer.
+      if (key === 'race' && (field.kind === 'checkboxGroup' || field.kind === 'prompt')) {
+        const answers = raceChoices(profile);
+        if (field.kind === 'checkboxGroup') rec.outcome = fillCheckboxes(field, answers);
+        else {
+          // Add each race as its own chip; stop if the list was already answered before we started.
+          let added = false;
+          for (const [i, a] of answers.entries()) {
+            const out = await fillPrompt(field, a, { allowMore: i > 0 });
+            if (i === 0 && out === 'already') {
+              rec.outcome = 'already';
+              break;
+            }
+            added ||= out === 'filled';
+          }
+          rec.outcome ??= added ? 'filled' : 'nomatch';
+        }
+        if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
+        console.info(`[Job Autofill] "${field.label.slice(0, 60)}" (${field.kind}) as race: ${rec.outcome}`);
+        return;
+      }
       // A multiple-choice list of arrangements: "Flexible" ticks every one.
       if (key === 'workMode' && field.kind === 'checkboxGroup' && profile.preferences.workMode === 'flexible') {
         const boxes = field.members as HTMLInputElement[];
@@ -369,7 +454,11 @@ export class FillSession {
             key === 'location' &&
             (this.adapter.platform === 'lever' || /location/i.test((field.el as HTMLElement).className));
           // A number box rejects "$115,000" or "June"; give it digits ("06" for a month box).
-          const numeric = input.type === 'number' || input.getAttribute('role') === 'spinbutton' || input.inputMode === 'numeric';
+          const numeric =
+            input.type === 'number' ||
+            input.getAttribute('role') === 'spinbutton' ||
+            input.inputMode === 'numeric' ||
+            /^dateSection/.test(input.getAttribute('data-automation-id') ?? '');
           const typed = numeric ? (values.find((v) => /^\d+$/.test(v)) ?? first.replace(/[^\d.]/g, '')) : first;
           rec.outcome = isTypeahead ? await fillTypeahead(field, values) : fillText(field, typed);
           break;
@@ -378,19 +467,19 @@ export class FillSession {
           rec.outcome = fillText(field, first);
           break;
         case 'select':
-          rec.outcome = fillSelect(field, values, { topOption, degree: key === 'degree' });
+          rec.outcome = fillSelect(field, values, choice);
           break;
         case 'combobox':
-          rec.outcome = await fillCombobox(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key), topOption, degree: key === 'degree' });
+          rec.outcome = await fillCombobox(field, values, choice);
           break;
         case 'listbox':
-          rec.outcome = await fillListbox(field, values, { topOption, degree: key === 'degree' });
+          rec.outcome = await fillListbox(field, values, choice);
           break;
         case 'prompt':
-          rec.outcome = await fillPrompt(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key), topOption, degree: key === 'degree' });
+          rec.outcome = await fillPrompt(field, values, choice);
           break;
         case 'radio':
-          rec.outcome = fillRadio(field, values, { degree: key === 'degree' });
+          rec.outcome = fillRadio(field, values, choice);
           break;
         case 'checkbox':
           rec.outcome = fillCheckbox(field, values);
@@ -409,6 +498,7 @@ export class FillSession {
       rec.outcome = 'failed';
     }
     if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
+    console.info(`[Job Autofill] "${field.label.slice(0, 60)}" (${field.kind}) as ${key}: ${rec.outcome}`);
     if (field.kind === 'combobox') this.traceDropdowns(`after "${field.label.slice(0, 50)}" (${rec.outcome})`);
   }
 
@@ -520,6 +610,18 @@ export async function waitForForm(doc: Document, adapter: Adapter, timeout = 150
     await sleep(timeout > 60000 ? 1000 : 300);
   }
   return false;
+}
+
+/** Keys whose list answers must contain every distinctive word of the saved value. */
+const STRICT_KEYS = new Set<ProfileKey>(['school', 'major']);
+
+/** 1 for "first location preference", 2 for "second ...", and so on. */
+function preferenceRank(label: string): number {
+  const l = label.toLowerCase();
+  if (/\b(second|2nd)\b/.test(l)) return 2;
+  if (/\b(third|3rd)\b/.test(l)) return 3;
+  if (/\b(fourth|4th)\b/.test(l)) return 4;
+  return 1;
 }
 
 const QUESTION_RE = /^(are|is|will|would|do|does|can|could|have|did)\b/i;

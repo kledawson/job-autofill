@@ -22,10 +22,12 @@ export interface Adapter {
    * and fill each step as it appears, and wait for the form while the person signs in.
    */
   multiStep?: boolean;
+  /** Start filling (and watching) at once instead of waiting for a recognisable form first. */
+  watchWholeFlow?: boolean;
   /** Fields this adapter must recognise before a page counts as an application form (default: any 2 fields). */
   minProfileFields?: number;
   /** Runs before each scan, e.g. to add one work-experience entry per profile entry. */
-  prepare?(root: ParentNode, profile: Profile): Promise<boolean>;
+  prepare?(root: ParentNode, profile: Profile, done: WeakSet<Element>): Promise<boolean>;
   /** Fetches the job description from the page's own site when the form page does not show it. */
   fetchDescription?(doc: Document): Promise<string>;
 }
@@ -273,6 +275,7 @@ function workdayPosting(doc: Document): { tenant: string; site: string; jobPath:
 const workday: Adapter = {
   platform: 'workday',
   multiStep: true,
+  watchWholeFlow: true,
   minProfileFields: 2,
   keys: {
     // Current Workday ids
@@ -309,7 +312,8 @@ const workday: Adapter = {
     linkedinQuestion: 'linkedin',
     'file-upload-input-ref': 'resume',
   },
-  formRoot: (doc) => doc.body,
+  // The application pages, without the site header's language and account menus.
+  formRoot: (doc) => doc.querySelector('[data-automation-id="applyFlowPage"]') ?? doc.querySelector('main') ?? doc.body,
   jobInfo(doc) {
     const posting = workdayPosting(doc);
     const fromPath = (posting?.jobPath.split('/').pop() ?? '').replace(/_[A-Z]*[-_]?\d[\w-]*$/, '').replace(/-/g, ' ').trim();

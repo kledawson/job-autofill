@@ -130,7 +130,7 @@ describe('start date, work arrangement, survey answers', () => {
 describe('combined and location questions', () => {
   it('answers authorized-without-sponsorship from both saved answers', () => {
     const p = sampleProfile();
-    p.workAuth = { authorizedUS: 'yes', needsSponsorship: 'no', status: '', clearance: '' };
+    p.workAuth = { ...p.workAuth, authorizedUS: 'yes', needsSponsorship: 'no', status: '', clearance: '' };
     expect(valueFor('authorizedNoSponsor', p)).toEqual(['Yes']);
     p.workAuth.needsSponsorship = 'yes';
     expect(valueFor('authorizedNoSponsor', p)).toEqual(['No']);

@@ -35,6 +35,10 @@ export interface Profile {
   currentTitle: string;
   /** Employer now. Empty if not working; autofill answers "N/A" only when the field is required. */
   currentCompany: string;
+  /** Most recent past employer, for "previous employer" questions. */
+  previousCompany: string;
+  /** Job title at the previous employer. */
+  previousTitle: string;
 
   email: string;
   age: string;
@@ -60,6 +64,12 @@ export interface Profile {
     status: string;
     /** Highest active security clearance, one of CLEARANCE_LEVELS (empty when not set). */
     clearance: string;
+    /** Current or former employee of the U.S. government. */
+    govEmployee: YesNo;
+    /** Citizen of any country besides the one in `country`/status. */
+    otherCitizenship: YesNo;
+    /** Those other countries, comma-separated (for export-control questions). */
+    otherCountries: string;
   };
 
   education: Education[];
@@ -71,11 +81,14 @@ export interface Profile {
     startDate: string;
     relocate: YesNo;
     workMode: '' | 'remote' | 'hybrid' | 'onsite' | 'flexible';
+    /** Bound by a non-compete, non-solicitation, or similar agreement with a current or past employer. */
+    nonCompete: YesNo;
   };
 
   /** Voluntary self-identification. Never sent to Gemini. */
   eeo: {
     gender: string;
+    /** One race, several joined with "; " (see racesOf), or DECLINE. */
     race: string;
     hispanic: string;
     veteran: string;
@@ -86,6 +99,14 @@ export interface Profile {
 }
 
 export const DECLINE = 'Decline to answer';
+
+/** Saved races, or [] when declined. Several are stored joined with "; ". */
+export function racesOf(race: string): string[] {
+  return race
+    .split(';')
+    .map((r) => r.trim())
+    .filter((r) => r && r !== DECLINE);
+}
 
 export const WORK_STATUSES = ['US Citizen', 'Permanent Resident (Green Card)', 'Asylee / Refugee', 'F-1 (OPT/CPT)', 'H-1B', 'Other visa'];
 
@@ -125,6 +146,8 @@ export function emptyProfile(): Profile {
     pronouns: '',
     currentTitle: '',
     currentCompany: '',
+    previousCompany: '',
+    previousTitle: '',
     email: '',
     age: '',
     countryCode: '+1',
@@ -139,11 +162,11 @@ export function emptyProfile(): Profile {
     github: '',
     portfolio: '',
     website: '',
-    workAuth: { authorizedUS: '', needsSponsorship: '', status: '', clearance: '' },
+    workAuth: { authorizedUS: '', needsSponsorship: '', status: '', clearance: '', govEmployee: '', otherCitizenship: '', otherCountries: '' },
     education: [emptyEducation()],
     experience: [emptyExperience()],
     skills: [],
-    preferences: { salary: '', startDate: '', relocate: '', workMode: '' },
+    preferences: { salary: '', startDate: '', relocate: '', workMode: '', nonCompete: '' },
     eeo: { gender: DECLINE, race: DECLINE, hispanic: DECLINE, veteran: DECLINE, disability: DECLINE },
     updatedAt: 0,
   };
