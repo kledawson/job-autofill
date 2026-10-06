@@ -5,6 +5,7 @@ import { mappingPrompt, mappingSchema, parseMappings, questionKey } from '@/lib/
 import { sanitizeDraft, sectionRequest } from '@/lib/resume';
 import {
   fileToPayload,
+  pageStatusKey,
   type BackgroundMessage,
   type BackgroundMessages,
   type ContentMessage,
@@ -194,6 +195,13 @@ const handlers: Handlers = {
   async frameFilling(_req, sender) {
     const at = sender.tab?.id !== undefined ? fillingFrames.get(sender.tab.id) : undefined;
     return { active: at !== undefined && Date.now() - at < 60000 };
+  },
+
+  async setPageStatus(req, sender) {
+    if (sender.tab?.id !== undefined) {
+      await browser.storage.session.set({ [pageStatusKey(sender.tab.id)]: { ...req.status, origin: req.origin } });
+    }
+    return {};
   },
 
   async fillStarted(req, sender) {
@@ -443,6 +451,7 @@ export default defineBackground(() => {
 
   browser.tabs.onRemoved.addListener(async (tabId) => {
     fillingFrames.delete(tabId);
+    await browser.storage.session.remove(pageStatusKey(tabId));
     const pending = await pendingTabs();
     if (pending.includes(tabId)) await setPendingTabs(pending.filter((id) => id !== tabId));
   });

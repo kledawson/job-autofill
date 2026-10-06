@@ -4,7 +4,7 @@ import { useLiveQuery, usePublicSettings } from '@/components/hooks';
 import { missingRequired } from '@/components/ProfileSections';
 import { Button, cx, Input, Notice } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
-import { sendToBackground } from '@/lib/messages';
+import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
 import { ALL_SITES, detectPlatform, PLATFORM_NAMES } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
 
@@ -43,6 +43,28 @@ function useActiveTab() {
   return tab;
 }
 
+/** What the content script last reported for a tab, while the tab is still on the site that reported it. */
+function usePageStatus(tabId: number | undefined, tabUrl: string | undefined) {
+  type Stored = PageStatus & { origin: string };
+  const [stored, setStored] = useState<Stored | null>(null);
+  useEffect(() => {
+    setStored(null);
+    if (tabId === undefined) return;
+    const key = pageStatusKey(tabId);
+    void browser.storage.session.get(key).then((r) => setStored((r[key] as Stored | undefined) ?? null));
+    const onChanged = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area === 'session' && key in changes) setStored((changes[key]!.newValue as Stored | undefined) ?? null);
+    };
+    browser.storage.onChanged.addListener(onChanged);
+    return () => browser.storage.onChanged.removeListener(onChanged);
+  }, [tabId]);
+  let origin = '';
+  try {
+    origin = tabUrl ? new URL(tabUrl).origin : '';
+  } catch {}
+  return stored && stored.origin === origin ? stored : null;
+}
+
 /**
  * Pages outside the known job sites need the optional all-sites permission. Chrome only shows its prompt
  * during a click, so this must be the first thing a click handler awaits.
@@ -67,6 +89,7 @@ export default function SidePanel() {
   const applications = useLiveQuery(() => db.applications.orderBy('filledAt').reverse().limit(50).toArray()) ?? [];
   const { id: tabId, url: tabUrl } = useActiveTab();
   const current = applications.find((a) => a.tabId === tabId && a.status !== 'Submitted') ?? applications.find((a) => a.tabId === tabId);
+  const pageStatus = usePageStatus(tabId, tabUrl);
   const resume = useLiveQuery(() => db.files.get('resume'));
 
   const [link, setLink] = useState('');
@@ -166,7 +189,16 @@ export default function SidePanel() {
         )}
       </section>
 
-      {current && <CurrentApplication app={current} />}
+      {current ? (
+        <CurrentApplication app={current} pageStatus={pageStatus} />
+      ) : (
+        pageStatus && (
+          <section className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-medium uppercase tracking-wide text-indigo-700">This tab</p>
+            <PageStatusBox status={pageStatus} />
+          </section>
+        )
+      )}
 
       <section className="flex-1">
         <div className="mb-2 flex items-center justify-between">
@@ -201,7 +233,24 @@ export default function SidePanel() {
   );
 }
 
-function CurrentApplication({ app }: { app: Application }) {
+function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: boolean }) {
+  if (hideTitle && !status.lines.length) return null;
+  return (
+    <div className="space-y-0.5 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700" role="status">
+      {!hideTitle && (
+        <p className="flex items-center gap-2 font-semibold text-slate-800">
+          <span className={cx('size-2 shrink-0 rounded-full', status.tone === 'working' ? 'bg-blue-600' : 'bg-green-600')} />
+          {status.title}
+        </p>
+      )}
+      {status.lines.map((l, i) => (
+        <p key={i}>{l}</p>
+      ))}
+    </div>
+  );
+}
+
+function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus: PageStatus | null }) {
   const [showMissing, setShowMissing] = useState(true);
   const [error, setError] = useState('');
   return (
@@ -217,11 +266,14 @@ function CurrentApplication({ app }: { app: Application }) {
 
       {app.status !== 'Filling' && (
         <div className="grid grid-cols-3 gap-2 text-center">
-          <Stat value={app.filledCount} label="filled" color="text-green-700" />
+          <Stat value={app.filledCount} label="From profile" color="text-green-700" />
           <Stat value={app.aiAnswers} label="AI-written" color="text-blue-700" />
-          <Stat value={app.missingCount} label="need you" color={app.missingCount ? 'text-red-700' : 'text-slate-400'} />
+          <Stat value={app.missingCount} label="Need you" color={app.missingCount ? 'text-red-700' : 'text-slate-400'} />
         </div>
       )}
+
+      {/* The pill already names the status, so a matching title is left out. */}
+      {pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
 
       {app.missingLabels.length > 0 && (
         <div>

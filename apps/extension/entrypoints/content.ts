@@ -1,12 +1,17 @@
 import { browser } from 'wxt/browser';
 import { ADAPTERS } from '@/lib/autofill/adapters';
 import { FillSession, waitForForm, type FillSummary } from '@/lib/autofill/engine';
-import { showStatus } from '@/lib/autofill/highlight';
-import { sendToBackground, type ContentMessage } from '@/lib/messages';
+import { sendToBackground, type ContentMessage, type PageStatus } from '@/lib/messages';
 import { ATS_MATCHES, platformFor } from '@/lib/platforms';
 
 /** How long a multi-step application (Workday) is watched for its form while the person signs in or clicks Apply. */
 const MULTI_STEP_WAIT = 30 * 60_000;
+
+/** Shows what is happening on this tab in the side panel; nothing is drawn over the page. */
+function showStatus(status: PageStatus | null) {
+  // A frame without a form has nothing to say, and clearing would erase the frame that has one.
+  if (status) void sendToBackground('setPageStatus', { status, origin: location.origin }).catch(() => undefined);
+}
 
 export default defineContentScript({
   matches: ATS_MATCHES,
@@ -111,17 +116,10 @@ export default defineContentScript({
         });
         return;
       }
-      const lines = [`${summary.filledCount} fields filled from your profile.`];
-      if (summary.aiAnswers) lines.push(`${summary.aiAnswers} AI answer${summary.aiAnswers > 1 ? 's' : ''} to review (outlined in blue).`);
-      if (summary.missingLabels.length) {
-        lines.push(`${summary.missingLabels.length} field${summary.missingLabels.length > 1 ? 's' : ''} need you (outlined in red).`);
-      }
+      // Counts show in the side panel's tiles; fields on the page are outlined in the matching colors.
+      const lines: string[] = [];
       if (summary.aiNote) lines.push(summary.aiNote);
-      lines.push(
-        adapter.multiStep
-          ? 'Review this page, then continue. Each next page is filled when it opens; submit it yourself.'
-          : 'Review everything, then submit it yourself.',
-      );
+      if (adapter.multiStep) lines.push('Review this page, then continue. Each next page is filled when it opens.');
       showStatus({ title: 'Ready for review', lines, tone: 'done' });
       await sendToBackground('fillFinished', {
         applicationId: currentId,

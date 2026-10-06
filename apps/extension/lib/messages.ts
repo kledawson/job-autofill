@@ -34,6 +34,16 @@ export interface FieldQuestion {
   section?: 'experience' | 'education';
 }
 
+/** What the content script is doing on a tab, shown in the side panel. Never contains applicant values. */
+export interface PageStatus {
+  title: string;
+  lines: string[];
+  tone: 'working' | 'done';
+}
+
+/** Session-storage key holding a tab's {@link PageStatus} plus the page origin it was set on. */
+export const pageStatusKey = (tabId: number) => `pageStatus:${tabId}`;
+
 export type Result<T = {}> = ({ ok: true } & T) | { ok: false; error: string };
 
 /** Messages handled by the background worker, with their response types. */
@@ -60,6 +70,8 @@ export interface BackgroundMessages {
     };
     res: {};
   };
+  /** Replaces this tab's status in the side panel. */
+  setPageStatus: { req: { status: PageStatus; origin: string }; res: {} };
   jobDescription: { req: { platform: 'lever' | 'ashby'; org: string; jobId: string }; res: string };
   /** Tabs opened from a pasted link are marked pending; `commit` consumes the mark. */
   claimPendingFill: { req: { commit: boolean }; res: { fill: boolean } };
