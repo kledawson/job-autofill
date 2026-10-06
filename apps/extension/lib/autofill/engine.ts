@@ -66,6 +66,10 @@ interface FieldRecord {
 /** Questions whose answer is known to reveal a follow-up directly beneath them. */
 const REVEALS_RE = /hispanic|latino/i;
 
+function fieldSignature(f: FieldRecord['field']): string {
+  return [f.kind, f.label, f.path, f.section?.kind ?? '', f.section?.index ?? ''].join('|');
+}
+
 function byDocumentOrder(a: FieldRecord, b: FieldRecord): number {
   return composedCompare(a.field.el, b.field.el);
 }
@@ -123,7 +127,7 @@ export class FillSession {
       timer = setTimeout(async () => {
         if (this.stopped) return;
         if (this.busy) return rescan();
-        const added = await this.processNew();
+        const added = await this.processNew(true);
         if (added) this.deps.onProgress?.(this.verify());
       }, 700);
     };
@@ -165,6 +169,8 @@ export class FillSession {
   /** Repeatable sections already given their entries in this session. */
   private expanded = new WeakSet<Element>();
   private stopWatching?: () => void;
+  /** Questions already handled in this session, so a redrawn copy is not filled again behind the user's back. */
+  private seen = new Set<string>();
 
   /** Polls until new fields show up or the time runs out. */
   private async waitForFresh(maxMs: number): Promise<FieldRecord[]> {
@@ -177,7 +183,7 @@ export class FillSession {
   }
 
   /** Registers fields that appeared since the last scan, in document order. */
-  private collectFresh(): FieldRecord[] {
+  private collectFresh(watching = false): FieldRecord[] {
     const fresh: FieldRecord[] = [];
     if (this.stopped) return fresh;
     const fields = scanFields(this.root());
@@ -185,6 +191,14 @@ export class FillSession {
     if (isSignInPage(this.root(), fields)) return fresh;
     for (const field of fields) {
       if (this.records.has(field.el)) continue;
+      // A control the page redrew after the user removed its value (a deleted resume swapped for an upload
+      // button) is a new element, but not a new question: leave it for the next explicit Fill.
+      const sig = fieldSignature(field);
+      if (watching && this.seen.has(sig)) {
+        this.records.set(field.el, { field, cls: { kind: 'unknown', askAi: false } as FieldRecord['cls'] });
+        continue;
+      }
+      this.seen.add(sig);
       const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys) };
       if (rec.cls.kind !== 'profile') console.info(`[Job Autofill] "${field.label.slice(0, 60) || '(no label)'}" (${field.kind}): ${rec.cls.kind}`);
       this.records.set(field.el, rec);
@@ -194,13 +208,13 @@ export class FillSession {
   }
 
   /** Fills fields not seen before. Returns how many new fields were found. */
-  async processNew(): Promise<number> {
+  async processNew(watching = false): Promise<number> {
     if (this.busy || this.stopped) return 0;
     this.busy = true;
     try {
       // Add one work-experience / education entry per profile entry before reading the fields.
       await this.adapter.prepare?.(this.root(), this.deps.context.profile, this.expanded).catch((err) => console.warn('[Job Autofill] could not add entries', err));
-      const fresh = this.collectFresh();
+      const fresh = this.collectFresh(watching);
       if (!fresh.length) return 0;
 
       // Questions no rule recognised are matched (from their wording) before filling starts, so the pass
