@@ -5,6 +5,14 @@ const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
 
 export type FillOutcome = 'filled' | 'already' | 'nomatch' | 'failed';
 
+export function dispatchSelectionChange(el: HTMLElement) {
+  withGuard(el, () => { fire(el, 'input'); fire(el, 'change'); });
+}
+
+export function openSelectionMenu(el: HTMLElement) {
+  withGuard(el, () => { el.focus({ preventScroll: true }); mouse(el, 'mousedown'); key(el, 'ArrowDown'); });
+}
+
 /** Waits used while dropdowns load; tests shorten these. */
 export const timing = {
   menuOpen: 700,
@@ -335,7 +343,7 @@ function isVisible(el: Element): boolean {
   return !rects || rects.length > 0 || !h.ownerDocument.defaultView?.getComputedStyle;
 }
 
-function comboboxOptions(input: HTMLElement): HTMLElement[] {
+export function comboboxOptions(input: HTMLElement): HTMLElement[] {
   const doc = input.ownerDocument;
   const ids = [input.getAttribute('aria-controls'), input.getAttribute('aria-owns')].filter(Boolean) as string[];
   for (const id of ids) {
@@ -905,7 +913,7 @@ export async function fillPrompt(
   return outcome;
 }
 
-function comboboxContainer(field: ScannedField): Element {
+export function comboboxContainer(field: ScannedField): Element {
   return field.outlineTarget.closest('[class*="container"], [class*="select"]') ?? field.outlineTarget;
 }
 
@@ -913,8 +921,10 @@ function comboboxContainer(field: ScannedField): Element {
 export function comboboxSelectedValues(field: ScannedField): string[] {
   const box = comboboxContainer(field);
   const selector = '[class*="single-value" i], [class*="singleValue" i], [class*="multi-value" i], [class*="multiValue" i]';
-  const matches = Array.from(box.querySelectorAll(selector));
-  const roots = matches.filter(node => !matches.some(other => other !== node && other.contains(node)));
+  const matches = Array.from(box.querySelectorAll(selector)).filter(node => !node.matches('[class*="remove" i]'));
+  // Read each committed label separately, even when an outer value container matches
+  // the same CSS fragment. A parent containing several chips is not itself an answer.
+  const roots = matches.filter(node => !matches.some(other => other !== node && node.contains(other)));
   return roots.map(node => {
     const label = node.cloneNode(true) as Element;
     label.querySelectorAll('button, [role="button"], svg, [class*="remove" i], [aria-hidden="true"]').forEach(control => control.remove());
@@ -926,7 +936,7 @@ export function comboboxHasValue(field: ScannedField): boolean {
   return comboboxSelectedValues(field).length > 0 || !!(field.el as HTMLInputElement).value.trim();
 }
 
-function closeMenu(input: HTMLElement) {
+export function closeMenu(input: HTMLElement) {
   withGuard(input, () => {
     // Escape on an already-closed react-select can clear the chosen value, so only send it to an open menu.
     if (input.getAttribute('aria-expanded') !== 'false') key(input, 'Escape');
@@ -1046,7 +1056,7 @@ export function searchQueries(candidates: string[]): string[] {
 }
 
 /** The arrow/toggle button of a custom dropdown, if it has one. */
-function indicatorFor(field: ScannedField): HTMLElement | null {
+export function indicatorFor(field: ScannedField): HTMLElement | null {
   const scope = field.outlineTarget;
   return (
     scope.querySelector<HTMLElement>('button[aria-label*="toggle" i], button[aria-label*="flyout" i], button[aria-label*="open" i]') ??
@@ -1058,12 +1068,12 @@ function indicatorFor(field: ScannedField): HTMLElement | null {
  * Types into a search box one character at a time. Some react-select search lists (Greenhouse locations)
  * ignore a whole query set at once and only search when text arrives as typing would.
  */
-function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
+export function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   const win = el.ownerDocument.defaultView ?? window;
   const write = (v: string) => (setter ? setter.call(el, v) : (el.value = v));
   withGuard(el, () => {
-    el.focus();
+    el.focus({ preventScroll: true });
     if (!value) {
       write('');
       fire(el, 'input');

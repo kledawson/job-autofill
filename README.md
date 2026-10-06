@@ -4,7 +4,8 @@ A local-first Chrome extension for assisted job application autofill and applica
 
 **Status:** working MVP in [`apps/extension`](apps/extension/README.md): fills Greenhouse, Lever, Ashby, Workday, and other careers-site applications from a saved profile, writes free responses with Gemini (optional), tracks applications in Google Sheets (optional), and never submits for you.
 
-> The MVP follows the product design doc, which includes Gemini free responses, Google Sheets tracking, and resume upload. `AGENTS.md` and `docs/` still describe the narrower original scope and need to be reconciled.
+Recent improvements: multi-select memories, batch saving, quick sidebar editing, and a redesigned
+**Memories** library. See the [changelog](CHANGELOG.md).
 
 ## Start here
 
@@ -14,11 +15,18 @@ A local-first Chrome extension for assisted job application autofill and applica
 
 Codex reads the root `AGENTS.md`. Claude Code loads `CLAUDE.md`, which imports the same guide. After instructions change, start a fresh session or explicitly ask the assistant to re-read the files. To verify, ask it to summarize the current product scope and validation commands. Claude users can also inspect `/memory`.
 
-## Planned user experience
+## Using the extension
 
-Import profile -> open an application -> scan -> preview -> fill selected fields -> review and submit manually -> mark applied.
+Set up your profile -> open an application -> fill -> review and answer remaining questions ->
+remember reusable answers -> submit manually -> mark submitted.
 
-MVP: profile editor, JSON import/export, semantic matching, one adapter, fill verification, manual mappings, local tracker, and CSV export. AI, Sheets integration, cloud sync, and job discovery are later milestones.
+- Fill supported fields from your profile or confirmed memories, with verified writes and preserved user edits.
+- Remember single answers or multiple selections, with approved variations and company/application/site scopes.
+- Review and save several answered questions together using **Save all answered questions**.
+- Edit or delete memories directly in the sidebar, or browse the searchable **Settings → Memories** library.
+- Track applications locally; optionally configure Gemini drafts and Google Sheets tracking.
+
+Applicant data stays local by default. External integrations are opt-in, and the extension never submits applications.
 
 ## Layout
 

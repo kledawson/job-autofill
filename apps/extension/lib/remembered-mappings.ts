@@ -21,10 +21,12 @@ export const REMEMBERABLE_PROFILE_FIELDS = {
 export type RememberableProfileKey = keyof typeof REMEMBERABLE_PROFILE_FIELDS;
 export type MappingScope = Platform | 'all' | `company:${string}` | `application:${string}` | `site:${string}`;
 export interface MappingContext { platform: Platform; company: string; url: string }
-export interface SavedField { label: string; kind: string; options: string[] }
-export interface ReviewField { token: string; label: string; answered: boolean; suggestionId?: number }
-export interface CapturedAnswer extends SavedField { token: string; captureId: string; value: string }
-export type MappingTarget = { kind: 'answer'; value: string } | { kind: 'profile'; key: RememberableProfileKey };
+export type SelectionMode = 'single' | 'multiple' | 'unknown';
+export interface SavedField { label: string; kind: string; options: string[]; selectionMode?: SelectionMode }
+export interface ReviewField { token: string; label: string; answered: boolean; suggestionId?: number; selectedCount?: number; selectionMode?: SelectionMode; reason?: string }
+export interface CapturedAnswer extends SavedField { token: string; captureId: string; value: string; values?: string[] }
+export interface AnswerSelection { value: string; aliases: string[] }
+export type MappingTarget = { kind: 'answer'; value: string } | { kind: 'profile'; key: RememberableProfileKey } | { kind: 'answers'; selections: AnswerSelection[] };
 export interface MappingDraft {
   question: string;
   aliases: string[];
@@ -36,7 +38,7 @@ export interface MappingDraft {
 }
 export interface RememberedMapping extends MappingDraft {
   id: number;
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   updatedAt: number;
   lastUsed?: number;
 }
@@ -78,6 +80,7 @@ export function parseMappingDraft(value: unknown): MappingDraft {
   const t = object(v.target);
   let target: MappingTarget;
   if (t.kind === 'profile' && isRememberableProfileKey(t.key)) target = { kind: 'profile', key: t.key };
+  else if (t.kind === 'answers') target = { kind: 'answers', selections: parseSelections(t.selections) };
   else if (t.kind === 'answer' && typeof t.value === 'string' && t.value.trim() && t.value.length <= 10000) {
     target = { kind: 'answer', value: t.value.trim() };
   } else throw new Error('Enter a reusable answer or choose a supported profile field.');
@@ -95,6 +98,7 @@ export function parseMappingDraft(value: unknown): MappingDraft {
     }
   }
   const answerAliases = v.answerAliases === undefined ? undefined : parseQuestionList(v.answerAliases);
+  if (target.kind === 'answers' && answerAliases?.length) throw new Error('Add alternate labels to each selected answer, not to the whole list.');
   if (answerAliases && answerAliases.length > 20) throw new Error('Use at most 20 equivalent answers.');
   const scope = v.scope.startsWith('company:') ? `company:${companyKey(v.scope.slice(8))}` :
     v.scope.startsWith('site:') ? `site:${new URL(v.scope.slice(5)).origin}` :
@@ -107,11 +111,13 @@ export function parseMappingDraft(value: unknown): MappingDraft {
 export function parseStoredMapping(value: unknown): RememberedMapping | null {
   try {
     const v = object(value);
-    if ((v.schemaVersion !== 1 && v.schemaVersion !== 2) || !Number.isSafeInteger(v.id) || Number(v.id) < 1 ||
+    if (typeof v.schemaVersion !== 'number' || ![1, 2, 3].includes(v.schemaVersion) || !Number.isSafeInteger(v.id) || Number(v.id) < 1 ||
       typeof v.updatedAt !== 'number' || !Number.isFinite(v.updatedAt) || v.updatedAt < 0) return null;
     if (v.schemaVersion === 1 && (v.meaning !== undefined || v.answerAliases !== undefined)) return null;
     if (v.lastUsed !== undefined && (typeof v.lastUsed !== 'number' || !Number.isFinite(v.lastUsed) || v.lastUsed < 0)) return null;
-    return { ...parseMappingDraft(v), id: v.id as number, schemaVersion: v.schemaVersion as 1 | 2, updatedAt: v.updatedAt,
+    const draft = parseMappingDraft(v);
+    if (draft.target.kind === 'answers' && v.schemaVersion !== 3) return null;
+    return { ...draft, id: v.id as number, schemaVersion: v.schemaVersion as 1 | 2 | 3, updatedAt: v.updatedAt,
       ...(typeof v.lastUsed === 'number' ? { lastUsed: v.lastUsed } : {}) };
   } catch { return null; }
 }
@@ -138,7 +144,7 @@ export function assertNoMappingConflict(draft: MappingDraft, records: Remembered
   const keys = new Set(mappingQuestions(draft));
   if (records.some((m) => m.id !== id && m.scope === draft.scope && (mappingQuestions(m).some((q) => keys.has(q)) ||
     (draft.meaning && m.meaning && sameMeaning(draft.meaning, m.meaning))))) {
-    throw new Error('This wording already belongs to an answer in this scope. Edit that answer in Settings → Saved answers.');
+    throw new Error('This wording already belongs to an answer in this scope. Edit that answer in Settings → Memories.');
   }
 }
 
@@ -192,13 +198,17 @@ export class SavedAnswerIndex {
     const exact = this.exact.get(normalizeQuestion(field.label)) ?? [];
     let semantic = meaning ? this.intents.get(`${meaning.intent}:${meaning.qualifier}`) ?? [] : [];
     if (meaning?.intent === 'citizen' && meaning.qualifier === 'status' && field.options.some(o => /^(u\.?s\.?|united states) citizen$/i.test(o.trim()))) {
-      semantic = [...semantic, ...(this.intents.get('citizen:us') ?? []).filter(m => m.target.kind === 'profile' ? m.target.key === 'usCitizen' : booleanAnswer(m.target.value) === true)];
+      semantic = [...semantic, ...(this.intents.get('citizen:us') ?? []).filter(m => m.target.kind === 'profile' ? m.target.key === 'usCitizen' : m.target.kind === 'answer' && booleanAnswer(m.target.value) === true)];
     }
     const candidates = [...new Map([...exact, ...semantic].map(m => [m.id, m])).values()];
     const rank = Math.max(-1, ...candidates.map(m => scopeRank(m.scope, this.context)));
     const winners = candidates.filter(m => scopeRank(m.scope, this.context) === rank);
-    if (winners.length > 1) return { mapping: null, reason: 'Conflicting saved answers in this scope.' };
-    if (winners[0]) return { mapping: winners[0], reason: exact.includes(winners[0]) ? 'Approved wording' : 'Approved question meaning' };
+    if (winners.length > 1) return { mapping: null, reason: 'Conflicting memories in this scope.' };
+    if (winners[0]) {
+      const winner = winners[0];
+      if (winner.target.kind === 'answers' && ((field.selectionMode !== 'multiple' && !(field.kind === 'combobox' && field.selectionMode === 'unknown')) || (winner.meaning && meaning && winner.meaning.negative !== meaning.negative))) return { mapping: null, reason: 'This saved list needs a compatible multiple-choice question.' };
+      return { mapping: winner, reason: exact.includes(winner) ? 'Approved wording' : 'Approved question meaning' };
+    }
     const words = wordingTokens(field.label);
     const negative = /\b(not|never|without|unable|no)\b/i.test(field.label);
     const scored = this.records.filter(m => {
@@ -217,9 +227,10 @@ export function parseSavedFields(value: unknown): SavedField[] {
   if (!Array.isArray(value) || value.length > 200) throw new Error('Invalid fields.');
   return value.map(raw => {
     const v = object(raw);
-    if (!['text', 'textarea', 'select', 'combobox', 'radio', 'yesno', 'listbox', 'prompt'].includes(String(v.kind)) ||
+    if (!['text', 'textarea', 'select', 'combobox', 'radio', 'yesno', 'listbox', 'prompt', 'checkboxGroup'].includes(String(v.kind)) ||
       !Array.isArray(v.options) || v.options.length > 200 || v.options.some(o => typeof o !== 'string' || o.length > 1000)) throw new Error('Unsupported field.');
-    return { label: question(v.label), kind: v.kind as string, options: v.options as string[] };
+    if (v.selectionMode !== undefined && !['single', 'multiple', 'unknown'].includes(String(v.selectionMode))) throw new Error('Invalid selection mode.');
+    return { label: question(v.label), kind: v.kind as string, options: v.options as string[], ...(v.selectionMode ? { selectionMode: v.selectionMode as SelectionMode } : {}) };
   });
 }
 export function parseReviewFields(value: unknown): ReviewField[] {
@@ -228,8 +239,48 @@ export function parseReviewFields(value: unknown): ReviewField[] {
     const v = object(raw);
     if (typeof v.token !== 'string' || !/^[a-z0-9-]{1,100}$/i.test(v.token) || typeof v.answered !== 'boolean' ||
       (v.suggestionId !== undefined && (!Number.isSafeInteger(v.suggestionId) || Number(v.suggestionId) < 1))) throw new Error('Invalid field identity.');
-    return { token: v.token, label: question(v.label), answered: v.answered, ...(v.suggestionId ? { suggestionId: Number(v.suggestionId) } : {}) };
+    if (v.selectedCount !== undefined && (!Number.isSafeInteger(v.selectedCount) || Number(v.selectedCount) < 0 || Number(v.selectedCount) > 200)) throw new Error('Invalid selection count.');
+    if (v.selectionMode !== undefined && !['single', 'multiple', 'unknown'].includes(String(v.selectionMode))) throw new Error('Invalid selection mode.');
+    if (v.reason !== undefined && (typeof v.reason !== 'string' || v.reason.length > 300)) throw new Error('Invalid review reason.');
+    return { token: v.token, label: question(v.label), answered: v.answered, ...(v.suggestionId ? { suggestionId: Number(v.suggestionId) } : {}),
+      ...(v.selectedCount !== undefined ? { selectedCount: Number(v.selectedCount) } : {}), ...(v.selectionMode ? { selectionMode: v.selectionMode as SelectionMode } : {}), ...(v.reason ? { reason: v.reason as string } : {}) };
   });
+}
+
+export function parseSelections(value: unknown): AnswerSelection[] {
+  if (!Array.isArray(value) || !value.length || value.length > 20) throw new Error('Choose between 1 and 20 answers.');
+  const seen = new Set<string>();
+  const selections = value.map(raw => {
+    const v = object(raw);
+    if (typeof v.value !== 'string' || !v.value.trim() || v.value.length > 1000 || !Array.isArray(v.aliases) || v.aliases.length > 20) throw new Error('Each answer needs a label and at most 20 alternate labels.');
+    const labels = [v.value, ...v.aliases];
+    for (const label of labels) {
+      if (typeof label !== 'string' || !label.trim() || label.length > 1000) throw new Error('Answer labels must contain 1–1000 characters.');
+      const key = normalizeQuestion(label);
+      if (seen.has(key)) throw new Error('Each answer and alternate label must be unique.');
+      seen.add(key);
+    }
+    return { value: v.value.trim(), aliases: (v.aliases as string[]).map(a => a.trim()) };
+  });
+  if (JSON.stringify(selections).length > 20000) throw new Error('The memory list is too large.');
+  if (selections.length > 1 && selections.some(s => exclusiveAnswer(s.value))) throw new Error('Save an exclusive choice by itself, such as None of the above.');
+  return selections;
+}
+
+export const exclusiveAnswer = (value: string) => /^(none( of (the )?above)?|none apply|not applicable|never held (a )?clearance|no (active )?(security )?clearance|prefer not to (answer|say)|decline to (answer|self.identify))$/i.test(value.trim());
+export const targetText = (target: MappingTarget) => target.kind === 'answers' ? target.selections.map(s => s.value).join(' · ') : target.kind === 'answer' ? target.value : REMEMBERABLE_PROFILE_FIELDS[target.key];
+
+export function parseCapture(value: unknown): CapturedAnswer {
+  const v = object(value);
+  const [field] = parseSavedFields([v]);
+  if (typeof v.token !== 'string' || !/^[a-z0-9-]{1,100}$/i.test(v.token) || typeof v.captureId !== 'string' || !/^[a-z0-9-]{1,100}$/i.test(v.captureId) || typeof v.value !== 'string' || v.value.length > 10000) throw new Error('Invalid captured answer.');
+  if (field!.selectionMode === 'multiple') {
+    if (!Array.isArray(v.values) || v.values.length > 20 || v.values.some(s => typeof s !== 'string' || !s.trim() || s.length > 1000)) throw new Error('Invalid captured selections.');
+    if (v.values.length) parseSelections(v.values.map(value => ({ value, aliases: [] })));
+    return { ...field!, token: v.token, captureId: v.captureId, value: '', values: v.values as string[] };
+  }
+  if (v.values !== undefined) throw new Error('A single-choice answer cannot contain a list.');
+  return { ...field!, token: v.token, captureId: v.captureId, value: v.value };
 }
 
 export function parseQuestionList(value: unknown): string[] {

@@ -1,8 +1,8 @@
 import { browser, type Browser } from 'wxt/browser';
-import { db, getProfile, getRememberedMappings, saveRememberedMapping } from '@/lib/db';
+import { db, getProfile, getRememberedMappings, saveRememberedMapping, saveRememberedMappingBatch } from '@/lib/db';
 import { generateJson, generatePromptJson, generateText, testKey } from '@/lib/gemini';
 import { mappingPrompt, mappingSchema, parseMappings, questionKey } from '@/lib/field-map';
-import { parseQuestionList, selectRememberedMappings, SavedAnswerIndex, scopeRank, parseReviewFields, parseSavedFields, applicationKey, type MappingContext } from '@/lib/remembered-mappings';
+import { parseCapture, parseMappingDraft, parseQuestionList, selectRememberedMappings, SavedAnswerIndex, scopeRank, parseReviewFields, parseSavedFields, applicationKey, type MappingContext } from '@/lib/remembered-mappings';
 import { sanitizeDraft, sectionRequest } from '@/lib/resume';
 import {
   fileToPayload,
@@ -156,7 +156,7 @@ async function applicationForCapture(id: number, token: string, sender: Sender) 
 }
 
 async function pageContext(sender: Sender): Promise<MappingContext> {
-  if (sender.id !== browser.runtime.id || sender.tab?.id === undefined || !sender.url || !isWebUrl(sender.url) || !(await canAccess(sender.url))) throw new Error('Only an authorised application page can request saved answers.');
+  if (sender.id !== browser.runtime.id || sender.tab?.id === undefined || !sender.url || !isWebUrl(sender.url) || !(await canAccess(sender.url))) throw new Error('Only an authorised application page can request memories.');
   const app = (await db.applications.where('tabId').equals(sender.tab.id).toArray()).find(a => a.frameId === (sender.frameId ?? 0) && applicationKey(a.url) === applicationKey(sender.url!));
   return { platform: platformFor(sender.url), url: sender.url,
     company: app?.frameId === (sender.frameId ?? 0) && applicationKey(app.url) === applicationKey(sender.url) ? app.company : '' };
@@ -184,9 +184,8 @@ const handlers: Handlers = {
     const { app, field, context } = await applicationForCapture(req.applicationId, req.token, sender);
     const result = await browser.tabs.sendMessage(app.tabId!, { type: 'captureAnswer', token: req.token, question: field.label } satisfies ContentMessage, { frameId: app.frameId ?? 0 });
     if (!result?.ok) throw new Error(result?.error ?? 'The page is not ready. Fill it again first.');
-    const [validated] = parseSavedFields([result.capture]);
-    if (!validated || result.capture.token !== req.token || typeof result.capture.captureId !== 'string' ||
-      typeof result.capture.value !== 'string' || result.capture.value.length > 10000) throw new Error('Invalid captured answer.');
+    const validated = parseCapture(result.capture);
+    if (validated.token !== req.token) throw new Error('Invalid captured answer.');
     let suggestion;
     if (req.suggestionId !== undefined) {
       const records = await getRememberedMappings();
@@ -194,7 +193,47 @@ const handlers: Handlers = {
       if (match.suggestionId !== req.suggestionId) throw new Error('The suggestion changed. Fill the page again.');
       suggestion = records.find(m => m.id === req.suggestionId);
     }
-    return { ok: true, capture: { ...validated, token: req.token, captureId: result.capture.captureId, value: result.capture.value }, ...(suggestion ? { suggestion } : {}) };
+    return { ok: true, capture: validated, ...(suggestion ? { suggestion } : {}) };
+  },
+
+  async capturePageAnswers(req, sender) {
+    requireExtensionPage(sender);
+    if (!Array.isArray(req.tokens) || !req.tokens.length || req.tokens.length > 100 || req.tokens.some(t => typeof t !== 'string') || new Set(req.tokens).size !== req.tokens.length) throw new Error('Choose up to 100 distinct answered questions.');
+    const { app } = await applicationForCapture(req.applicationId, req.tokens[0]!, sender);
+    const fields = req.tokens.map(token => {
+      const field = app.reviewFields?.find(f => f.token === token);
+      if (!field) throw new Error('The review list changed. Fill the page again.');
+      return { token, label: field.label };
+    });
+    const result = await browser.tabs.sendMessage(app.tabId!, { type: 'captureAnswers', fields } satisfies ContentMessage, { frameId: app.frameId ?? 0 });
+    if (!result?.ok) throw new Error(result?.error ?? 'Could not read the answered questions.');
+    if (!Array.isArray(result.captures) || result.captures.length > 100 || !Array.isArray(result.skipped) || result.skipped.length > 100) throw new Error('Invalid captured batch.');
+    const captures = (result.captures as unknown[]).map(parseCapture);
+    if (captures.some(c => !fields.some(f => f.token === c.token && f.label === c.label)) || new Set(captures.map(c => c.token)).size !== captures.length) throw new Error('Invalid captured field identities.');
+    const skipped = result.skipped.map((row: any) => {
+      if (typeof row?.label !== 'string' || row.label.length > 700 || typeof row.reason !== 'string' || row.reason.length > 300) throw new Error('Invalid skipped field.');
+      return { label: row.label as string, reason: row.reason as string };
+    });
+    return { ok: true, captures, skipped };
+  },
+
+  async savePageAnswers(req, sender) {
+    requireExtensionPage(sender);
+    if (!Array.isArray(req.entries) || !req.entries.length || req.entries.length > 100 || req.entries.some(e => !e || typeof e.token !== 'string' || typeof e.captureId !== 'string') || new Set(req.entries.map(e => e.token)).size !== req.entries.length) throw new Error('Choose up to 100 distinct answers to save.');
+    const { app } = await applicationForCapture(req.applicationId, req.entries[0]!.token, sender);
+    const mappings = req.entries.map(entry => {
+      const draft = parseMappingDraft(entry.mapping);
+      if (!app.reviewFields?.some(f => f.token === entry.token && f.label === draft.question) || draft.target.kind === 'profile') throw new Error('The captured question changed. Read the answers again.');
+      return draft;
+    });
+    const entries = req.entries.map(({ token, captureId }) => ({ token, captureId }));
+    const frame = { frameId: app.frameId ?? 0 };
+    const validation = await browser.tabs.sendMessage(app.tabId!, { type: 'validateCaptures', entries } satisfies ContentMessage, frame);
+    if (!validation?.ok) throw new Error(validation?.error ?? 'The page answers changed. Read them again before saving.');
+    const ids = await saveRememberedMappingBatch(mappings);
+    // Saving does not write page fields. A late navigation cannot undo the durable approved batch.
+    const finished = await browser.tabs.sendMessage(app.tabId!, { type: 'finishRemembering', entries } satisfies ContentMessage, frame).catch(() => null);
+    return { ok: true, count: new Set(ids).size, note: finished?.ok ? 'Answers saved for future applications. Your page answers were kept.' : 'Answers saved. The page changed; refresh the review list with Fill this page.' };
   },
 
   async applySavedAnswer(req, sender) {
@@ -311,7 +350,7 @@ const handlers: Handlers = {
     if (sender.tab?.id !== undefined) fillingFrames.set(sender.tab.id, Date.now());
     const key = jobKey(req.url);
     const existing = await db.applications.where('jobKey').equals(key).last();
-    const patch = { company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [] };
+    const patch = { company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [], memoryQuestions: [] };
     if (existing?.id && existing.status !== 'Submitted') {
       await db.applications.update(existing.id, { ...patch, status: 'Filling' });
       return { applicationId: existing.id };
@@ -333,6 +372,7 @@ const handlers: Handlers = {
   async fillFinished(req, sender) {
     const app = await db.applications.get(req.applicationId);
     if (!app?.id || sender.id !== browser.runtime.id || app.tabId !== sender.tab?.id || (app.frameId ?? 0) !== (sender.frameId ?? 0)) return {};
+    const memoryQuestions = req.memoryQuestions === undefined ? undefined : parseQuestionList(req.memoryQuestions);
     if (req.missingQuestions !== undefined && (!Array.isArray(req.missingQuestions) ||
       req.missingQuestions.length !== req.missingLabels.length || req.missingQuestions.length > 200 ||
       req.missingQuestions.some((q) => q !== null && (typeof q !== 'string' || !q.trim() || q.length > 700)))) {
@@ -356,6 +396,7 @@ const handlers: Handlers = {
       missingLabels: req.missingLabels,
       missingQuestions: req.missingQuestions,
       reviewFields: req.reviewFields === undefined ? undefined : parseReviewFields(req.reviewFields),
+      memoryQuestions,
       ...(first ? { status: 'Ready for review' as const, filledAt: Date.now() } : {}),
     });
     const updated = (await db.applications.get(app.id))!;

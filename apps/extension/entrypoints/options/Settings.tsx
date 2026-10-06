@@ -16,16 +16,21 @@ import { KnowledgeSection } from '@/components/KnowledgeBase';
 
 const NAV = [
   ['profile', 'Profile'],
-  ['knowledge', 'Saved answers'],
+  ['memories', 'Memories'],
   ['documents', 'Documents'],
   ['connections', 'Connections'],
   ['prompt', 'Prompt'],
   ['data', 'Data'],
 ] as const;
 type Tab = (typeof NAV)[number][0];
+const tabFromHash = (): Tab => {
+  const value = location.hash.slice(1);
+  if (value === 'knowledge') return 'memories'; // Existing bookmarks remain usable.
+  return NAV.find(([id]) => id === value)?.[0] ?? 'profile';
+};
 
 export default function Settings() {
-  const [tab, setTab] = useState<Tab>(() => (location.hash.slice(1) as Tab) || 'profile');
+  const [tab, setTab] = useState<Tab>(tabFromHash);
   const { profile, update, save, replace, dirty, savedAt, reload } = useProfile();
   const { settings } = usePublicSettings();
   const [version, setVersion] = useState(0);
@@ -33,6 +38,12 @@ export default function Settings() {
   useEffect(() => {
     history.replaceState(null, '', `#${tab}`);
   }, [tab]);
+  useEffect(() => {
+    const change = () => setTab(tabFromHash());
+    window.addEventListener('hashchange', change);
+    return () => window.removeEventListener('hashchange', change);
+  }, []);
+  function chooseTab(next: Tab) { setTab(next); window.scrollTo({ top: 0, behavior: 'instant' }); }
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -60,7 +71,8 @@ export default function Settings() {
                   'w-full rounded-lg px-3 py-2 text-left text-sm',
                   tab === id ? 'bg-indigo-50 font-medium text-indigo-800' : 'text-slate-600 hover:bg-slate-100',
                 )}
-                onClick={() => setTab(id)}
+                aria-current={tab === id ? 'page' : undefined}
+                onClick={() => chooseTab(id)}
               >
                 {label}
               </button>
@@ -71,9 +83,10 @@ export default function Settings() {
 
       <main className="min-w-0 flex-1 space-y-4 pb-24">
         <select
+          aria-label="Settings section"
           className="mb-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm sm:hidden"
           value={tab}
-          onChange={(e) => setTab(e.target.value as Tab)}
+          onChange={(e) => chooseTab(e.target.value as Tab)}
         >
           {NAV.map(([id, label]) => (
             <option key={id} value={id}>
@@ -112,7 +125,7 @@ export default function Settings() {
           </>
         )}
         {tab === 'prompt' && settings && <PromptSection settings={settings} />}
-        {tab === 'knowledge' && <KnowledgeSection />}
+        {tab === 'memories' && <KnowledgeSection />}
         {tab === 'data' && (
           <DataSection
             onImported={async () => {

@@ -37,18 +37,34 @@ Sheets sync should use OAuth, stable application IDs, a durable retry queue, and
 
 ## Implemented remembered mapping flow
 
-The running extension supports Greenhouse, Lever, Ashby, Workday, and permitted generic pages. Saved
-answers live in `apps/extension/lib/remembered-mappings.ts` (validation, scope and indexing),
+The running extension supports Greenhouse, Lever, Ashby, Workday, and permitted generic pages. Memories live in `apps/extension/lib/remembered-mappings.ts` (validation, scope and indexing),
 `lib/answer-semantics.ts` (pure local meanings and option equivalents), `lib/db.ts` (trusted IndexedDB),
 and `components/KnowledgeBase.tsx` (confirmation and management).
 
 Verification reports full unresolved question text separately from truncated display labels. Eligible
 questions offer Remember answer in side-panel cards that remain after manual entry. An explicit click
 captures only that field's committed value. The editor confirms the answer and global, company,
-application or site scope. Advanced aliases/profile links are collapsed. Settings → Saved answers
+application or site scope. Advanced aliases/profile links are collapsed. Settings → Memories
 supports search, edits/removal, and last-used dates. No page answers are harvested automatically.
-React-select capture reads committed single-value labels or a single selected chip, excluding removal
-controls. Several selected chips remain unsupported rather than being collapsed into an incomplete answer.
+`MemoryLibrary` shares inline card editing, confirmed deletion, filters and visible notifications between
+Settings and the sidebar. `lib/memory-browser.ts` searches local records and selects relevant page memories
+using the approved index and current scope, including overlapping records so conflicts can be repaired.
+Search never approves question variations. Page relevance is memoized independently of search keystrokes.
+The validated `memoryQuestions` tracker metadata includes eligible completed question labels, no answers,
+so memories remain manageable after successful fills. Edits/deletion update local records for future fills;
+they never overwrite page values. Legacy `#knowledge` bookmarks resolve to Settings → Memories.
+Captures distinguish scalar answers and fixed selection lists. Native multiple selects, explicit labeled
+checkbox groups and supported React-select chips expose committed selections without removal controls
+or search queries. `lib/selection-matching.ts` resolves each saved choice independently using its approved
+aliases. `lib/autofill/selections.ts` preflights the complete set, scopes widget options to the control,
+preserves non-empty groups and verifies every committed label. React-select work has an eight-second
+budget and can follow a uniquely identified input rerender. A partial write is incomplete, never success.
+
+**Save all answered questions** explicitly requests capture of answered review tokens only. The background
+checks tracked tab/frame/URL and validates payloads. `components/BatchRemember.tsx` shows captured answers,
+individual scopes and exclusion checkboxes. Included live snapshots are checked before an atomic IndexedDB
+transaction; stale captures or conflicts reject the whole save. Equivalent existing records reuse IDs
+and approved aliases. Batch saving does not write page fields or harvest other answers.
 
 Answered review cards use an indigo **Save this answer** action; empty cards remain white with
 **Remember answer**. Text plus color communicates the state, and clearing the answer restores the empty
