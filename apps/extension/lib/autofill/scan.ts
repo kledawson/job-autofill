@@ -45,6 +45,72 @@ export interface ScannedField {
 /** Marks nodes this extension adds to the page so the scanner and observer ignore them. */
 export const OWN_ATTR = 'data-jaf';
 
+// --- Shadow DOM ----------------------------------------------------------------------------------------
+// Sites built from web components (SmartRecruiters) keep their inputs and labels inside open shadow roots,
+// which ordinary querySelector calls do not enter.
+
+/** Every element matching `selector` under `root`, including inside open shadow roots, in page order. */
+export function deepAll<T extends Element = HTMLElement>(root: ParentNode, selector: string): T[] {
+  const out = Array.from(root.querySelectorAll<T>(selector));
+  const hosts = Array.from(root.querySelectorAll('*')).filter((el) => el.shadowRoot);
+  if (!hosts.length) return out;
+  for (const host of hosts) out.push(...deepAll<T>(host.shadowRoot!, selector));
+  // Back into page order, since a component's inner fields belong where the component sits.
+  return out.sort(composedCompare);
+}
+
+/** The parent element, stepping out of a shadow root to its host. */
+export function composedParent(el: Element): HTMLElement | null {
+  return el.parentElement ?? (((el.getRootNode() as ShadowRoot).host as HTMLElement | undefined) ?? null);
+}
+
+/** The document or shadow root an element lives in, where its label[for] and aria ids are found. */
+function rootOf(el: Element): Document | ShadowRoot {
+  const root = el.getRootNode();
+  return root instanceof ShadowRoot || (root as Document).nodeType === 9 ? (root as Document | ShadowRoot) : el.ownerDocument;
+}
+
+/** closest() that keeps going past shadow roots. */
+export function composedClosest(el: Element, selector: string): HTMLElement | null {
+  const found = el.closest(selector);
+  if (found) return found as HTMLElement;
+  for (let root = el.getRootNode(); root instanceof ShadowRoot; root = root.host.getRootNode()) {
+    const outer = root.host.closest(selector);
+    if (outer) return outer as HTMLElement;
+  }
+  return null;
+}
+
+/** The web components wrapping an element (nearest first). */
+function hostsOf(el: Element): HTMLElement[] {
+  const hosts: HTMLElement[] = [];
+  for (let root = el.getRootNode(); root instanceof ShadowRoot; root = root.host.getRootNode()) hosts.push(root.host as HTMLElement);
+  return hosts;
+}
+
+/** Page order across shadow roots: compares the outermost elements that share a tree. */
+export function composedCompare(a: Node, b: Node): number {
+  if (a === b) return 0;
+  // A node no longer on the page (the step changed under it) sorts before everything that is.
+  if (a.isConnected !== b.isConnected) return a.isConnected ? 1 : -1;
+  const chain = (n: Node) => {
+    const out: Node[] = [n];
+    for (let root = n.getRootNode(); root instanceof ShadowRoot; root = root.host.getRootNode()) out.push(root.host);
+    return out;
+  };
+  const ca = chain(a);
+  const cb = chain(b);
+  for (const x of ca) {
+    for (const y of cb) {
+      if (x !== y && x.getRootNode() === y.getRootNode()) {
+        const pos = x.compareDocumentPosition(y);
+        return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+      }
+    }
+  }
+  return 0;
+}
+
 const TEXT_TYPES = new Set(['', 'text', 'email', 'tel', 'url', 'number', 'search', 'date', 'month']);
 const GENERIC_LABELS =
   /^(attach|upload|upload file|browse|enter manually|choose files?|select files?|(or )?drop files? here|file[- ]?input|file|no files? selected|click to upload.*)$/i;
@@ -64,6 +130,9 @@ export function cleanLabel(raw: string): string {
     .replace(/[*✱]/g, '')
     .replace(/\(required\)/gi, '')
     .replace(/\s+/g, ' ')
+    .trim()
+    // Teamtailor writes "First name Required"; "(Optional)" is common too.
+    .replace(/[\s.]*\(?\b(required|optional)\)?$/i, '')
     .trim();
 }
 
@@ -78,8 +147,8 @@ const CHROME = 'header, nav, [role="banner"], [role="navigation"]';
 const isDatePart = (el: HTMLElement) => /^dateSection(Month|Day|Year)/.test(el.getAttribute('data-automation-id') ?? '');
 
 function isHidden(el: HTMLElement): boolean {
-  if (el.closest(`[${OWN_ATTR}]`)) return true;
-  if (el.closest(CHROME)) return true;
+  if (composedClosest(el, `[${OWN_ATTR}]`)) return true;
+  if (composedClosest(el, CHROME)) return true;
   if (isDatePart(el)) return isDisplayNone(el);
   if (el.getAttribute('aria-hidden') === 'true') return true;
   // Bot traps are often shrunk to a pixel rather than hidden (Workday's "beecatcher").
@@ -89,7 +158,7 @@ function isHidden(el: HTMLElement): boolean {
   const laidOut = (el.ownerDocument.body?.getBoundingClientRect().width ?? 0) > 0;
   if (textBox && laidOut && rect && (rect.width <= 2 || rect.height <= 2)) return true;
   let node: HTMLElement | null = el;
-  for (let depth = 0; node && depth < 12; depth++, node = node.parentElement) {
+  for (let depth = 0; node && depth < 16; depth++, node = composedParent(node)) {
     if (node.hidden) return true;
     const style = node.ownerDocument.defaultView?.getComputedStyle(node);
     if (style && (style.display === 'none' || style.visibility === 'hidden')) return true;
@@ -98,7 +167,7 @@ function isHidden(el: HTMLElement): boolean {
 }
 
 function isDisplayNone(el: HTMLElement): boolean {
-  for (let node: HTMLElement | null = el, depth = 0; node && depth < 12; depth++, node = node.parentElement) {
+  for (let node: HTMLElement | null = el, depth = 0; node && depth < 16; depth++, node = composedParent(node)) {
     if (node.hidden || node.ownerDocument.defaultView?.getComputedStyle(node).display === 'none') return true;
   }
   return false;
@@ -115,10 +184,10 @@ function precedes(a: Node, b: Node): boolean {
  */
 function precedingLabel(el: HTMLElement, group: HTMLElement[], skip: RegExp = GENERIC_LABELS): { text: string; labelEl: Element | null } {
   const groupIds = new Set(group.map((g) => g.id).filter(Boolean));
-  let ancestor = el.parentElement;
+  let ancestor = composedParent(el);
   let node: HTMLElement = el;
   let siblingsOpen = true;
-  for (let depth = 0; ancestor && depth < 7; depth++, node = ancestor, ancestor = ancestor.parentElement) {
+  for (let depth = 0; ancestor && depth < 7; depth++, node = ancestor, ancestor = composedParent(ancestor)) {
     let caption: Element | null = null;
     // Previous siblings of the branch holding the control, nearest first, up to the previous field.
     for (let sib = siblingsOpen ? node.previousElementSibling : null; sib; sib = sib.previousElementSibling) {
@@ -232,7 +301,7 @@ export function sectionOf(el: HTMLElement): Section | undefined {
  * then the nearest label-like element before it in an enclosing container.
  */
 export function findLabel(el: HTMLElement, group: HTMLElement[] = [el]): { text: string; labelEl: Element | null } {
-  const doc = el.ownerDocument;
+  const doc = rootOf(el);
   const isGroup = group.length > 1 || el.getAttribute('type') === 'radio';
 
   if (!isGroup) {
@@ -251,6 +320,11 @@ export function findLabel(el: HTMLElement, group: HTMLElement[] = [el]): { text:
     }
     const aria = withoutPrompt(cleanLabel(el.getAttribute('aria-label') ?? ''));
     if (aria && !GENERIC_LABELS.test(aria)) return { text: aria, labelEl: null };
+    // A web component often carries the question as its own attribute: <spl-input label="First name">.
+    for (const host of hostsOf(el).slice(0, 3)) {
+      const t = cleanLabel(host.getAttribute('label') ?? host.getAttribute('aria-label') ?? '');
+      if (t && !GENERIC_LABELS.test(t)) return { text: t, labelEl: null };
+    }
   } else {
     const fieldset = el.closest('fieldset');
     const legend = fieldset?.querySelector('legend');
@@ -264,7 +338,16 @@ export function findLabel(el: HTMLElement, group: HTMLElement[] = [el]): { text:
   }
 
   const preceding = precedingLabel(el, group);
-  if (preceding.text) return preceding;
+  if (preceding.text) {
+    // One label over several boxes (JazzHR: "Address" over street, City, State, Postal): a label that names a
+    // different box gives way to this box's own placeholder.
+    const forId = preceding.labelEl?.tagName === 'LABEL' ? preceding.labelEl.getAttribute('for') : null;
+    const placeholder = (el.getAttribute('placeholder') ?? '').trim();
+    if (forId && forId !== el.id && placeholder && placeholder.length <= 40 && !/^(e\.?g\.?|ex\b|example|type here|start typing|select)/i.test(placeholder)) {
+      return { text: cleanLabel(placeholder), labelEl: null };
+    }
+    return preceding;
+  }
 
   // Lever wraps the whole question in a <label>: use its text minus the control's own text.
   const wrap = el.closest('label');
@@ -289,7 +372,15 @@ export function withoutPrompt(text: string): string {
 }
 
 function isRequired(members: HTMLElement[], labelEl: Element | null): boolean {
-  if (members.some((m) => (m as HTMLInputElement).required || m.getAttribute('aria-required') === 'true' || /\brequired\b/i.test(m.getAttribute('aria-label') ?? ''))) {
+  if (
+    members.some(
+      (m) =>
+        (m as HTMLInputElement).required ||
+        m.getAttribute('aria-required') === 'true' ||
+        /\brequired\b/i.test(m.getAttribute('aria-label') ?? '') ||
+        hostsOf(m).slice(0, 3).some((h) => h.hasAttribute('required') || h.getAttribute('aria-required') === 'true'),
+    )
+  ) {
     return true;
   }
   if (!labelEl) return false;
@@ -299,7 +390,7 @@ function isRequired(members: HTMLElement[], labelEl: Element | null): boolean {
 }
 
 function optionText(input: HTMLInputElement): string {
-  const doc = input.ownerDocument;
+  const doc = rootOf(input);
   if (input.id) {
     const l = doc.querySelector(`label[for="${CSS.escape(input.id)}"]`);
     if (l && textOf(l)) return textOf(l);
@@ -334,6 +425,15 @@ function makeField(kind: FieldKind, el: HTMLElement, members: HTMLElement[], opt
   const found = findLabel(el, members);
   const { labelEl } = found;
   let text = found.text;
+  // An upload inside a component named for its purpose (<oc-resume-upload>) says what it is through that name.
+  if (kind === 'file' && !/resume|cv|cover|transcript/i.test(text)) {
+    const chain: string[] = [];
+    for (let node = composedParent(el), depth = 0; node && depth < 8; node = composedParent(node), depth++) {
+      chain.push(`${node.tagName} ${node.id} ${node.getAttribute('data-test') ?? ''}`);
+    }
+    const named = chain.join(' ').match(/resume|cover|transcript|\bcv\b/i)?.[0]?.toLowerCase();
+    if (named) text = text ? `${text} (${named})` : named;
+  }
   // Workday date boxes: the id says which part, the field around it says which date ("From", "To").
   const part = /^dateSection(Month|Day|Year)/.exec(el.getAttribute('data-automation-id') ?? '')?.[1];
   if (part) text = `${workdayDateGroup(el) || text.replace(/\b(month|day|year)$/i, '').trim()} ${part}`.trim();
@@ -368,7 +468,7 @@ export function scanFields(root: ParentNode): ScannedField[] {
   const yesNoContainers = new Set<Element>();
 
   // Yes/No button pairs (Ashby). Their hidden checkbox is skipped below.
-  for (const btn of Array.from(root.querySelectorAll<HTMLButtonElement>('button'))) {
+  for (const btn of deepAll<HTMLButtonElement>(root, 'button')) {
     if (btn.textContent?.trim().toLowerCase() !== 'yes' || isHidden(btn)) continue;
     const parent = btn.parentElement;
     if (!parent || yesNoContainers.has(parent)) continue;
@@ -381,19 +481,20 @@ export function scanFields(root: ParentNode): ScannedField[] {
 
   // Buttons that open a list (Workday "Select One"). Their text shows the current choice.
   const seenButtons = new Set<HTMLElement>();
-  for (const btn of Array.from(root.querySelectorAll<HTMLElement>('button[aria-haspopup="listbox"]'))) {
+  for (const btn of deepAll(root, 'button[aria-haspopup="listbox"]')) {
     if (isHidden(btn) || (btn as HTMLButtonElement).disabled) continue;
     seenButtons.add(btn);
     fields.push(makeField('listbox', btn, [btn], [], btn));
   }
 
-  const controls = root.querySelectorAll<HTMLElement>('input, textarea, select');
-  for (const el of Array.from(controls)) {
+  for (const el of deepAll(root, 'input, textarea, select')) {
     const tag = el.tagName;
     const type = (el.getAttribute('type') ?? '').toLowerCase();
     const name = el.getAttribute('name') ?? '';
     if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'reset' || type === 'image') continue;
     if (/captcha/i.test(name) || /captcha/i.test(el.id)) continue;
+    // The search box inside a dropdown's menu (a phone country list) is part of that dropdown, not a question.
+    if (isMenuSearch(el)) continue;
     if (el.parentElement && yesNoContainers.has(el.parentElement)) continue;
     // A styled dropdown keeps the real <select> hidden next to the button people click (BambooHR).
     if (tag === 'SELECT' && isHidden(el)) {
@@ -501,7 +602,7 @@ export function promptContainer(el: HTMLElement): HTMLElement {
  * person signs in themselves, and filling continues on the form that appears next.
  */
 export function isSignInPage(root: ParentNode, fields: ScannedField[] = scanFields(root)): boolean {
-  const passwords = Array.from(root.querySelectorAll<HTMLElement>('input[type="password"]')).filter((p) => !isHidden(p));
+  const passwords = deepAll(root, 'input[type="password"]').filter((p) => !isHidden(p));
   return passwords.length > 0 && fields.filter((f) => f.kind !== 'checkbox' && f.kind !== 'yesno').length <= 3;
 }
 
@@ -541,4 +642,11 @@ function menuButtonFor(select: HTMLElement): HTMLElement | null {
     if (buttons.length > 1 || node.querySelectorAll('select').length > 1) return null;
   }
   return null;
+}
+
+function isMenuSearch(el: HTMLElement): boolean {
+  const hint = `${el.getAttribute('type') ?? ''} ${el.getAttribute('aria-label') ?? ''} ${el.getAttribute('placeholder') ?? ''}`;
+  if (!/\bsearch\b/i.test(hint)) return false;
+  if (composedClosest(el, '[role="listbox"], [role="menu"], [role="dialog"], [role="combobox"]')) return true;
+  return hostsOf(el).some((h) => /select|dropdown|menu/i.test(h.tagName));
 }

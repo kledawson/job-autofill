@@ -1,5 +1,5 @@
 import { bestDegreeOption, bestOption, isPlaceholderOption, normalize } from './match';
-import { OWN_ATTR, promptContainer, type ScannedField } from './scan';
+import { deepAll, OWN_ATTR, promptContainer, type ScannedField } from './scan';
 
 const SELECTED_CLASS = /(^|[\s_-])(active|selected|checked|pressed)([\s_-]|$)/i;
 
@@ -74,7 +74,8 @@ function withGuard<T>(el: Element, fn: () => T): T {
 }
 
 function fire(el: Element, type: string, init: EventInit = {}) {
-  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }));
+  // composed: an input inside a web component's shadow root must still be heard by the component and page.
+  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, composed: true, ...init }));
 }
 
 /**
@@ -91,7 +92,7 @@ function mouse(el: Element, type: string) {
 
 function key(el: Element, k: string) {
   const view = el.ownerDocument.defaultView ?? window;
-  el.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+  el.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, composed: true }));
 }
 
 export function clickSafely(el: HTMLElement) {
@@ -332,7 +333,8 @@ function comboboxOptions(input: HTMLElement): HTMLElement[] {
     const opts = Array.from(scope.querySelectorAll<HTMLElement>('[role="option"]')).filter(isVisible);
     if (opts.length) return opts;
   }
-  return Array.from(doc.querySelectorAll<HTMLElement>('[role="option"]')).filter((o) => isVisible(o) && !o.closest('[data-automation-id="selectedItemList"]'));
+  // Menus drawn inside web components (shadow roots) are found too.
+  return deepAll(doc, '[role="option"]').filter((o) => isVisible(o) && !o.closest('[data-automation-id="selectedItemList"]'));
 }
 
 // --- Button dropdowns (Workday "Select One") ---
@@ -482,8 +484,8 @@ const LISTBOX_PROMPT_RE = /select one\b|[–—-]{1,2}\s*select\s*[–—-]{1,2}
 function press(el: Element, k: string) {
   const view = el.ownerDocument.defaultView ?? window;
   const code = ({ Enter: 13, Escape: 27, ArrowDown: 40, ArrowUp: 38 } as Record<string, number>)[k] ?? k.toUpperCase().charCodeAt(0);
-  el.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, keyCode: code, which: code, bubbles: true, cancelable: true }));
-  el.dispatchEvent(new view.KeyboardEvent('keyup', { key: k, keyCode: code, which: code, bubbles: true, cancelable: true }));
+  el.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, keyCode: code, which: code, bubbles: true, cancelable: true, composed: true }));
+  el.dispatchEvent(new view.KeyboardEvent('keyup', { key: k, keyCode: code, which: code, bubbles: true, cancelable: true, composed: true }));
 }
 
 /**
@@ -560,6 +562,62 @@ function visiblePopups(doc: Document): Element[] {
   return Array.from(doc.querySelectorAll(POPUP_SELECTOR)).filter(
     (p) => isVisible(p) && !p.closest(PILLS) && p.getAttribute('data-automation-id') !== 'selectedItemList',
   );
+}
+
+/** The lists showing on the page right now, to tell later which ones a field opened. */
+export function openLists(doc: Document): Set<Element> {
+  return new Set(visiblePopups(doc));
+}
+
+/**
+ * Leaves the page as a person would after answering: every list the field opened is closed and the field is
+ * no longer focused. Lists that ignore Escape (Workday's search lists) close on a click outside them, or on
+ * their own toggle.
+ */
+export async function closeListsOpenedBy(field: ScannedField, before: Set<Element>) {
+  const doc = field.el.ownerDocument;
+  const stillOpen = () => visiblePopups(doc).filter((p) => !before.has(p) && !p.contains(field.el));
+  const attempts: (() => void)[] = [
+    () => {
+      const focused = doc.activeElement && doc.activeElement !== doc.body ? doc.activeElement : field.el;
+      withGuard(field.el, () => {
+        press(focused, 'Escape');
+        if (focused !== field.el) press(field.el, 'Escape');
+      });
+    },
+    () => {
+      // A click on the page outside the list, the way a person dismisses it.
+      (doc.activeElement as HTMLElement | null)?.blur?.();
+      withGuard(doc.body, () => {
+        mouse(doc.body, 'pointerdown');
+        mouse(doc.body, 'mousedown');
+        mouse(doc.body, 'pointerup');
+        mouse(doc.body, 'mouseup');
+        mouse(doc.body, 'click');
+      });
+    },
+    () => {
+      const toggle = composedClosestField(field.el)?.querySelector<HTMLElement>(
+        '[data-automation-id="promptIcon"], [data-automation-id="promptSearchButton"], [class*="indicator" i] button, button[aria-haspopup]',
+      );
+      if (toggle && toggle !== field.el) clickSafely(toggle);
+    },
+  ];
+  for (const attempt of attempts) {
+    if (!stillOpen().length) break;
+    attempt();
+    await sleep(timing.settle + 50);
+  }
+  const focused = doc.activeElement as HTMLElement | null;
+  if (focused && focused !== doc.body && (field.el === focused || field.el.contains(focused) || promptScope(field.el).contains(focused))) {
+    focused.blur();
+    fire(focused, 'focusout');
+  }
+}
+
+/** The question's own wrapper, where its list toggle lives. */
+function composedClosestField(el: HTMLElement): HTMLElement | null {
+  return (el.closest('[data-automation-id^="formField-"], [data-automation-id="multiSelectContainer"], [class*="select__control"], [class*="field" i]') as HTMLElement | null) ?? el.parentElement;
 }
 
 function listIsOpen(button: HTMLElement): boolean {
@@ -981,12 +1039,12 @@ function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
     }
     let typed = '';
     for (const ch of value) {
-      el.dispatchEvent(new win.KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
+      el.dispatchEvent(new win.KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true, composed: true }));
       typed += ch;
       write(typed);
       const InputEventCtor = win.InputEvent ?? win.Event;
-      el.dispatchEvent(new InputEventCtor('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: ch } as InputEventInit));
-      el.dispatchEvent(new win.KeyboardEvent('keyup', { key: ch, bubbles: true }));
+      el.dispatchEvent(new InputEventCtor('input', { bubbles: true, cancelable: true, composed: true, inputType: 'insertText', data: ch } as InputEventInit));
+      el.dispatchEvent(new win.KeyboardEvent('keyup', { key: ch, bubbles: true, composed: true }));
     }
   });
 }

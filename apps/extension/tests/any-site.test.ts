@@ -1309,3 +1309,135 @@ describe('former-employer questions checked against the work history', () => {
     expect(answer('Are you currently employed by Workday?', withJob('Workday', '2022-01'))).toBe('No');
   });
 });
+
+describe('forms built from web components (SmartRecruiters)', () => {
+  /** <spl-input label="First name" required> whose input and label live two shadow roots deep. */
+  function splInput(host: HTMLElement, id: string, label: string, type = 'text') {
+    const outer = host.attachShadow({ mode: 'open' });
+    outer.innerHTML = `<spl-internal-form-field><label slot="label" for="${id}"><span>${label}<span aria-hidden="true">*</span></span></label></spl-internal-form-field>`;
+    const field = outer.querySelector('spl-internal-form-field') as HTMLElement;
+    const inner = field.attachShadow({ mode: 'open' });
+    inner.innerHTML = `<div><div><input id="${id}" type="${type}"></div></div>`;
+  }
+
+  it('finds, labels, and fills inputs inside shadow roots', async () => {
+    document.body.innerHTML = `<form>
+      <oc-input><spl-input id="h-first" label="First name" required></spl-input></oc-input>
+      <oc-input><spl-input id="h-last" label="Last name" required></spl-input></oc-input>
+      <oc-input><spl-input id="h-email" label="Email" required></spl-input></oc-input>
+      <oc-input><spl-input id="h-li" label="LinkedIn"></spl-input></oc-input>
+      <oc-resume-upload><spl-form-field><spl-dropzone id="h-drop"></spl-dropzone></spl-form-field></oc-resume-upload>
+    </form>`;
+    splInput(document.getElementById('h-first')!, 'first-name-input', 'First name');
+    splInput(document.getElementById('h-last')!, 'last-name-input', 'Last name');
+    splInput(document.getElementById('h-email')!, 'email-input', 'Email', 'email');
+    splInput(document.getElementById('h-li')!, 'linkedin-input', 'LinkedIn');
+    document.getElementById('h-drop')!.attachShadow({ mode: 'open' }).innerHTML =
+      '<div><input id="file-input" type="file"><label for="file-input">Choose a file</label></div>';
+
+    const fields = scanFields(document.body);
+    expect(fields.map((f) => [f.kind, f.label, f.required])).toEqual([
+      ['text', 'First name', true],
+      ['text', 'Last name', true],
+      ['text', 'Email', true],
+      ['text', 'LinkedIn', false],
+      ['file', 'Choose a file (resume)', false],
+    ]);
+    const heard: string[] = [];
+    document.getElementById('h-first')!.addEventListener('input', () => heard.push('input reached the component'));
+
+    await new FillSession(document, ADAPTERS.other, deps().d).run();
+    const inner = (hostId: string, inputId: string) =>
+      (document.getElementById(hostId)!.shadowRoot!.querySelector('spl-internal-form-field')!.shadowRoot!.getElementById(inputId) as HTMLInputElement).value;
+    expect(inner('h-first', 'first-name-input')).toBe('Jordan');
+    expect(inner('h-last', 'last-name-input')).toBe('Rivera');
+    expect(inner('h-email', 'email-input')).toBe('jordan@example.com');
+    expect(inner('h-li', 'linkedin-input')).toContain('linkedin.com');
+    expect((document.getElementById('h-drop')!.shadowRoot!.getElementById('file-input') as HTMLInputElement).files?.length).toBe(1);
+    expect(heard.length).toBeGreaterThan(0);
+    expect(submits).toBe(0);
+  });
+});
+
+describe('patterns from Teamtailor, JazzHR, and SmartRecruiters', () => {
+  it('reads boxes that share one label by their placeholders (JazzHR address)', () => {
+    document.body.innerHTML = `<form><div><label for="a">Address<i>*</i></label><div>
+      <input type="text" id="a" placeholder="Address">
+      <div><div><input type="text" id="c" placeholder="City"></div><div><input type="text" id="s" placeholder="State/Province"></div>
+      <div><input type="text" id="z" placeholder="Postal"></div></div></div></div></form>`;
+    const fields = scanFields(document.body);
+    expect(fields.map((f) => f.label)).toEqual(['Address', 'City', 'State/Province', 'Postal']);
+    expect(fields.map((f) => (classifyField(f) as any).key)).toEqual(['address', 'city', 'state', 'zip']);
+  });
+
+  it('drops a trailing "Required" and matches a region list from the country (Teamtailor)', async () => {
+    document.body.innerHTML = `<form>
+      <label for="fn">First name Required</label><input id="fn" type="text">
+      <fieldset><legend>Select your location. Required</legend>
+        ${['LATAM', 'Europe', 'North America', 'Asia'].map((o, i) => `<label><input type="radio" name="loc" value="${i}"> ${o}</label>`).join('')}</fieldset>
+    </form>`;
+    const fields = scanFields(document.body);
+    expect(fields.map((f) => f.label)).toEqual(['First name', 'Select your location']);
+    await new FillSession(document, ADAPTERS.other, deps().d).run();
+    expect(value('fn')).toBe('Jordan');
+    expect(Array.from(document.querySelectorAll<HTMLInputElement>('input[name="loc"]')).find((r) => r.checked)?.parentElement?.textContent?.trim()).toBe('North America');
+  });
+
+  it('treats "By submitting this application, you acknowledge…" as an acknowledgment', () => {
+    const label = 'By submitting this application, you acknowledge that the data collected during the hiring process will be used per our privacy notice.';
+    expect(classifyField({ label, kind: 'select', id: '', name: '', path: '', options: [], autocomplete: '' } as any)).toMatchObject({ key: 'acknowledge' });
+  });
+
+  it('skips the search box inside a dropdown menu', () => {
+    document.body.innerHTML = `<form><label for="p">Phone</label><input id="p" type="tel">
+      <div role="listbox"><input type="text" aria-label="Search by country/region or code"></div></form>`;
+    expect(scanFields(document.body).map((f) => f.label)).toEqual(['Phone']);
+  });
+});
+
+describe('leaving no list open', () => {
+  it('closes a Workday list that stays open after a pick and ignores Escape', async () => {
+    (window as any).happyDOM.setURL(WORKDAY_URL);
+    document.body.innerHTML = `<main><div data-automation-id="applyFlowPage"><h4>Education 1</h4>
+      <div data-automation-id="formField-fieldOfStudy"><label for="fos">Field of Study</label>
+        <div data-automation-id="multiSelectContainer"><div role="listbox" data-automation-id="selectedItemList"></div>
+        <input type="text" id="fos" data-uxi-widget-type="selectinput"><span data-automation-id="promptIcon"></span></div></div>
+      <div><label for="after">GPA</label><input type="text" id="after"></div></div></main>`;
+    const field = document.querySelector('[data-automation-id="formField-fieldOfStudy"]')!;
+    const popup = () => document.getElementById('fos-popup');
+    field.querySelector('[data-automation-id="promptIcon"]')!.addEventListener('click', () => {
+      if (popup()) return;
+      const p = document.createElement('div');
+      p.id = 'fos-popup';
+      p.setAttribute('data-automation-id', 'responsiveMonikerPrompt');
+      p.innerHTML = '<input type="text" data-automation-id="searchBox"><div class="rows"></div>';
+      const search = p.querySelector('input')!;
+      search.addEventListener('keydown', (e) => {
+        if ((e as KeyboardEvent).key !== 'Enter') return; // Escape does nothing
+        p.querySelector('.rows')!.innerHTML = ['Computer Engineering', 'Computer Science']
+          .filter((c) => c.toLowerCase().includes(search.value.toLowerCase()))
+          .map((o) => `<div data-automation-id="promptLeafNode"><div data-automation-id="promptOption" data-automation-label="${o}">${o}</div></div>`)
+          .join('');
+        p.querySelectorAll('[data-automation-id="promptLeafNode"]').forEach((row) =>
+          row.addEventListener('click', () => {
+            const name = row.querySelector('[data-automation-label]')!.getAttribute('data-automation-label');
+            field.querySelector('[data-automation-id="selectedItemList"]')!.insertAdjacentHTML(
+              'beforeend',
+              `<div data-automation-id="selectedItem"><div data-automation-id="promptOption" data-automation-label="${name}">${name}</div></div>`,
+            ); // the list stays open for more picks
+          }),
+        );
+      });
+      document.body.appendChild(p);
+    });
+    // Only a click outside the list closes it.
+    document.addEventListener('mousedown', (e) => {
+      if (popup() && !popup()!.contains(e.target as Node) && !field.contains(e.target as Node)) popup()!.remove();
+    });
+    await new FillSession(document, ADAPTERS.workday, deps().d).run();
+    expect(document.querySelector('[data-automation-id="selectedItem"] [data-automation-label]')?.getAttribute('data-automation-label')).toBe('Computer Science');
+    expect(popup()).toBeNull();
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
+    expect(value('after')).toBe('3.8');
+  });
+});

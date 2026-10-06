@@ -181,7 +181,7 @@ const RULES: Rule[] = [
   // Combined address lines: "City, State Zip code (e.g. San Francisco, CA 94158)".
   ['cityStateZip', /\bcity\b.*\b(state|province)\b.*\b(zip|postal)/],
   ['cityState', /^city,?\s*(and\s*)?(state|province)\b(?!.*(zip|postal))/],
-  ['zip', /zip|postal code|postcode/],
+  ['zip', /zip|postal code|postcode|^postal\b/],
   ['address', /street|^address( line)?( 1)?$|mailing address|home address/],
   ['locationPreference', /\b(location|office|site) (preference|choice)\b|\b(preferred|desired) (office|work) location|\b(first|second|third|1st|2nd|3rd|top) (choice|preference)\b.*\b(location|office)/],
   // "Please select the country where you currently reside"
@@ -222,7 +222,7 @@ const TEXT_CONSENT_RE = /text message|\bsms\b|text updates|receive texts/;
 const BUNDLED_CONSENT_RE = /terms|privacy|certify|attest/;
 /** "Acknowledge, confirm, and agree to the following statements": always answered Yes, as the user asked. */
 const ACKNOWLEDGE_RE =
-  /acknowledge,?\s+confirm,?\s+(and|&)\s+agree|\b(i|we) (hereby )?(acknowledge|certify|attest|affirm)\b|\b(enter|select|type|answer|choose) .{0,3}yes.{0,3} if you (acknowledge|agree|confirm|understand)|^(do you )?acknowledge\b|\backnowledg(e|ement)\b.{0,40}\b(read|understood|reviewed|truthful|accurate)/;
+  /acknowledge,?\s+confirm,?\s+(and|&)\s+agree|\b(i|we) (hereby )?(acknowledge|certify|attest|affirm)\b|\b(enter|select|type|answer|choose) .{0,3}yes.{0,3} if you (acknowledge|agree|confirm|understand)|^(do you )?acknowledge\b|\backnowledg(e|ement)\b.{0,40}\b(read|understood|reviewed|truthful|accurate)|\byou (hereby )?acknowledge\b|\bby (submitting|applying|clicking)\b[^.]{0,80}\backnowledge/;
 const CHALLENGE_RE = /not a (bot|robot)|prove (that )?you('| a)re (human|not)|figure out the (correct )?secret|captcha/;
 /** Trap fields for bots ("Please leave this field blank"): filling one can get the application discarded. */
 const HONEYPOT_RE = /leave (this|it)( field| box)? (blank|empty)|do not (fill|enter|type)|don.?t (fill|enter|type)|if you are (a )?human/;

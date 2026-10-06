@@ -333,10 +333,12 @@ export function valueFor(
     case 'cityState':
       return nonEmpty([p.city, p.state].filter(Boolean).join(', '), p.city);
     case 'location':
+      // Region lists ("North America", "Europe") are matched by the region of the country.
       return nonEmpty(
         [p.city, p.state].filter(Boolean).join(', '),
         [p.city, p.state, p.country].filter(Boolean).join(', '),
         p.city,
+        ...regionOf(p.country),
       );
     case 'linkedin':
       return nonEmpty(p.linkedin);
@@ -729,6 +731,19 @@ export function bulleted(text: string): string {
     .filter(Boolean)
     .map((l) => `• ${l.replace(/^([-*•‣◦▪]|\d+[.)])\s*/, '')}`)
     .join('\n');
+}
+
+const REGIONS: [RegExp, string[]][] = [
+  [/^(us|usa|u\.s\.a?\.?|united states( of america)?|canada|mexico)$/i, ['North America', 'Americas', 'NA', 'NAMER']],
+  [/^(brazil|argentina|chile|colombia|peru|uruguay|ecuador|bolivia|paraguay|venezuela|costa rica|panama|guatemala)$/i, ['LATAM', 'Latin America', 'South America', 'Americas']],
+  [/^(united kingdom|uk|ireland|germany|france|spain|portugal|italy|netherlands|belgium|switzerland|austria|poland|sweden|norway|denmark|finland|czechia|czech republic|romania|greece)$/i, ['Europe', 'EMEA', 'EU']],
+  [/^(india|china|japan|south korea|singapore|philippines|vietnam|thailand|malaysia|indonesia|taiwan|hong kong|pakistan|bangladesh)$/i, ['Asia', 'APAC', 'Asia Pacific']],
+  [/^(australia|new zealand)$/i, ['APAC', 'Asia Pacific', 'Oceania']],
+];
+
+/** Region names a location list may use for the country ("North America" for the US). */
+function regionOf(country: string): string[] {
+  return REGIONS.find(([re]) => re.test(country.trim()))?.[1] ?? [];
 }
 
 /** Education entries worth entering, in profile order. Numbered form sections map onto these. */

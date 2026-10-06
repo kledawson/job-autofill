@@ -10,6 +10,8 @@ import {
   fillCheckboxGroup,
   fillCheckboxes,
   displayedValue,
+  openLists,
+  closeListsOpenedBy,
   type ChoiceOpts,
   fillCombobox,
   fillFile,
@@ -29,7 +31,7 @@ import {
 } from './fill';
 import { clearOutline, outline, type ReviewState } from './highlight';
 import { characterLimitFor } from './match';
-import { isSignInPage, scanFields, type ScannedField } from './scan';
+import { composedCompare, isSignInPage, scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE } from './classify';
 import { pickLocationPreference, raceChoices, SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
 import { isPlaceholderOption } from './match';
@@ -65,8 +67,7 @@ interface FieldRecord {
 const REVEALS_RE = /hispanic|latino/i;
 
 function byDocumentOrder(a: FieldRecord, b: FieldRecord): number {
-  const pos = a.field.el.compareDocumentPosition(b.field.el);
-  return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+  return composedCompare(a.field.el, b.field.el);
 }
 
 export class FillSession {
@@ -233,7 +234,8 @@ export class FillSession {
           await this.mapUnknown(more);
           fresh.push(...more);
           // Fields that appeared above the current one (a page re-render) are not gone back for.
-          const below = more.filter((r) => byDocumentOrder(rec, r) < 0);
+          // (When the page changed under the current field, everything new is below it.)
+          const below = rec.field.el.isConnected ? more.filter((r) => byDocumentOrder(rec, r) < 0) : more;
           const rest = [...queue.slice(i + 1), ...below].sort(byDocumentOrder);
           queue.length = i + 1;
           queue.push(...rest);
@@ -289,7 +291,10 @@ export class FillSession {
   private async fillRecord(rec: FieldRecord) {
     if (rec.cls.kind === 'free_response') return this.fillFreeResponse(rec);
     if (rec.cls.kind !== 'profile') return;
+    const before = openLists(this.doc);
     await this.fillProfileField(rec);
+    // Whatever the outcome, leave no list open and the field unfocused before moving on.
+    if (rec.field.el.isConnected) await closeListsOpenedBy(rec.field, before);
     if (rec.outcome !== 'filled') return;
     if (rec.cls.source === 'ai') {
       rec.ai = true;
