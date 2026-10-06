@@ -17,6 +17,11 @@ In Chrome, open `chrome://extensions`, turn on **Developer mode**, click **Load 
 `apps/extension/dist/chrome-mv3`. Onboarding opens automatically. For live reload while developing,
 run `npm run dev`.
 
+After building, reload the extension in `chrome://extensions`. New installations use
+`apps/extension/dist/chrome-mv3`. Existing installations pointing at the original
+`apps/extension/.output/chrome-mv3` folder are also updated by `npm run build`, preserving
+the extension ID and Chrome's saved profile data. Reopen Settings to see the updated UI.
+
 The manifest includes a public key, so the extension ID is always `kjepjmmbimmbpdfinkippakkmhbglccc`.
 
 ## Google Sheets tracking (optional)
@@ -76,6 +81,60 @@ BA, and BBA) in saved profiles and dropdown options. Specific qualifications sta
 matches Bachelor of Science rather than Bachelor of Arts. If a saved generic Bachelor's Degree has
 multiple specific choices such as BA and BS, the extension leaves that choice for your review.
 
+## Remembered mappings
+
+1. Fill an application. Answer a missing question on the page; its review card remains available.
+2. Answered cards turn indigo and offer **Save this answer**; empty cards stay white with **Remember answer**.
+   Clearing the page answer returns the card to its empty state. Select the button to capture only that
+   field's current answer. Confirm the preselected
+   answer, or choose an available dropdown option in the panel if the page field is still empty.
+3. Choose **Where should this answer be reused?**: all applications, this company, this application, or this site.
+   Known general facts default to all applications; unknown/employer-specific answers default narrowly.
+4. Click **Save & apply**. It saves locally and writes only that empty selected field. Existing page
+   answers are preserved. A changed/rerendered field requires a fresh capture, while the saved answer remains safe.
+
+Use **Settings → Saved answers** to search, add, edit, or remove mappings, including questions that are
+optional or have already been answered on the page. Saving is explicit; page edits are not silently
+collected. Mapping changes affect the next fill attempt and preserve existing page answers.
+
+Recognised question meanings reuse locally with country, timeframe, subject, education-level and
+negation checks. Unfamiliar wording offers **Review suggestion**; compare the old/new questions and save
+to approve the alias. **Improve future matching** groups optional controls by purpose:
+
+- **Other ways this question is asked**: add/edit/remove individual question wordings with **Add wording**.
+- **Other labels for this answer**: approve equivalent dropdown choices with **Add answer label**.
+- **Keep this answer linked to my profile**: choose a profile detail and see its current value.
+  Linked answers follow future profile edits; fixed-answer labels do not apply to changing profile values.
+- **Edit original question** changes the question itself. To preserve it, add another wording instead.
+
+**Try a variation** tests an unsaved draft locally against the same question index and option rules used
+by autofill. Enter a sample question, optionally its complete dropdown choices, and optionally a different
+company/application URL to check scope. The result explains **Would autofill**, **Would ask you to confirm**,
+or **Would skip**. Editing the draft or example clears the old result. This is a matching preview, not a
+guarantee that an unsupported widget can be filled; page values and verification are still checked.
+It does not save, read a page, or call AI.
+
+The optional **Get optional AI suggestions → Suggest question variations** helper sends only the question
+to Gemini. AI proposals require individual approval and are never required for autofill.
+Application scope wins over company, site, legacy platform, then global. Conflicts skip reuse. Profile
+links read the latest saved fact; empty facts remain unanswered. Older mappings keep exact-only behavior
+until edited and equivalent-question reuse is confirmed. Company scope uses normalised adapter metadata;
+choose application scope when uncertain. Site scope can cover multiple employers on a shared ATS host.
+
+Remembered values are filled before AI free responses, including conditional follow-up fields. Literal
+dropdown answers accept exact/approved equivalents, unambiguous Yes/No options, BS/B.Sc./Bachelor of Science
+and small tested category dictionaries. Unknown or ambiguous options stay manual. Files, standalone
+checkboxes, checkbox groups, consent controls, and anti-bot challenges stay outside remembered mapping
+support. Review the resulting application before submitting.
+React-select dropdowns can remember one selected chip, such as **Never held a clearance**. Remove-button
+text is excluded, and typing a search query alone is not a saved selection. Remembering several selected
+chips together remains unsupported; select a single reusable answer when appropriate.
+Repeatable entries beyond the first use per-entry profile matching rather than generic remembered answers.
+
+Mappings live in the extension's local IndexedDB. They are separate from profile JSON import/export
+and are removed by **Delete all local data**. No additional permission, dependency, backend, or AI key
+is required. After rebuilding, reload the extension and refresh the application tab to use the new code.
+
 Safety: the engine refuses to interact with submit controls, and cancels any form submission that
 fires while it is dispatching events. Voluntary self-identification answers and contact details are
 never sent to Gemini.
@@ -93,5 +152,5 @@ npm run test:e2e  # builds, then drives the real extension in Chromium (hermetic
 ## Not in the MVP yet
 
 Generic fallback for unknown sites, Workday, Gemini classification of
-unrecognized labels, saved-answer reuse and a Regenerate button, passive submit detection and
+unrecognized labels, a Regenerate button, passive submit detection and
 auto-marking Abandoned, an offline Sheets write queue, and multiple profiles.

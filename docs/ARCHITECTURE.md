@@ -34,3 +34,41 @@ Store only synthetic diagnostics in committed fixtures. Application identity sho
 ## Later integrations
 
 Sheets sync should use OAuth, stable application IDs, a durable retry queue, and duplicate-aware writes. AI drafts must use verified profile facts and user review. Backend-owned secrets remain server-side. A future API can use Node/Fastify and PostgreSQL/Prisma, but neither is required now.
+
+## Implemented remembered mapping flow
+
+The running extension supports Greenhouse, Lever, Ashby, Workday, and permitted generic pages. Saved
+answers live in `apps/extension/lib/remembered-mappings.ts` (validation, scope and indexing),
+`lib/answer-semantics.ts` (pure local meanings and option equivalents), `lib/db.ts` (trusted IndexedDB),
+and `components/KnowledgeBase.tsx` (confirmation and management).
+
+Verification reports full unresolved question text separately from truncated display labels. Eligible
+questions offer Remember answer in side-panel cards that remain after manual entry. An explicit click
+captures only that field's committed value. The editor confirms the answer and global, company,
+application or site scope. Advanced aliases/profile links are collapsed. Settings → Saved answers
+supports search, edits/removal, and last-used dates. No page answers are harvested automatically.
+React-select capture reads committed single-value labels or a single selected chip, excluding removal
+controls. Several selected chips remain unsupported rather than being collapsed into an incomplete answer.
+
+Answered review cards use an indigo **Save this answer** action; empty cards remain white with
+**Remember answer**. Text plus color communicates the state, and clearing the answer restores the empty
+card. **Improve future matching** separates question wordings, fixed-answer dropdown labels, profile
+links and original-question editing. Individual labeled rows replace newline configuration textboxes.
+**Try a variation** uses `lib/saved-answer-preview.ts`, the production saved-answer index and a shared
+`rememberedChoice` transformation also used by the engine. It checks the unsaved draft, saved conflicts,
+scope, current profile and optional complete dropdown choices in a trusted extension context. The preview
+does not contact AI, read a page, persist values or guarantee widget support. Changes invalidate its result.
+
+For each newly scanned batch, including conditional fields, the content script requests only matching
+mappings for that batch. The background validates the sender's permission, URL, tab and frame, builds a
+local index from persisted records, and returns relevant exact/meaning matches or suggestion IDs. Wider
+scope cannot override a narrower one; conflicts skip reuse. Question interpretation is separate from
+option rendering: BS and Bachelor of Science are equivalent, whereas a generic bachelor's answer cannot
+invent BS or BA. Suggestions need explicit approval of new wording. Mapping mutations require a trusted
+extension page. Capture tokens bind to a live session/element/question; apply additionally checks the
+captured value. Only that empty field is written, using the existing writers and read-back verification.
+Remembered free responses run before Gemini. Existing page values are preserved. Disconnecting a fill
+session removes its edit listeners and pending observation timers before the next attempt. The saved-answer
+path has no network dependency. An explicit advanced AI button sends only the question to Gemini for up
+to five optional aliases, which the user individually selects before saving. Other existing AI paths
+are separate. Schema migration preserves old records as approved-wording-only until a confirmed edit.

@@ -7,6 +7,8 @@ import { db, getProfile } from '@/lib/db';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
 import { ALL_SITES, detectPlatform, PLATFORM_NAMES } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
+import { defaultScope, MappingEditor } from '@/components/KnowledgeBase';
+import type { CapturedAnswer, MappingDraft, ReviewField } from '@/lib/remembered-mappings';
 
 const STATUS_STYLE: Record<ApplicationStatus, string> = {
   Filling: 'bg-blue-50 text-blue-700 ring-blue-200',
@@ -190,7 +192,7 @@ export default function SidePanel() {
       </section>
 
       {current ? (
-        <CurrentApplication app={current} pageStatus={pageStatus} />
+        <CurrentApplication key={current.id} app={current} pageStatus={pageStatus} />
       ) : (
         pageStatus && (
           <section className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
@@ -253,6 +255,23 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
 function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus: PageStatus | null }) {
   const [showMissing, setShowMissing] = useState(true);
   const [error, setError] = useState('');
+  const [teaching, setTeaching] = useState<{ capture: CapturedAnswer; initial: MappingDraft; id?: number }>();
+  const [remembered, setRemembered] = useState('');
+  const [capturing, setCapturing] = useState<string>();
+  const context = { platform: app.platform, company: app.company, url: app.url };
+  async function remember(field: ReviewField, suggestion = false) {
+    setCapturing(field.token); setError(''); setRemembered('');
+    try {
+      const res = await sendToBackground('capturePageAnswer', { applicationId: app.id!, token: field.token,
+        ...(suggestion ? { suggestionId: field.suggestionId } : {}) });
+      if (!res.ok) throw new Error(res.error);
+      setTeaching({ capture: res.capture, id: res.suggestion?.id, initial: res.suggestion ?
+        { ...res.suggestion, aliases: [...new Set([...res.suggestion.aliases, res.capture.label])] } :
+        { question: res.capture.label, aliases: [], scope: defaultScope(res.capture.label, context), target: { kind: 'answer', value: res.capture.value } } });
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not capture this answer.'); }
+    finally { setCapturing(undefined); }
+  }
+  const reviewFields = app.reviewFields ?? [];
   return (
     <section className="space-y-3 rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-2">
@@ -266,7 +285,7 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
 
       {app.status !== 'Filling' && (
         <div className="grid grid-cols-3 gap-2 text-center">
-          <Stat value={app.filledCount} label="From profile" color="text-green-700" />
+          <Stat value={app.filledCount} label="Profile / saved" color="text-green-700" />
           <Stat value={app.aiAnswers} label="AI-written" color="text-blue-700" />
           <Stat value={app.missingCount} label="Need you" color={app.missingCount ? 'text-red-700' : 'text-slate-400'} />
         </div>
@@ -275,23 +294,39 @@ function CurrentApplication({ app, pageStatus }: { app: Application; pageStatus:
       {/* The pill already names the status, so a matching title is left out. */}
       {pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
 
-      {app.missingLabels.length > 0 && (
+      {!teaching && (app.missingLabels.length > 0 || reviewFields.length > 0) && (
         <div>
           <button className="text-xs font-medium text-slate-600 underline" onClick={() => setShowMissing((s) => !s)}>
-            {showMissing ? 'Hide' : 'Show'} fields that need you
+            {showMissing ? 'Hide' : 'Show'} questions to review
           </button>
           {showMissing && (
-            <ul className="mt-1.5 space-y-1">
-              {app.missingLabels.map((l, i) => (
-                <li key={i} className="flex gap-2 text-xs text-slate-700">
-                  <span className="mt-1 size-1.5 shrink-0 rounded-full bg-red-600" />
-                  {l}
-                </li>
-              ))}
+            <ul className="mt-2 space-y-2">
+              {reviewFields.map(field => <li key={field.token} className={cx('rounded-lg border p-3 text-xs text-slate-700', field.answered ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-white')}>
+                <p className="font-medium break-words">{field.label}</p>
+                <p className="mt-1 text-slate-600">{field.answered ? 'Answer entered — ready to save for next time.' : field.suggestionId ? 'A similar saved question is available. Confirm it before reuse.' : 'Answer on the page, then remember it here.'}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button className="px-2 py-1 text-xs" variant={field.answered ? 'primary' : 'secondary'} disabled={!!capturing || app.status === 'Filling'} onClick={() => void remember(field)}>{capturing === field.token ? 'Reading field…' : field.answered ? 'Save this answer' : 'Remember answer'}</Button>
+                  {field.suggestionId && !field.answered && <Button className="px-2 py-1 text-xs" variant="secondary" disabled={!!capturing} onClick={() => void remember(field, true)}>Review suggestion</Button>}
+                </div>
+              </li>)}
+              {app.missingLabels.filter((_, i) => !app.missingQuestions?.[i] || !reviewFields.some(f => f.label === app.missingQuestions?.[i])).map((label, i) => <li key={`manual-${i}`} className="rounded-lg bg-slate-50 p-3 text-xs text-slate-700">{label}<p className="mt-1 text-slate-500">{app.reviewFields ? 'Complete this field on the page.' : 'Click Fill this page to refresh these results and enable answer capture.'}</p></li>)}
             </ul>
           )}
         </div>
       )}
+
+      {teaching && (
+        <div className="space-y-3 border-t border-slate-200 pt-3">
+          <MappingEditor key={teaching.capture.captureId} id={teaching.id} capture={teaching.capture} context={context} initial={teaching.initial}
+            onCancel={() => setTeaching(undefined)} onSaved={async mappingId => {
+              const res = await sendToBackground('applySavedAnswer', { applicationId: app.id!, token: teaching.capture.token, captureId: teaching.capture.captureId, mappingId });
+              setTeaching(undefined);
+              if (!res.ok) { setError(`Answer saved, but could not apply: ${res.error}`); return; }
+              setRemembered(res.note);
+            }} />
+        </div>
+      )}
+      {remembered && <div role="status"><Notice tone="success">{remembered} Manage it in Settings → Saved answers.</Notice></div>}
 
       {app.status === 'Ready for review' && (
         <>

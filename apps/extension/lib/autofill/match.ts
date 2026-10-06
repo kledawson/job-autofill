@@ -120,6 +120,22 @@ function coversDistinctWords(want: string, option: string): boolean {
 /** "Bachelor of Business Management": a degree in a named field, not a generic "Bachelor's Degree". */
 const NAMED_FIELD_RE = /\b(of|in)\s+[a-z]/i;
 
+/** Authored answers select an exact option or an unambiguous Yes/No expansion, never a fuzzy guess. */
+export function bestRememberedOption(candidates: string[], options: string[]): number {
+  for (const candidate of candidates) {
+    const wanted = normalize(candidate);
+    const exact = options.map((option, index) => ({ option, index }))
+      .filter(({ option }) => !isPlaceholderOption(option) && normalize(option) === wanted);
+    if (exact.length === 1) return exact[0]!.index;
+    if (exact.length > 1) return -1;
+    if (wanted === 'yes' || wanted === 'no') {
+      const expanded = options.map((option, index) => ({ option, index }))
+        .filter(({ option }) => !isPlaceholderOption(option) && polarity(option) === wanted);
+      if (expanded.length === 1) return expanded[0]!.index;
+    }
+  }
+  return -1;
+}
 /** Match degree levels and known aliases without confusing BS with BA or a different degree level. */
 export function bestDegreeOption(candidates: string[], options: string[]): number {
   const level = candidates.map(standardDegree).find(Boolean);

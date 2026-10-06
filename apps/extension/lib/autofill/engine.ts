@@ -6,6 +6,7 @@ import { classifyField, type Classification, type ProfileKey } from './classify'
 import {
   clickSafely,
   comboboxHasValue,
+  comboboxSelectedValues,
   fieldHasValue,
   fillCheckboxGroup,
   fillCheckboxes,
@@ -35,6 +36,8 @@ import { composedCompare, isSignInPage, scanFields, type ScannedField } from './
 import { WITH_CODE_RE } from './classify';
 import { pickLocationPreference, raceChoices, SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
 import { isPlaceholderOption } from './match';
+import { resolveRememberedMapping, type RememberedMapping, type SavedField, type SavedMatch, type ReviewField, type CapturedAnswer } from '../remembered-mappings';
+import { rememberedChoice } from '../saved-answer-preview';
 
 export interface EngineDeps {
   context: FillContext;
@@ -42,6 +45,8 @@ export interface EngineDeps {
   jobDescription(info: JobInfo): Promise<string>;
   /** Asks AI which profile fact (if any) answers each question no rule recognised. Optional. */
   mapFields?(fields: FieldQuestion[]): Promise<Result<{ keys: (string | null)[] }>>;
+  rememberedMappings?(questions: string[]): Promise<RememberedMapping[]>;
+  matchSavedAnswers?(fields: SavedField[]): Promise<SavedMatch[]>;
   /** Called whenever counts change (initial fill, conditional fields, user edits). */
   onProgress?(summary: FillSummary): void;
 }
@@ -50,6 +55,9 @@ export interface FillSummary {
   filledCount: number;
   aiAnswers: number;
   missingLabels: string[];
+  missingQuestions: (string | null)[];
+  reviewFields?: ReviewField[];
+  usedMappingIds?: number[];
   /** Why free responses were skipped, when they were. */
   aiNote?: string;
 }
@@ -61,6 +69,10 @@ interface FieldRecord {
   ai?: boolean;
   /** Flag red even if optional (a free response that could not be written). */
   flag?: boolean;
+  token?: string;
+  review?: boolean;
+  saved?: RememberedMapping;
+  suggestionId?: number;
 }
 
 /** Questions whose answer is known to reveal a follow-up directly beneath them. */
@@ -76,10 +88,12 @@ export class FillSession {
   private description: string | null = null;
   private busy = false;
   private observer?: MutationObserver;
+  private stopWatching?: () => void;
   private aiNote?: string;
   private resumeFile: File | null;
   private coverLetterFile: File | null;
   private transcriptFile: File | null;
+  private captures = new Map<string, { rec: FieldRecord; value: string; question: string }>();
 
   constructor(
     private doc: Document,
@@ -94,6 +108,43 @@ export class FillSession {
 
   get info(): JobInfo {
     return this.jobInfo;
+  }
+
+  /** Only an explicit request reads an answer; unresolved metadata contains no values. */
+  captureAnswer(token: string, question: string): CapturedAnswer {
+    if (this.busy || this.stopped) throw new Error('Wait for autofill to finish, then try again.');
+    const rec = [...this.records.values()].find(r => r.token === token);
+    const field = rec && scanFields(this.root()).find(f => f.el === rec.field.el);
+    if (!rec || !field || field.label !== question || !canRemember({ ...rec, field })) throw new Error('This field changed. Click Fill this page to refresh it.');
+    rec.field = field;
+    if (field.kind === 'combobox' && comboboxSelectedValues(field).length > 1) throw new Error('This field has several selected answers. Remembering multiple selections is not supported yet.');
+    const value = fieldHasValue(field) ? displayedValue(field).trim() : '';
+    if (fieldHasValue(field) && !value) throw new Error('Choose an answer from the dropdown before saving. If the selected answer cannot be read, add it in Settings → Saved answers.');
+    const captureId = crypto.randomUUID();
+    this.captures.clear();
+    this.captures.set(captureId, { rec, value, question });
+    return { token, captureId, label: field.label, kind: field.kind, options: field.options.filter(o => !isPlaceholderOption(o)).slice(0, 200), value };
+  }
+
+  async applyAnswer(token: string, captureId: string, mapping: RememberedMapping): Promise<string> {
+    const snapshot = this.captures.get(captureId);
+    if (!snapshot || snapshot.rec.token !== token || this.stopped || this.busy) throw new Error('This capture expired. Remember the answer again.');
+    this.captures.delete(captureId);
+    const { rec } = snapshot;
+    const current = scanFields(this.root()).find(f => f.el === rec.field.el);
+    if (!current || current.label !== snapshot.question || displayedValue(current).trim() !== snapshot.value) throw new Error('The page answer changed after capture. Your saved answer is safe; capture again to apply it.');
+    rec.field = current;
+    // Never replace an answer entered by the person. Saving and applying an empty field is sufficient.
+    if (fieldHasValue(current)) { rec.review = false; this.deps.onProgress?.(this.verify()); return 'Saved for future applications. Your page answer was kept.'; }
+    this.busy = true;
+    try {
+      rec.saved = mapping;
+      rec.cls = mapping.target.kind === 'profile' ? { kind: 'profile', key: mapping.target.key, source: 'remembered' } : { kind: 'saved_answer', answer: mapping.target.value };
+      await this.fillRecord(rec);
+      if (rec.outcome === 'filled' && fieldHasValue(rec.field)) rec.review = false;
+    } finally { this.busy = false; }
+    this.deps.onProgress?.(this.verify());
+    return rec.outcome === 'filled' ? 'Saved and applied to this field.' : 'Saved for future applications. Select the answer on this page; no unambiguous option matched.';
   }
 
   private root(): ParentNode {
@@ -164,7 +215,6 @@ export class FillSession {
   private stopped = false;
   /** Repeatable sections already given their entries in this session. */
   private expanded = new WeakSet<Element>();
-  private stopWatching?: () => void;
 
   /** Polls until new fields show up or the time runs out. */
   private async waitForFresh(maxMs: number): Promise<FieldRecord[]> {
@@ -185,12 +235,63 @@ export class FillSession {
     if (isSignInPage(this.root(), fields)) return fresh;
     for (const field of fields) {
       if (this.records.has(field.el)) continue;
-      const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys) };
+      const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys), token: crypto.randomUUID() };
       if (rec.cls.kind !== 'profile') console.info(`[Job Autofill] "${field.label.slice(0, 60) || '(no label)'}" (${field.kind}): ${rec.cls.kind}`);
       this.records.set(field.el, rec);
       fresh.push(rec);
     }
     return fresh;
+  }
+
+  private async applyRememberedMappings(records: FieldRecord[]) {
+    const eligible = records.filter(canRemember);
+    if (!eligible.length || (!this.deps.rememberedMappings && !this.deps.matchSavedAnswers)) return;
+    try {
+      if (this.deps.matchSavedAnswers) {
+        for (let i = 0; i < eligible.length; i += 200) {
+          const batch = eligible.slice(i, i + 200);
+          const matches = await this.deps.matchSavedAnswers(batch.map(r => ({ label: r.field.label, kind: r.field.kind, options: r.field.options.slice(0, 200) })));
+          const current = new Map(scanFields(this.root()).map(f => [f.el, f]));
+          batch.forEach((rec, index) => {
+            const field = current.get(rec.field.el);
+            if (!field || field.label !== rec.field.label) return;
+            rec.field = field;
+            const match = matches[index];
+            rec.suggestionId = match?.suggestionId;
+            if (!match?.mapping) return;
+            rec.saved = match.mapping;
+            rec.cls = match.mapping.target.kind === 'profile'
+              ? { kind: 'profile', key: match.mapping.target.key, source: 'remembered' }
+              : { kind: 'saved_answer', answer: match.mapping.target.value };
+          });
+        }
+        return;
+      }
+      // Fetch only mappings for these fields, including follow-ups that appear during filling.
+      const mappings = new Map<number, RememberedMapping>();
+      for (let i = 0; i < eligible.length; i += 200) {
+        for (const mapping of await this.deps.rememberedMappings!(eligible.slice(i, i + 200).map((r) => r.field.label))) {
+          mappings.set(mapping.id, mapping);
+        }
+      }
+      // The form may rerender or change a question while the worker lookup is pending.
+      const current = new Map(scanFields(this.root()).map((field) => [field.el, field]));
+      for (const rec of eligible) {
+        const field = current.get(rec.field.el);
+        if (!field) continue;
+        rec.field = field;
+        rec.cls = classifyField(field, this.adapter.keys);
+        if (!canRemember(rec)) continue;
+        const mapping = resolveRememberedMapping([...mappings.values()], this.adapter.platform, rec.field.label);
+        if (!mapping) continue;
+        rec.cls = mapping.target.kind === 'profile'
+          ? { kind: 'profile', key: mapping.target.key, source: 'remembered' }
+          : { kind: 'saved_answer', answer: mapping.target.value };
+      }
+    } catch {
+      // A storage/worker failure must not stop profile filling or expose applicant answers in logs.
+      this.aiNote = 'Remembered answers could not be loaded. Try filling again.';
+    }
   }
 
   /** Fills fields not seen before. Returns how many new fields were found. */
@@ -202,6 +303,7 @@ export class FillSession {
       await this.adapter.prepare?.(this.root(), this.deps.context.profile, this.expanded).catch((err) => console.warn('[Job Autofill] could not add entries', err));
       const fresh = this.collectFresh();
       if (!fresh.length) return 0;
+      await this.applyRememberedMappings(fresh);
 
       // Questions no rule recognised are matched (from their wording) before filling starts, so the pass
       // below can go strictly top to bottom.
@@ -218,11 +320,17 @@ export class FillSession {
       });
       grow.observe(this.root() as Node, { childList: true, subtree: true });
       const queue = [...fresh].sort(byDocumentOrder);
+      const deferredResponses: FieldRecord[] = [];
       try {
         for (let i = 0; i < queue.length; i++) {
           // A disconnected session (a newer Fill, or the page moved on) stops mid-pass.
           if (this.stopped) break;
           const rec = queue[i]!;
+          // Fill profile and remembered facts across the form before calling AI for essays.
+          if (rec.cls.kind === 'free_response') {
+            deferredResponses.push(rec);
+            continue;
+          }
           added = false;
           await this.fillRecord(rec);
           const reveals = REVEALS_RE.test(rec.field.label);
@@ -231,6 +339,7 @@ export class FillSession {
           // polled before moving on; other DOM changes get one short settle.
           const more = await this.waitForFresh(reveals ? timing.reveal : timing.settle);
           if (!more.length) continue;
+          await this.applyRememberedMappings(more);
           await this.mapUnknown(more);
           fresh.push(...more);
           // Fields that appeared above the current one (a page re-render) are not gone back for.
@@ -239,6 +348,10 @@ export class FillSession {
           const rest = [...queue.slice(i + 1), ...below].sort(byDocumentOrder);
           queue.length = i + 1;
           queue.push(...rest);
+        }
+        for (const rec of deferredResponses) {
+          if (this.stopped) break;
+          await this.fillRecord(rec);
         }
       } finally {
         grow.disconnect();
@@ -262,7 +375,7 @@ export class FillSession {
   private async mapUnknown(records: FieldRecord[]) {
     if (!this.deps.mapFields || !this.deps.context.hasGeminiKey) return;
     const pending = records.filter(
-      (r) => r.cls.kind === 'unknown' && r.cls.askAi && r.field.el.isConnected && r.field.kind !== 'file' && !fieldHasValue(r.field),
+      (r) => r.cls.kind === 'unknown' && r.cls.askAi && !r.suggestionId && r.field.el.isConnected && r.field.kind !== 'file' && !fieldHasValue(r.field),
     );
     if (!pending.length) return;
     const res = await this.deps
@@ -290,13 +403,13 @@ export class FillSession {
   /** Fills one field of the top-to-bottom pass, whatever kind of answer it takes. */
   private async fillRecord(rec: FieldRecord) {
     if (rec.cls.kind === 'free_response') return this.fillFreeResponse(rec);
-    if (rec.cls.kind !== 'profile') return;
+    if (rec.cls.kind !== 'profile' && rec.cls.kind !== 'saved_answer') return;
     const before = openLists(this.doc);
     await this.fillProfileField(rec);
     // Whatever the outcome, leave no list open and the field unfocused before moving on.
     if (rec.field.el.isConnected) await closeListsOpenedBy(rec.field, before);
     if (rec.outcome !== 'filled') return;
-    if (rec.cls.source === 'ai') {
+    if (rec.cls.kind === 'profile' && rec.cls.source === 'ai') {
       rec.ai = true;
       outline(rec.field.outlineTarget, 'ai');
     }
@@ -349,10 +462,11 @@ export class FillSession {
   }
 
   private async fillProfileField(rec: FieldRecord) {
-    if (rec.cls.kind !== 'profile') return;
+    if (rec.cls.kind !== 'profile' && rec.cls.kind !== 'saved_answer') return;
     const { field } = rec;
     this.activeLabel = field.label;
-    const key = rec.cls.key;
+    const key = rec.cls.kind === 'profile' ? rec.cls.key : undefined;
+    const savedAnswer = rec.cls.kind === 'saved_answer' ? rec.cls.answer : undefined;
     const profile = this.deps.context.profile;
     try {
       if (key === 'resume' || key === 'coverLetter' || key === 'transcript') {
@@ -365,23 +479,24 @@ export class FillSession {
       const yesNo = isYesNo(field.options) || (!field.options.length && field.kind !== 'text' && QUESTION_RE.test(field.label.trim()));
       // Salary answers follow the pay range posted in the job description when there is one.
       if (key === 'salary') await this.loadDescription();
-      const values = valueFor(key, profile, {
+      const values = savedAnswer !== undefined ? [savedAnswer] : key ? valueFor(key, profile, {
         description: key === 'salary' ? (this.description ?? '') : undefined,
         phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
         yesNo: (key === 'workMode' || key === 'clearance') && yesNo,
         label: field.label,
         required: field.required,
         options: field.options,
-        index: rec.cls.index,
+        index: rec.cls.kind === 'profile' ? rec.cls.index : undefined,
         company: this.jobInfo.company,
-      });
-      const topOption = TOP_OPTION_KEYS.has(key);
+      }) : null;
+      const topOption = key !== undefined && TOP_OPTION_KEYS.has(key);
       const choice: ChoiceOpts = {
         topOption,
         degree: key === 'degree',
         // "University of California" is not "University of California, Santa Cruz".
-        strict: STRICT_KEYS.has(key),
-        acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key),
+        strict: key !== undefined && STRICT_KEYS.has(key),
+        remembered: savedAnswer !== undefined,
+        acceptFirstResult: key !== undefined && SEARCH_FIRST_RESULT_KEYS.has(key),
       };
       if (key === 'locationPreference') {
         // Ranked office choices: never repeat an earlier preference; see pickLocationPreference.
@@ -438,10 +553,19 @@ export class FillSession {
         if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
         return;
       }
+      if (values?.[0] && rec.saved) {
+        const remembered = rememberedChoice(rec.saved, values, field.label);
+        values.splice(0, values.length, ...remembered.values);
+        if (remembered.pick) choice.pick = remembered.pick;
+      }
       const first = values?.[0];
+      if (savedAnswer !== undefined && field.maxLength && savedAnswer.length > field.maxLength) {
+        rec.outcome = 'nomatch';
+        return;
+      }
       if (!values || !first) {
         // The site's resume parser may have prefilled an employer the profile says is blank; clear it.
-        if (key === 'currentCompany' && field.kind === 'text' && !profile.currentCompany.trim()) {
+        if (key === 'currentCompany' && rec.cls.kind === 'profile' && rec.cls.source !== 'remembered' && field.kind === 'text' && !profile.currentCompany.trim()) {
           keepBlank(field.el as HTMLInputElement);
         }
         rec.outcome = 'nomatch';
@@ -490,16 +614,16 @@ export class FillSession {
           rec.outcome = fillCheckbox(field, values);
           break;
         case 'checkboxGroup':
-          rec.outcome = fillCheckboxGroup(field, values);
+          rec.outcome = fillCheckboxGroup(field, values, { remembered: savedAnswer !== undefined });
           break;
         case 'yesno':
-          rec.outcome = fillYesNo(field, values);
+          rec.outcome = fillYesNo(field, values, { strict: savedAnswer !== undefined, pick: choice.pick });
           break;
         default:
           rec.outcome = 'nomatch';
       }
-    } catch (err) {
-      console.warn('[Job Autofill] could not fill', field.label, err);
+    } catch {
+      console.warn('[Job Autofill] could not fill', field.label);
       rec.outcome = 'failed';
     }
     if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
@@ -562,6 +686,8 @@ export class FillSession {
     let filledCount = 0;
     let aiAnswers = 0;
     const missingLabels: string[] = [];
+    const missingQuestions: (string | null)[] = [];
+    const reviewFields: ReviewField[] = [];
     for (const [el, rec] of this.records) {
       if (!el.isConnected) {
         this.records.delete(el);
@@ -578,13 +704,28 @@ export class FillSession {
 
       if (state === 'ai') aiAnswers++;
       if (state === 'filled') filledCount++;
-      if (state === 'missing') missingLabels.push(labelFor(field));
+      if (state === 'missing') {
+        missingLabels.push(labelFor(field));
+        missingQuestions.push(canRemember(rec) ? field.label : null);
+        if (canRemember(rec)) rec.review = true;
+      }
+      if (rec.review && canRemember(rec)) reviewFields.push({ token: rec.token!, label: field.label, answered: has, ...(rec.suggestionId ? { suggestionId: rec.suggestionId } : {}) });
 
       if (state) outline(field.outlineTarget, state);
       else if (field.outlineTarget.hasAttribute('data-jaf-state')) clearOutline(field.outlineTarget);
     }
-    return { filledCount, aiAnswers, missingLabels, aiNote: this.aiNote };
+    return { filledCount, aiAnswers, missingLabels, missingQuestions, reviewFields: reviewFields.slice(0, 200),
+      usedMappingIds: [...new Set([...this.records.values()].filter(r => r.saved && r.outcome === 'filled' && fieldHasValue(r.field)).map(r => r.saved!.id))].slice(0, 200), aiNote: this.aiNote };
   }
+}
+
+function canRemember(rec: FieldRecord): boolean {
+  return !!rec.field.label.trim() && rec.field.label.length <= 700 &&
+    (rec.field.section?.index ?? 0) === 0 &&
+    !(rec.field.el instanceof HTMLSelectElement && rec.field.el.multiple) &&
+    (rec.field.kind === 'combobox' || rec.field.el.getAttribute('aria-multiselectable') !== 'true') &&
+    !['file', 'checkbox', 'checkboxGroup'].includes(rec.field.kind) &&
+    rec.cls.kind !== 'challenge' && rec.cls.kind !== 'consent';
 }
 
 function labelFor(field: ScannedField): string {

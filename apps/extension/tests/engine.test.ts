@@ -5,6 +5,8 @@ import { FillSession, type EngineDeps } from '../lib/autofill/engine';
 import { timing } from '../lib/autofill/fill';
 import { scanFields } from '../lib/autofill/scan';
 import type { AnswerRequest } from '../lib/messages';
+import { SavedAnswerIndex, selectRememberedMappings, type RememberedMapping } from '../lib/remembered-mappings';
+import { questionMeaning } from '../lib/answer-semantics';
 import { loadFixture, sampleProfile } from './helpers';
 
 const RESUME = { name: 'resume.pdf', type: 'application/pdf', base64: btoa('%PDF-1.4 test') };
@@ -43,6 +45,267 @@ beforeEach(() => {
   window.addEventListener('submit', countSubmit);
 });
 afterEach(() => window.removeEventListener('submit', countSubmit));
+
+describe('capture and semantic reuse', () => {
+  const answer: RememberedMapping = { id: 44, schemaVersion: 2, updatedAt: 1, question: 'Degree', aliases: [], scope: 'all', target: { kind: 'answer', value: 'BS' }, meaning: questionMeaning('Degree')! };
+  function setup(html: string, records: RememberedMapping[] = []) {
+    document.body.innerHTML = `<form id="application-form">${html}</form>`;
+    const { d } = deps({ matchSavedAnswers: async fields => {
+      const index = new SavedAnswerIndex(records, { platform: 'greenhouse', company: 'Contoso', url: 'https://example.com/application' });
+      return fields.map(f => index.match(f));
+    } });
+    d.context.hasGeminiKey = false;
+    return new FillSession(document, ADAPTERS.greenhouse, d);
+  }
+  const choice = '<label for="custom">Education selection*</label><select id="custom" required><option value="">Select…</option><option>BS</option><option>BA</option></select>';
+  it('retains manually answered questions and captures only the selected answer', async () => {
+    const session = setup(choice + '<label for="other">Unrelated question*</label><input id="other" required>');
+    const result = await session.run();
+    const review = result.reviewFields![0]!;
+    (document.querySelector('select') as HTMLSelectElement).value = 'BS';
+    expect(session.verify().reviewFields!.find(f => f.token === review.token)?.answered).toBe(true);
+    const capture = session.captureAnswer(review.token, review.label);
+    expect(capture.value).toBe('BS');
+    expect(capture.options).toEqual(['BS', 'BA']);
+    expect(session.verify().reviewFields).not.toEqual(expect.arrayContaining([expect.objectContaining({ value: 'BS' })]));
+    expect(await session.applyAnswer(review.token, capture.captureId, { ...answer, question: review.label, meaning: undefined })).toContain('kept');
+  });
+  it('applies the saved answer to the one captured empty field without rerunning essays', async () => {
+    const session = setup(choice + '<label for="other">Other empty field*</label><input id="other" required>');
+    const result = await session.run();
+    const review = result.reviewFields![0]!;
+    const capture = session.captureAnswer(review.token, review.label);
+    expect(await session.applyAnswer(review.token, capture.captureId, { ...answer, question: review.label, meaning: undefined })).toContain('applied');
+    expect((document.querySelector('select') as HTMLSelectElement).value).toBe('BS');
+    expect((document.querySelector('input') as HTMLInputElement).value).toBe('');
+    expect(submits).toBe(0);
+  });
+  it.each(['value', 'label', 'element'])('rejects stale %s after capture', async changed => {
+    const session = setup(choice);
+    const review = (await session.run()).reviewFields![0]!;
+    const capture = session.captureAnswer(review.token, review.label);
+    if (changed === 'value') (document.querySelector('select') as HTMLSelectElement).value = 'BA';
+    if (changed === 'label') document.querySelector('label')!.textContent = 'A different question';
+    if (changed === 'element') document.querySelector('select')!.replaceWith(document.querySelector('select')!.cloneNode(true));
+    await expect(session.applyAnswer(review.token, capture.captureId, answer)).rejects.toThrow('changed');
+  });
+  it('rejects captures from disconnected sessions', async () => {
+    const session = setup(choice);
+    const review = (await session.run()).reviewFields![0]!;
+    session.disconnect();
+    expect(() => session.captureAnswer(review.token, review.label)).toThrow();
+  });
+  it.each([false, true])('captures and preserves a single React-select clearance chip (explicit multi-select: %s)', async multi => {
+    const session = setup(`<label for="clearance">Active Security Clearance(s)*</label><div class="select__container"><div class="select__control"><input id="clearance" role="combobox" aria-expanded="false" ${multi ? 'aria-multiselectable="true"' : ''} required></div></div>`);
+    const review = (await session.run()).reviewFields!.find(f => f.label === 'Active Security Clearance(s)')!;
+    document.querySelector('.select__control')!.insertAdjacentHTML('afterbegin', '<div class="select__multi-value"><span class="select__multi-value__label">Never held a clearance</span><span class="select__multi-value__remove" role="button">×</span></div>');
+    expect(session.verify().reviewFields!.find(f => f.token === review.token)?.answered).toBe(true);
+    const captured = session.captureAnswer(review.token, review.label);
+    expect(captured.value).toBe('Never held a clearance');
+    const mapping: RememberedMapping = { ...answer, question: review.label, target: { kind: 'answer', value: captured.value }, meaning: questionMeaning(review.label)! };
+    expect(await session.applyAnswer(review.token, captured.captureId, mapping)).toContain('kept');
+    expect(document.querySelectorAll('.select__multi-value')).toHaveLength(1);
+    expect(document.querySelector('.select__multi-value__label')!.textContent).toBe('Never held a clearance');
+  });
+  it('rejects multiple selected chips and changes to a chip after capture', async () => {
+    const session = setup('<label for="q">Active Security Clearance(s)*</label><div class="select__container"><div class="select__control"><input id="q" role="combobox" aria-expanded="false" required></div></div>');
+    const review = (await session.run()).reviewFields![0]!;
+    const control = document.querySelector('.select__control')!;
+    control.insertAdjacentHTML('afterbegin', '<div class="select__multi-value">Secret</div><div class="select__multi-value">DOE Q</div>');
+    expect(() => session.captureAnswer(review.token, review.label)).toThrow('several selected');
+    Array.from(control.querySelectorAll('.select__multi-value')).find(chip => chip.textContent === 'DOE Q')!.remove();
+    const captured = session.captureAnswer(review.token, review.label);
+    expect(captured.value).toBe('Secret');
+    control.querySelector('.select__multi-value')!.textContent = 'Top Secret';
+    await expect(session.applyAnswer(review.token, captured.captureId, answer)).rejects.toThrow('changed');
+  });
+  it('requires a committed choice instead of remembering React-select search text', async () => {
+    const session = setup('<label for="q">Active Security Clearance(s)*</label><div class="select__container"><div class="select__control"><input id="q" role="combobox" aria-expanded="false" required></div></div>');
+    const review = (await session.run()).reviewFields![0]!;
+    document.querySelector('input')!.value = 'Never held a clearance';
+    expect(() => session.captureAnswer(review.token, review.label)).toThrow('Choose an answer');
+  });
+  it('fills different question and degree wording through the entire engine', async () => {
+    const session = setup('<label for="custom">Educational qualification*</label><select id="custom" required><option value="">Select…</option><option>BA</option><option>Bachelor of Science</option></select>', [answer]);
+    expect((await session.run()).filledCount).toBe(1);
+    expect((document.querySelector('select') as HTMLSelectElement).value).toBe('Bachelor of Science');
+  });
+  it('does not send uncertain saved-answer suggestions to AI field matching', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="q">Which channel brought you to this opening?*</label><input id="q" required></form>';
+    const { d } = deps({ mapFields: vi.fn(async () => ({ ok: true as const, keys: ['email'] })), matchSavedAnswers: async () => [{ mapping: null, suggestionId: 44, reason: 'Confirm' }] });
+    const result = await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(d.mapFields).not.toHaveBeenCalled();
+    expect(result.reviewFields?.[0]?.suggestionId).toBe(44);
+  });
+  it('renders a linked profile boolean using the new question polarity', async () => {
+    const record: RememberedMapping = { ...answer, question: 'Are you not a US citizen?', meaning: questionMeaning('Are you not a US citizen?')!, target: { kind: 'profile', key: 'usCitizen' } };
+    const session = setup('<label for="citizen">Are you not a US citizen?*</label><select id="citizen" required><option value="">Select…</option><option>Yes</option><option>No</option></select>', [record]);
+    await session.run();
+    expect((document.querySelector('select') as HTMLSelectElement).value).toBe('No');
+  });
+});
+
+describe('remembered mappings', () => {
+  const source: RememberedMapping = {
+    id: 1, schemaVersion: 1, updatedAt: 1, question: 'Where did you find this opportunity?',
+    aliases: ['Which channel led you here?'], scope: 'greenhouse', target: { kind: 'answer', value: 'Company website' },
+  };
+  function remembered(records: RememberedMapping[] = [source]) {
+    return deps({ rememberedMappings: vi.fn(async (questions) => selectRememberedMappings(records, 'greenhouse', questions)) });
+  }
+  const input = () => document.querySelector('input') as HTMLInputElement;
+
+  it('exposes the full missing question, then reuses a taught answer on another form', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="source">Where did you find this opportunity? *</label><input id="source" required></form>';
+    const unknown = await new FillSession(document, ADAPTERS.greenhouse, deps().d).run();
+    expect(unknown.missingQuestions).toEqual([source.question]);
+    expect(input().value).toBe('');
+    document.querySelector('label')!.textContent = 'WHICH CHANNEL LED YOU HERE? *';
+    const { d, answers } = remembered();
+    const summary = await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(input().value).toBe('Company website');
+    expect(summary.missingLabels).toEqual([]);
+    expect(summary.filledCount).toBe(1);
+    expect(answers).toEqual([]);
+  });
+  it('uses current profile values and the existing degree alias matching for linked fields', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="qual">Qualification held*</label><select id="qual" required><option value="">Select…</option><option>Bachelor\'s Degree</option><option>Master\'s Degree</option></select></form>';
+    const { d } = remembered([{ ...source, question: 'Qualification held', aliases: [], target: { kind: 'profile', key: 'degree' } }]);
+    d.context.profile.education[0]!.degree = 'BS';
+    await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect((document.querySelector('select') as HTMLSelectElement).value).toBe("Bachelor's Degree");
+    document.querySelector('select')!.value = '';
+    d.context.profile.education[0]!.degree = 'Master of Science';
+    await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect((document.querySelector('select') as HTMLSelectElement).value).toBe("Master's Degree");
+  });
+  it('fills remembered facts before AI and preserves user edits across repeated fills', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="essay">Tell us about a project*</label><textarea id="essay" required></textarea><label for="source">Where did you find this opportunity?*</label><input id="source" required></form>';
+    const { d, answers } = remembered();
+    d.answer = vi.fn(async () => {
+      expect(input().value).toBe('Company website');
+      return { ok: true as const, answer: 'Synthetic project response' };
+    });
+    await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(d.answer).toHaveBeenCalledOnce();
+    input().value = 'A friend';
+    await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(input().value).toBe('A friend');
+    expect(d.answer).toHaveBeenCalledOnce();
+    expect(answers).toEqual([]);
+    expect(submits).toBe(0);
+  });
+  it('does not reuse old authored dropdown labels after a linked profile answer changes', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="citizen">Are you a US citizen?*</label><select id="citizen" required><option value="">Select…</option><option>Yes, I am a citizen</option><option>No</option></select></form>';
+    const m: RememberedMapping = { ...source, schemaVersion: 2, question: 'Are you a US citizen?', scope: 'all', aliases: [],
+      target: { kind: 'profile', key: 'usCitizen' }, meaning: questionMeaning('Are you a US citizen?')!, answerAliases: ['Yes, I am a citizen'] };
+    const { d } = deps({ matchSavedAnswers: async fields => {
+      const index = new SavedAnswerIndex([m], { platform: 'greenhouse', company: 'Contoso', url: 'https://example.com/application' });
+      return fields.map(f => index.match(f));
+    } });
+    d.context.hasGeminiKey = false;
+    await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(document.querySelector('select')!.value).toBe('Yes, I am a citizen');
+    document.querySelector('select')!.value = '';
+    d.context.profile.workAuth.status = 'H-1B';
+    await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(document.querySelector('select')!.value).toBe('No');
+  });
+  it('does not invoke AI for a remembered free response', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="essay">Tell us about a project*</label><textarea id="essay" required></textarea></form>';
+    const { d } = remembered([{ ...source, question: 'Tell us about a project', aliases: [], target: { kind: 'answer', value: 'My approved response' } }]);
+    expect((await new FillSession(document, ADAPTERS.greenhouse, d).run()).aiAnswers).toBe(0);
+    expect(d.answer).not.toHaveBeenCalled();
+    expect(document.querySelector('textarea')!.value).toBe('My approved response');
+  });
+  it('selects remembered dropdown text rather than typing an uncommitted value', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="source">Where did you find this opportunity?*</label><div class="select__container"><div class="select__control"><input id="source" role="combobox" aria-expanded="false" required></div></div></form>';
+    const el = input();
+    el.addEventListener('mousedown', () => {
+      const menu = document.createElement('div');
+      menu.setAttribute('role', 'listbox');
+      for (const text of ['Company website', 'Referral']) {
+        const option = document.createElement('div');
+        option.setAttribute('role', 'option');
+        option.textContent = text;
+        option.onclick = () => {
+          menu.remove();
+          el.value = '';
+          el.setAttribute('aria-expanded', 'false');
+          const selected = document.createElement('div');
+          selected.className = 'select__single-value';
+          selected.textContent = text;
+          el.parentElement!.appendChild(selected);
+        };
+        menu.appendChild(option);
+      }
+      el.setAttribute('aria-expanded', 'true');
+      el.parentElement!.appendChild(menu);
+    });
+    const summary = await new FillSession(document, ADAPTERS.greenhouse, remembered().d).run();
+    expect(document.querySelector('.select__single-value')?.textContent).toBe('Company website');
+    expect(summary.filledCount).toBe(1);
+    expect(el.value).toBe('');
+  });
+  it('loads mappings for conditional fields before continuing to free responses', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="h">Are you Hispanic/Latino?*</label><select id="h" required><option value="">Select…</option><option>No</option><option>Yes</option></select></form>';
+    document.querySelector('select')!.onchange = () => {
+      const followup = document.createElement('div');
+      followup.innerHTML = '<label for="followup">Which channel led you here?*</label><input id="followup" required>';
+      document.querySelector('form')!.appendChild(followup);
+    };
+    const { d } = remembered();
+    d.context.profile.eeo.hispanic = 'No';
+    const summary = await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect((document.getElementById('followup') as HTMLInputElement).value).toBe('Company website');
+    expect(summary.missingLabels).toEqual([]);
+  });
+  it('does not teach or fill files, challenges or consent boxes, even if matching entries exist', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="bot">Prove you are human*</label><input id="bot" required><label for="file">Academic Transcript*</label><input id="file" type="file" required><label><input type="checkbox" required>I agree to the privacy policy</label></form>';
+    const records = ['Prove you are human', 'Academic Transcript', 'I agree to the privacy policy'].map((question, i) => ({ ...source, id: i + 1, question, aliases: [] }));
+    const { d } = remembered(records);
+    const summary = await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(input().value).toBe('');
+    expect(summary.missingQuestions).toEqual([null, null, null]);
+    expect(d.rememberedMappings).not.toHaveBeenCalled();
+  });
+  it('leaves unmatched options, empty linked facts, and too-long literal answers for the user', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="source">Where did you find this opportunity?*</label><select id="source" required><option value="">Select…</option><option>Company social media</option><option>Referral</option></select></form>';
+    const { d } = remembered();
+    const summary = await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect((document.querySelector('select') as HTMLSelectElement).value).toBe('');
+    expect(summary.missingQuestions).toEqual([source.question]);
+    document.body.innerHTML = '<form id="application-form"><label for="short">Where did you find this opportunity?*</label><input id="short" maxlength="3" required></form>';
+    await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(input().value).toBe('');
+    const linked = remembered([{ ...source, target: { kind: 'profile', key: 'firstName' } }]);
+    linked.d.context.profile.firstName = '';
+    await new FillSession(document, ADAPTERS.greenhouse, linked.d).run();
+    expect(input().value).toBe('');
+  });
+  it('preserves an existing native select answer at index zero', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="source">Where did you find this opportunity?</label><select id="source"><option>Referral</option><option>Company website</option></select></form>';
+    await new FillSession(document, ADAPTERS.greenhouse, remembered().d).run();
+    expect((document.querySelector('select') as HTMLSelectElement).value).toBe('Referral');
+  });
+  it('revalidates a question that changes while its remembered answer is being loaded', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="source">Where did you find this opportunity?*</label><input id="source" required></form>';
+    const { d } = deps({ rememberedMappings: async () => {
+      document.querySelector('label')!.textContent = 'Which certification do you hold?*';
+      return [source];
+    } });
+    const summary = await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(input().value).toBe('');
+    expect(summary.missingQuestions).toEqual(['Which certification do you hold?']);
+  });
+  it('does not erase an existing page value when a linked employer fact is empty', async () => {
+    document.body.innerHTML = '<form id="application-form"><label for="source">Where did you find this opportunity?</label><input id="source" value="A friend"></form>';
+    const { d } = remembered([{ ...source, target: { kind: 'profile', key: 'currentCompany' } }]);
+    d.context.profile.currentCompany = '';
+    await new FillSession(document, ADAPTERS.greenhouse, d).run();
+    expect(input().value).toBe('A friend');
+  });
+});
 
 describe('Greenhouse', () => {
   it.each([

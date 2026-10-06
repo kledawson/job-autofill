@@ -51,6 +51,11 @@ export default defineContentScript({
           jobDescription: async (info) =>
             info.remote ? sendToBackground('jobDescription', info.remote) : ((await adapter.fetchDescription?.(document)) ?? ''),
           mapFields: (fields) => sendToBackground('mapFields', { fields }),
+          matchSavedAnswers: async (fields) => {
+            const res = await sendToBackground('matchSavedAnswers', { fields });
+            if (!res.ok) throw new Error(res.error);
+            return res.matches;
+          },
           onProgress: (summary) => report(summary),
         });
         session = s;
@@ -128,10 +133,24 @@ export default defineContentScript({
         filledCount: summary.filledCount,
         aiAnswers: summary.aiAnswers,
         missingLabels: summary.missingLabels,
+        missingQuestions: summary.missingQuestions,
+        reviewFields: summary.reviewFields,
+        usedMappingIds: summary.usedMappingIds,
       });
     }
 
-    browser.runtime.onMessage.addListener((msg: ContentMessage, _sender, sendResponse) => {
+    browser.runtime.onMessage.addListener((msg: ContentMessage, sender, sendResponse) => {
+      if (sender.id !== browser.runtime.id) return false;
+      if (msg.type === 'captureAnswer' || msg.type === 'applyAnswer') {
+        void (async () => {
+          try {
+            if (!session || filling) throw new Error('Click Fill this page and wait for it to finish first.');
+            if (msg.type === 'captureAnswer') sendResponse({ ok: true, capture: session.captureAnswer(msg.token, msg.question) });
+            else sendResponse({ ok: true, note: await session.applyAnswer(msg.token, msg.captureId, msg.mapping) });
+          } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not read this field.' }); }
+        })();
+        return true;
+      }
       if (msg.type === 'ping') sendResponse({ ok: true, platform });
       if (msg.type === 'fill') {
         void fill(msg.applicationId);

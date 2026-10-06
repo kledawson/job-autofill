@@ -2,6 +2,7 @@ import { browser } from 'wxt/browser';
 import type { Platform, Profile } from './types';
 import type { PublicSettings } from './settings';
 import type { ResumeDraft } from './resume';
+import type { CapturedAnswer, MappingDraft, RememberedMapping, ReviewField, SavedField } from './remembered-mappings';
 
 export interface FilePayload {
   name: string;
@@ -67,6 +68,9 @@ export interface BackgroundMessages {
       filledCount: number;
       aiAnswers: number;
       missingLabels: string[];
+      missingQuestions?: (string | null)[];
+      reviewFields?: ReviewField[];
+      usedMappingIds?: number[];
     };
     res: {};
   };
@@ -82,6 +86,13 @@ export interface BackgroundMessages {
     res: Result<{ duplicate?: { filledAt: number; status: string } }>;
   };
   fillActiveTab: { req: {}; res: Result };
+  getRememberedMappings: { req: { questions: string[] }; res: Result<{ mappings: RememberedMapping[] }> };
+  matchSavedAnswers: { req: { fields: SavedField[] }; res: Result<{ matches: { mapping: RememberedMapping | null; suggestionId?: number; reason: string }[] }> };
+  capturePageAnswer: { req: { applicationId: number; token: string; suggestionId?: number }; res: Result<{ capture: CapturedAnswer; suggestion?: RememberedMapping }> };
+  applySavedAnswer: { req: { applicationId: number; token: string; captureId: string; mappingId: number }; res: Result<{ note: string }> };
+  suggestAnswerWordings: { req: { question: string }; res: Result<{ aliases: string[] }> };
+  saveRememberedMapping: { req: { mapping: MappingDraft; id?: number }; res: Result<{ id: number }> };
+  removeRememberedMapping: { req: { id: number }; res: Result };
   markSubmitted: { req: { applicationId: number }; res: Result };
   setGeminiKey: { req: { apiKey: string }; res: {} };
   testGemini: { req: { apiKey?: string; model?: string }; res: Result };
@@ -108,7 +119,9 @@ export function sendToBackground<K extends keyof BackgroundMessages>(
 }
 
 /** Messages handled by the content script. */
-export type ContentMessage = { type: 'fill'; applicationId?: number } | { type: 'ping' };
+export type ContentMessage = { type: 'fill'; applicationId?: number } | { type: 'ping' } |
+  { type: 'captureAnswer'; token: string; question: string } |
+  { type: 'applyAnswer'; token: string; captureId: string; mapping: RememberedMapping };
 
 export function fileToPayload(file: { name: string; type: string }, bytes: ArrayBuffer): FilePayload {
   const u8 = new Uint8Array(bytes);
