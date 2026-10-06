@@ -135,7 +135,7 @@ describe('Greenhouse', () => {
     expect(byLabel['Veteran Status']).toBe('veteran');
     expect(byLabel['Disability Status']).toBe('disability');
     expect(byLabel['Are you Hispanic/Latino?']).toBe('hispanic');
-    expect(byLabel['I consider myself a member of the LGBTQ+ community. (optional)']).toBe('declineOnly');
+    expect(byLabel['I consider myself a member of the LGBTQ+ community']).toBe('declineOnly');
   });
 
   it('reads company and role', () => {

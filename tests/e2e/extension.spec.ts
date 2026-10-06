@@ -18,6 +18,8 @@ let server: Server;
 let worker: Worker;
 let extensionId: string;
 const geminiPrompts: string[] = [];
+/** Requests asking which profile fact answers a question no rule recognised. */
+const mappingPrompts: string[] = [];
 let resumeUploads = 0;
 
 /** A one-page text PDF. Each row is [left text, right-aligned text?], like a typical resume. */
@@ -130,6 +132,9 @@ test.beforeAll(async () => {
     if (isResume) {
       resumeUploads++;
       reply = { candidates: [{ content: { parts: [{ text: JSON.stringify(RESUME_REPLY) }] } }] };
+    } else if (body && /^You match job application form questions/.test(parts[0]?.text ?? '')) {
+      mappingPrompts.push(parts[0].text);
+      reply = { candidates: [{ content: { parts: [{ text: '[]' }] } }] };
     } else if (body) {
       geminiPrompts.push(parts[0].text);
       reply = { candidates: [{ content: { parts: [{ text: 'I led the Acme billing dashboard project and loved it.' }] } }] };
@@ -269,6 +274,8 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   expect(geminiPrompts[0]).toContain('Contoso Labs');
   expect(geminiPrompts[0]).toContain('Support the team with scheduling');
   expect(geminiPrompts.join('\n')).not.toMatch(/Female|jordan@example.com|415-555/);
+  // Field matching sends question wording only, never the person's answers.
+  expect(mappingPrompts.join('\n')).not.toMatch(/Jordan|Female|jordan@example.com|415-555/);
 
   // Required questions the profile cannot answer are outlined red, and nothing was submitted.
   // AI answers are outlined as they are written; red outlines come from the final verify pass, a moment later.

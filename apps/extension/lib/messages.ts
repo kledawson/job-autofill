@@ -26,6 +26,24 @@ export interface AnswerRequest {
   jobDescription: string;
 }
 
+/** A form question sent for AI matching: its wording and choices only, never the person's answers. */
+export interface FieldQuestion {
+  label: string;
+  kind: string;
+  options: string[];
+  section?: 'experience' | 'education';
+}
+
+/** What the content script is doing on a tab, shown in the side panel. Never contains applicant values. */
+export interface PageStatus {
+  title: string;
+  lines: string[];
+  tone: 'working' | 'done';
+}
+
+/** Session-storage key holding a tab's {@link PageStatus} plus the page origin it was set on. */
+export const pageStatusKey = (tabId: number) => `pageStatus:${tabId}`;
+
 export type Result<T = {}> = ({ ok: true } & T) | { ok: false; error: string };
 
 /** Messages handled by the background worker, with their response types. */
@@ -33,6 +51,10 @@ export interface BackgroundMessages {
   // From the content script
   getFillContext: { req: {}; res: FillContext };
   generateAnswer: { req: AnswerRequest; res: Result<{ answer: string }> };
+  /** Matches questions no rule recognised to profile keys (null when none fits). */
+  mapFields: { req: { fields: FieldQuestion[] }; res: Result<{ keys: (string | null)[] }> };
+  /** Whether another frame of this tab started filling recently (a form inside an embedded frame). */
+  frameFilling: { req: {}; res: { active: boolean } };
   fillStarted: {
     req: { url: string; company: string; role: string; platform: Platform };
     res: { applicationId: number };
@@ -48,10 +70,13 @@ export interface BackgroundMessages {
     };
     res: {};
   };
+  /** Replaces this tab's status in the side panel. */
+  setPageStatus: { req: { status: PageStatus; origin: string }; res: {} };
   jobDescription: { req: { platform: 'lever' | 'ashby'; org: string; jobId: string }; res: string };
   /** Tabs opened from a pasted link are marked pending; `commit` consumes the mark. */
   claimPendingFill: { req: { commit: boolean }; res: { fill: boolean } };
   // From extension pages
+  /** Opens a job link and fills it. Links outside the known job sites need the all-sites permission first. */
   startFill: {
     req: { url: string; force?: boolean };
     res: Result<{ duplicate?: { filledAt: number; status: string } }>;

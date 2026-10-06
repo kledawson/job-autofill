@@ -1,14 +1,22 @@
-import type { AnswerRequest, FillContext, Result } from '../messages';
+import type { AnswerRequest, FieldQuestion, FillContext, Result } from '../messages';
+import { AI_MAPPABLE_KEYS } from '../field-map';
 import { payloadToFile } from '../messages';
 import type { Adapter, JobInfo } from './adapters';
-import { classifyField, type Classification } from './classify';
+import { classifyField, type Classification, type ProfileKey } from './classify';
 import {
   clickSafely,
   comboboxHasValue,
   fieldHasValue,
   fillCheckboxGroup,
+  fillCheckboxes,
+  displayedValue,
+  openLists,
+  closeListsOpenedBy,
+  type ChoiceOpts,
   fillCombobox,
   fillFile,
+  fillListbox,
+  fillPrompt,
   fillRadio,
   fillSelect,
   fillText,
@@ -23,15 +31,17 @@ import {
 } from './fill';
 import { clearOutline, outline, type ReviewState } from './highlight';
 import { characterLimitFor } from './match';
-import { scanFields, type ScannedField } from './scan';
+import { composedCompare, isSignInPage, scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE } from './classify';
-import { SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
+import { pickLocationPreference, raceChoices, SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
 import { isPlaceholderOption } from './match';
 
 export interface EngineDeps {
   context: FillContext;
   answer(req: AnswerRequest): Promise<Result<{ answer: string }>>;
   jobDescription(info: JobInfo): Promise<string>;
+  /** Asks AI which profile fact (if any) answers each question no rule recognised. Optional. */
+  mapFields?(fields: FieldQuestion[]): Promise<Result<{ keys: (string | null)[] }>>;
   /** Called whenever counts change (initial fill, conditional fields, user edits). */
   onProgress?(summary: FillSummary): void;
 }
@@ -57,8 +67,7 @@ interface FieldRecord {
 const REVEALS_RE = /hispanic|latino/i;
 
 function byDocumentOrder(a: FieldRecord, b: FieldRecord): number {
-  const pos = a.field.el.compareDocumentPosition(b.field.el);
-  return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+  return composedCompare(a.field.el, b.field.el);
 }
 
 export class FillSession {
@@ -103,13 +112,16 @@ export class FillSession {
     return this.verify();
   }
 
-  /** Watches for conditional follow-up questions and user edits. */
+  /** Watches for conditional follow-up questions, user edits, and (multi-step forms) the next step. */
   observe() {
-    const root = this.root() as Node;
+    // A multi-step form swaps its whole form between steps, so watch the page instead.
+    const root = (this.adapter.multiStep ? this.doc.body : this.root()) as Node;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const rescan = () => {
       clearTimeout(timer);
+      if (this.stopped) return;
       timer = setTimeout(async () => {
+        if (this.stopped) return;
         if (this.busy) return rescan();
         const added = await this.processNew();
         if (added) this.deps.onProgress?.(this.verify());
@@ -133,11 +145,26 @@ export class FillSession {
     root.addEventListener('change', onEdit, true);
     root.addEventListener('input', onEdit, true);
     root.addEventListener('click', onEdit, true);
+    this.stopWatching = () => {
+      clearTimeout(timer);
+      clearTimeout(editTimer);
+      root.removeEventListener('change', onEdit, true);
+      root.removeEventListener('input', onEdit, true);
+      root.removeEventListener('click', onEdit, true);
+    };
   }
 
+  /** Stops watching for good: a rescan already scheduled does not run, so a newer session has the page to itself. */
   disconnect() {
+    this.stopped = true;
     this.observer?.disconnect();
+    this.stopWatching?.();
   }
+
+  private stopped = false;
+  /** Repeatable sections already given their entries in this session. */
+  private expanded = new WeakSet<Element>();
+  private stopWatching?: () => void;
 
   /** Polls until new fields show up or the time runs out. */
   private async waitForFresh(maxMs: number): Promise<FieldRecord[]> {
@@ -152,9 +179,14 @@ export class FillSession {
   /** Registers fields that appeared since the last scan, in document order. */
   private collectFresh(): FieldRecord[] {
     const fresh: FieldRecord[] = [];
-    for (const field of scanFields(this.root())) {
+    if (this.stopped) return fresh;
+    const fields = scanFields(this.root());
+    // Sign-in pages are left alone; the form after them is new and gets filled then.
+    if (isSignInPage(this.root(), fields)) return fresh;
+    for (const field of fields) {
       if (this.records.has(field.el)) continue;
       const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys) };
+      if (rec.cls.kind !== 'profile') console.info(`[Job Autofill] "${field.label.slice(0, 60) || '(no label)'}" (${field.kind}): ${rec.cls.kind}`);
       this.records.set(field.el, rec);
       fresh.push(rec);
     }
@@ -163,20 +195,21 @@ export class FillSession {
 
   /** Fills fields not seen before. Returns how many new fields were found. */
   async processNew(): Promise<number> {
-    if (this.busy) return 0;
+    if (this.busy || this.stopped) return 0;
     this.busy = true;
     try {
+      // Add one work-experience / education entry per profile entry before reading the fields.
+      await this.adapter.prepare?.(this.root(), this.deps.context.profile, this.expanded).catch((err) => console.warn('[Job Autofill] could not add entries', err));
       const fresh = this.collectFresh();
       if (!fresh.length) return 0;
 
-      // Resume first: some sites (Ashby, Lever) parse it and prefill fields, and we only fill empty ones.
-      const files = fresh.filter((r) => r.field.kind === 'file');
-      for (const rec of files) await this.fillProfileField(rec);
-      if (files.some((r) => r.outcome === 'filled')) await sleep(this.adapter.platform === 'greenhouse' ? 300 : timing.afterUpload);
+      // Questions no rule recognised are matched (from their wording) before filling starts, so the pass
+      // below can go strictly top to bottom.
+      await this.mapUnknown(fresh);
 
       const watcher = this.watchForCleared();
-      // Walk the form top to bottom. A question revealed by an answer (race after Hispanic/Latino) is
-      // slotted in right after the field that revealed it, so it is filled before moving further down.
+      // Walk the form top to bottom, uploads and AI-written answers included, never going back up. A question
+      // revealed by an answer (race after Hispanic/Latino) is slotted in right after the field that revealed it.
       let added = false;
       const grow = new MutationObserver((mutations) => {
         if (mutations.some((m) => Array.from(m.addedNodes).some((n) => n.nodeType === 1 && !(n as Element).closest('[data-jaf]')))) {
@@ -184,23 +217,28 @@ export class FillSession {
         }
       });
       grow.observe(this.root() as Node, { childList: true, subtree: true });
-      const queue = fresh.filter((r) => r.field.kind !== 'file');
+      const queue = [...fresh].sort(byDocumentOrder);
       try {
         for (let i = 0; i < queue.length; i++) {
+          // A disconnected session (a newer Fill, or the page moved on) stops mid-pass.
+          if (this.stopped) break;
           const rec = queue[i]!;
           added = false;
-          await this.fillProfileField(rec);
+          await this.fillRecord(rec);
           const reveals = REVEALS_RE.test(rec.field.label);
           if (!added && !reveals) continue;
           // The follow-up can render a beat after the answer lands, so a known reveal question is
           // polled before moving on; other DOM changes get one short settle.
           const more = await this.waitForFresh(reveals ? timing.reveal : timing.settle);
           if (!more.length) continue;
+          await this.mapUnknown(more);
           fresh.push(...more);
-          const rest = [...queue.slice(i + 1), ...more.filter((r) => r.field.kind !== 'file')].sort(byDocumentOrder);
+          // Fields that appeared above the current one (a page re-render) are not gone back for.
+          // (When the page changed under the current field, everything new is below it.)
+          const below = rec.field.el.isConnected ? more.filter((r) => byDocumentOrder(rec, r) < 0) : more;
+          const rest = [...queue.slice(i + 1), ...below].sort(byDocumentOrder);
           queue.length = i + 1;
           queue.push(...rest);
-          for (const r of more) if (r.field.kind === 'file') await this.fillProfileField(r);
         }
       } finally {
         grow.disconnect();
@@ -211,18 +249,66 @@ export class FillSession {
       this.traceDropdowns('end of pass');
       watcher.disconnect();
       await this.closeOpenDropdowns();
-      for (const rec of fresh) {
-        if (rec.cls.kind === 'free_response') await this.fillFreeResponse(rec);
-      }
       return fresh.length;
     } finally {
       this.busy = false;
     }
   }
 
+  /**
+   * Questions no rule recognised: AI picks which saved profile fact answers each (or none), and the value
+   * itself still comes from the profile. Only labels and option texts are sent, never profile values.
+   */
+  private async mapUnknown(records: FieldRecord[]) {
+    if (!this.deps.mapFields || !this.deps.context.hasGeminiKey) return;
+    const pending = records.filter(
+      (r) => r.cls.kind === 'unknown' && r.cls.askAi && r.field.el.isConnected && r.field.kind !== 'file' && !fieldHasValue(r.field),
+    );
+    if (!pending.length) return;
+    const res = await this.deps
+      .mapFields(
+        pending.map((r) => ({
+          label: r.field.label.slice(0, 300),
+          kind: r.field.kind,
+          options: r.field.options.filter((o) => !isPlaceholderOption(o)).slice(0, 30).map((o) => o.slice(0, 120)),
+          section: r.field.section?.kind === 'website' ? undefined : r.field.section?.kind,
+        })),
+      )
+      .catch((err) => ({ ok: false as const, error: String(err) }));
+    if (!res.ok) {
+      console.warn('[Job Autofill] AI field matching skipped:', res.error);
+      return;
+    }
+    for (const [i, rec] of pending.entries()) {
+      const key = res.keys[i];
+      if (!key || !AI_MAPPABLE_KEYS.has(key as ProfileKey)) continue;
+      const index = rec.field.section?.index;
+      rec.cls = { kind: 'profile', key: key as ProfileKey, source: 'ai', ...(index !== undefined ? { index } : {}) };
+    }
+  }
+
+  /** Fills one field of the top-to-bottom pass, whatever kind of answer it takes. */
+  private async fillRecord(rec: FieldRecord) {
+    if (rec.cls.kind === 'free_response') return this.fillFreeResponse(rec);
+    if (rec.cls.kind !== 'profile') return;
+    const before = openLists(this.doc);
+    await this.fillProfileField(rec);
+    // Whatever the outcome, leave no list open and the field unfocused before moving on.
+    if (rec.field.el.isConnected) await closeListsOpenedBy(rec.field, before);
+    if (rec.outcome !== 'filled') return;
+    if (rec.cls.source === 'ai') {
+      rec.ai = true;
+      outline(rec.field.outlineTarget, 'ai');
+    }
+    // Some sites read an uploaded resume and prefill the fields below it; let that finish first.
+    if (rec.field.kind === 'file') await sleep(this.adapter.platform === 'greenhouse' ? 300 : timing.afterUpload);
+  }
+
   /** Leaves every dropdown closed; a question we could not answer is flagged red instead of left open. */
   private async closeOpenDropdowns() {
-    const inputs = [...this.records.values()].filter((r) => r.field.kind === 'combobox' && r.field.el.isConnected).map((r) => r.field.el);
+    const inputs = [...this.records.values()]
+      .filter((r) => (r.field.kind === 'combobox' || r.field.kind === 'listbox') && r.field.el.isConnected)
+      .map((r) => r.field.el);
     for (let round = 0; round < 2; round++) {
       for (const el of inputs) closeIfOpen(el);
       await sleep(timing.settle);
@@ -278,9 +364,7 @@ export class FillSession {
       // react-select style dropdowns expose no options up front, so a question-shaped label stands in.
       const yesNo = isYesNo(field.options) || (!field.options.length && field.kind !== 'text' && QUESTION_RE.test(field.label.trim()));
       // Salary answers follow the pay range posted in the job description when there is one.
-      if (key === 'salary' && this.description === null) {
-        this.description = this.jobInfo.description || (await this.deps.jobDescription(this.jobInfo).catch(() => ''));
-      }
+      if (key === 'salary') await this.loadDescription();
       const values = valueFor(key, profile, {
         description: key === 'salary' ? (this.description ?? '') : undefined,
         phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
@@ -288,8 +372,64 @@ export class FillSession {
         label: field.label,
         required: field.required,
         options: field.options,
+        index: rec.cls.index,
+        company: this.jobInfo.company,
       });
       const topOption = TOP_OPTION_KEYS.has(key);
+      const choice: ChoiceOpts = {
+        topOption,
+        degree: key === 'degree',
+        // "University of California" is not "University of California, Santa Cruz".
+        strict: STRICT_KEYS.has(key),
+        acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key),
+      };
+      if (key === 'locationPreference') {
+        // Ranked office choices: never repeat an earlier preference; see pickLocationPreference.
+        const rank = preferenceRank(field.label);
+        const chosen = [...this.records.values()]
+          .filter((r) => r !== rec && r.cls.kind === 'profile' && r.cls.key === 'locationPreference' && r.field.el.isConnected)
+          .map((r) => displayedValue(r.field))
+          .filter(Boolean);
+        choice.pick = (options) => pickLocationPreference(options, profile, rank, chosen);
+        choice.topOption = false;
+      }
+      // Skill pickers (Workday "Type to Add Skills"): add each saved skill as its own chip.
+      if (key === 'skills' && field.kind === 'prompt') {
+        let added = 0;
+        for (const [i, skill] of profile.skills.slice(0, 15).entries()) {
+          const out = await fillPrompt(field, [skill], { allowMore: i > 0, strict: true });
+          if (i === 0 && out === 'already') {
+            added = -1;
+            break;
+          }
+          if (out === 'filled') added++;
+        }
+        rec.outcome = added < 0 ? 'already' : added ? 'filled' : 'nomatch';
+        if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
+        console.info(`[Job Autofill] "${field.label.slice(0, 60)}" (prompt) as skills: ${added > 0 ? `${added} added` : rec.outcome}`);
+        return;
+      }
+      // "Select all that apply" race lists get every saved race; single-choice ones get one answer.
+      if (key === 'race' && (field.kind === 'checkboxGroup' || field.kind === 'prompt')) {
+        const answers = raceChoices(profile);
+        if (field.kind === 'checkboxGroup') rec.outcome = fillCheckboxes(field, answers);
+        else {
+          // Add each race as its own chip; stop if the list was already answered before we started.
+          let added = false;
+          for (const [i, a] of answers.entries()) {
+            const out = await fillPrompt(field, a, { allowMore: i > 0 });
+            if (i === 0 && out === 'already') {
+              rec.outcome = 'already';
+              break;
+            }
+            added ||= out === 'filled';
+          }
+          rec.outcome ??= added ? 'filled' : 'nomatch';
+        }
+        if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
+        console.info(`[Job Autofill] "${field.label.slice(0, 60)}" (${field.kind}) as race: ${rec.outcome}`);
+        return;
+      }
       // A multiple-choice list of arrangements: "Flexible" ticks every one.
       if (key === 'workMode' && field.kind === 'checkboxGroup' && profile.preferences.workMode === 'flexible') {
         const boxes = field.members as HTMLInputElement[];
@@ -309,16 +449,22 @@ export class FillSession {
       }
       switch (field.kind) {
         case 'text': {
-          if ((field.el as HTMLInputElement).type === 'date') {
-            const iso = values.find((v) => /^\d{4}-\d{2}-\d{2}$/.test(v));
+          const input = field.el as HTMLInputElement;
+          if (input.type === 'date' || input.type === 'month') {
+            const iso = values.find((v) => (input.type === 'date' ? /^\d{4}-\d{2}-\d{2}$/ : /^\d{4}-\d{2}$/).test(v));
             rec.outcome = iso ? fillText(field, iso) : 'nomatch';
             break;
           }
           const isTypeahead =
             key === 'location' &&
             (this.adapter.platform === 'lever' || /location/i.test((field.el as HTMLElement).className));
-          // A number box rejects "$115,000"; give it just the digits.
-          const typed = (field.el as HTMLInputElement).type === 'number' ? first.replace(/[^\d.]/g, '') : first;
+          // A number box rejects "$115,000" or "June"; give it digits ("06" for a month box).
+          const numeric =
+            input.type === 'number' ||
+            input.getAttribute('role') === 'spinbutton' ||
+            input.inputMode === 'numeric' ||
+            /^dateSection/.test(input.getAttribute('data-automation-id') ?? '');
+          const typed = numeric ? (values.find((v) => /^\d+$/.test(v)) ?? first.replace(/[^\d.]/g, '')) : first;
           rec.outcome = isTypeahead ? await fillTypeahead(field, values) : fillText(field, typed);
           break;
         }
@@ -326,13 +472,19 @@ export class FillSession {
           rec.outcome = fillText(field, first);
           break;
         case 'select':
-          rec.outcome = fillSelect(field, values, { topOption, degree: key === 'degree' });
+          rec.outcome = fillSelect(field, values, choice);
           break;
         case 'combobox':
-          rec.outcome = await fillCombobox(field, values, { acceptFirstResult: SEARCH_FIRST_RESULT_KEYS.has(key), topOption, degree: key === 'degree' });
+          rec.outcome = await fillCombobox(field, values, choice);
+          break;
+        case 'listbox':
+          rec.outcome = await fillListbox(field, values, choice);
+          break;
+        case 'prompt':
+          rec.outcome = await fillPrompt(field, values, choice);
           break;
         case 'radio':
-          rec.outcome = fillRadio(field, values, { degree: key === 'degree' });
+          rec.outcome = fillRadio(field, values, choice);
           break;
         case 'checkbox':
           rec.outcome = fillCheckbox(field, values);
@@ -351,6 +503,7 @@ export class FillSession {
       rec.outcome = 'failed';
     }
     if (rec.outcome === 'filled') outline(field.outlineTarget, 'filled');
+    console.info(`[Job Autofill] "${field.label.slice(0, 60)}" (${field.kind}) as ${key}: ${rec.outcome}`);
     if (field.kind === 'combobox') this.traceDropdowns(`after "${field.label.slice(0, 50)}" (${rec.outcome})`);
   }
 
@@ -374,15 +527,13 @@ export class FillSession {
       return;
     }
     outline(field.outlineTarget, 'pending');
-    if (this.description === null) {
-      this.description = this.jobInfo.description || (await this.deps.jobDescription(this.jobInfo).catch(() => ''));
-    }
+    await this.loadDescription();
     const res = await this.deps.answer({
       question: field.label,
       characterLimit: characterLimitFor(field.label, field.maxLength),
       company: this.jobInfo.company,
       role: this.jobInfo.role,
-      jobDescription: this.description,
+      jobDescription: this.description ?? '',
     });
     if (!res.ok) {
       rec.flag = true;
@@ -397,6 +548,13 @@ export class FillSession {
     } else {
       rec.flag = true;
     }
+  }
+
+  private async loadDescription() {
+    if (this.description !== null) return;
+    // Multi-step forms move on from the posting; read it again in case this step shows it.
+    if (!this.jobInfo.description && this.adapter.multiStep) this.jobInfo = { ...this.adapter.jobInfo(this.doc), ...pickKnown(this.jobInfo) };
+    this.description = this.jobInfo.description || (await this.deps.jobDescription(this.jobInfo).catch(() => ''));
   }
 
   /** Re-reads every field, sets outlines, and returns the counts shown to the user. */
@@ -434,14 +592,41 @@ function labelFor(field: ScannedField): string {
   return text.length > 90 ? `${text.slice(0, 87)}…` : text;
 }
 
-/** Waits for a client-rendered form (Ashby) to appear. */
+/** Company and role already read, so a later re-read only adds the description. */
+function pickKnown(info: JobInfo): Partial<JobInfo> {
+  return Object.fromEntries(Object.entries(info).filter(([, v]) => v)) as Partial<JobInfo>;
+}
+
+/** True when the page shows an application form (not a sign-in page or a page with a search box). */
+export function formReady(doc: Document, adapter: Adapter): boolean {
+  const root = adapter.formRoot(doc);
+  const fields = scanFields(root).filter((f) => f.kind !== 'yesno');
+  if (fields.length < 2 || isSignInPage(root, fields)) return false;
+  if (!adapter.minProfileFields) return true;
+  const known = fields.filter((f) => classifyField(f, adapter.keys).kind === 'profile').length;
+  return known >= adapter.minProfileFields;
+}
+
+/** Waits for a client-rendered form (Ashby) or the next step of a multi-step application to appear. */
 export async function waitForForm(doc: Document, adapter: Adapter, timeout = 15000): Promise<boolean> {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
-    if (scanFields(adapter.formRoot(doc)).filter((f) => f.kind !== 'yesno').length >= 2) return true;
-    await sleep(300);
+    if (formReady(doc, adapter)) return true;
+    await sleep(timeout > 60000 ? 1000 : 300);
   }
   return false;
+}
+
+/** Keys whose list answers must contain every distinctive word of the saved value. */
+const STRICT_KEYS = new Set<ProfileKey>(['school', 'major']);
+
+/** 1 for "first location preference", 2 for "second ...", and so on. */
+function preferenceRank(label: string): number {
+  const l = label.toLowerCase();
+  if (/\b(second|2nd)\b/.test(l)) return 2;
+  if (/\b(third|3rd)\b/.test(l)) return 3;
+  if (/\b(fourth|4th)\b/.test(l)) return 4;
+  return 1;
 }
 
 const QUESTION_RE = /^(are|is|will|would|do|does|can|could|have|did)\b/i;

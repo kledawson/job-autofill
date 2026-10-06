@@ -1,6 +1,6 @@
 import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
-import { ATS_MATCHES } from './lib/platforms';
+import { ALL_SITES, ATS_MATCHES } from './lib/platforms';
 
 // Public key that pins the unpacked extension ID to kjepjmmbimmbpdfinkippakkmhbglccc,
 // so a Google OAuth client created for that ID keeps working across reloads.
@@ -19,7 +19,7 @@ export default defineConfig({
   manifest: {
     name: 'Job Application Autofill',
     description:
-      'Fills Greenhouse, Lever, and Ashby applications from your saved profile and stops for your review. Never submits for you.',
+      'Fills job applications (Greenhouse, Lever, Ashby, Workday, and company career sites) from your saved profile and stops for your review. Never submits for you.',
     key: EXTENSION_KEY,
     permissions: [
       'storage',
@@ -37,6 +37,8 @@ export default defineConfig({
       'https://generativelanguage.googleapis.com/*',
       'https://sheets.googleapis.com/*',
     ],
+    // Asked for at runtime, only when the person fills a page outside the job sites above.
+    optional_host_permissions: ALL_SITES,
     action: { default_title: 'Job Application Autofill' },
     ...(GOOGLE_CLIENT_ID
       ? {

@@ -19,7 +19,7 @@ export function sampleProfile(): Profile {
     linkedin: 'https://linkedin.com/in/jordanrivera',
     github: 'https://github.com/jordanrivera',
     portfolio: 'https://jordan.dev',
-    workAuth: { authorizedUS: 'yes', needsSponsorship: 'no', status: 'US Citizen', clearance: '' },
+    workAuth: { authorizedUS: 'yes', needsSponsorship: 'no', status: 'US Citizen', clearance: '', govEmployee: 'no', otherCitizenship: 'no', otherCountries: '' },
     education: [
       {
         school: 'University of California, Berkeley',
@@ -43,7 +43,7 @@ export function sampleProfile(): Profile {
       },
     ],
     skills: ['TypeScript', 'React', 'Python', 'SQL'],
-    preferences: { salary: '$120,000', startDate: 'June 2026', relocate: 'yes', workMode: 'hybrid' },
+    preferences: { salary: '$120,000', startDate: 'June 2026', relocate: 'yes', workMode: 'hybrid', nonCompete: 'no' },
     eeo: { gender: 'Female', race: 'Decline to answer', hispanic: 'Decline to answer', veteran: 'I am not a protected veteran', disability: 'Decline to answer' },
   };
 }

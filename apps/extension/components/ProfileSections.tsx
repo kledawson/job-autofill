@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { DECLINE, emptyEducation, emptyExperience, type Education, type Experience, type Profile, CLEARANCE_LEVELS, WORK_STATUSES } from '@/lib/types';
-import { DEGREE_TYPES, standardDegree } from '@/lib/degree';
+import { DECLINE, emptyEducation, emptyExperience, racesOf, type Education, type Experience, type Profile, CLEARANCE_LEVELS, WORK_STATUSES } from '@/lib/types';
+import { DEGREE_TYPES, SPECIFIC_DEGREES, standardDegree } from '@/lib/degree';
 import { Button, Card, Field, Grid, Input, Select, Textarea } from './ui';
 
 export interface SectionProps {
@@ -23,7 +23,6 @@ export const EEO_OPTIONS = {
     'Black or African American',
     'Native Hawaiian or Other Pacific Islander',
     'White',
-    'Two or More Races',
   ],
   hispanic: [DECLINE, 'Yes', 'No'],
   veteran: [
@@ -50,7 +49,7 @@ export function BasicsSection({ profile: p, onChange }: SectionProps) {
             <Input value={p.preferredName} onChange={(e) => set({ preferredName: e.target.value })} />
           </Field>
           <Field label="Pronouns" hint="Optional">
-            <Input value={p.pronouns} onChange={(e) => set({ pronouns: e.target.value })} placeholder="she/her" />
+            <Input value={p.pronouns} onChange={(e) => set({ pronouns: e.target.value })} placeholder="he/him" />
           </Field>
           <Field label="Email" required>
             <Input type="email" value={p.email} onChange={(e) => set({ email: e.target.value })} autoComplete="email" />
@@ -93,6 +92,12 @@ export function BasicsSection({ profile: p, onChange }: SectionProps) {
               placeholder="Software Engineer"
               autoComplete="organization-title"
             />
+          </Field>
+          <Field label="Previous employer" hint="Your most recent past employer, for “previous employer” questions.">
+            <Input value={p.previousCompany} onChange={(e) => set({ previousCompany: e.target.value })} placeholder="Google" />
+          </Field>
+          <Field label="Previous position" hint="Your job title there.">
+            <Input value={p.previousTitle} onChange={(e) => set({ previousTitle: e.target.value })} placeholder="Software Engineering Intern" />
           </Field>
         </Grid>
         <Field label="Street address">
@@ -172,6 +177,25 @@ export function WorkAuthSection({ profile: p, onChange }: SectionProps) {
             onChange={(e) => set({ clearance: e.target.value })}
           />
         </Field>
+        <Field label="Current or former U.S. government employee?">
+          <Select
+            options={YES_NO}
+            value={p.workAuth.govEmployee}
+            onChange={(e) => set({ govEmployee: e.target.value as Profile['workAuth']['govEmployee'] })}
+          />
+        </Field>
+        <Field label="Are you a citizen of any other country?" hint="Answers export-control questions about listed countries">
+          <Select
+            options={YES_NO}
+            value={p.workAuth.otherCitizenship}
+            onChange={(e) => set({ otherCitizenship: e.target.value as Profile['workAuth']['otherCitizenship'] })}
+          />
+        </Field>
+        {p.workAuth.otherCitizenship === 'yes' && (
+          <Field label="Which other countries?" hint="Comma-separated, e.g. Canada, Mexico" className="sm:col-span-2">
+            <Input value={p.workAuth.otherCountries} onChange={(e) => set({ otherCountries: e.target.value })} placeholder="Canada" />
+          </Field>
+        )}
       </Grid>
     </Card>
   );
@@ -187,9 +211,11 @@ function ListControls({ onRemove, canRemove }: { onRemove: () => void; canRemove
 
 /** Standard degree types, plus the saved value when it is something else so nothing is lost. */
 function degreeOptions(current: string): [string, string][] {
-  const types: [string, string][] = [['', 'Select…'], ...DEGREE_TYPES.map((t) => [t, t] as [string, string])];
-  const saved = standardDegree(current) || current;
-  return saved && !DEGREE_TYPES.includes(saved as (typeof DEGREE_TYPES)[number]) ? [...types, [saved, saved]] : types;
+  // Specific degrees first: "Bachelor of Science" answers forms that list it, and still counts as a bachelor's.
+  const all: string[] = [...SPECIFIC_DEGREES, ...DEGREE_TYPES];
+  const types: [string, string][] = [['', 'Select…'], ...all.map((t) => [t, t] as [string, string])];
+  const saved = all.includes(current) ? current : standardDegree(current) || current;
+  return saved && !all.includes(saved) ? [...types, [saved, saved]] : types;
 }
 
 export function EducationSection({ profile: p, onChange }: SectionProps) {
@@ -222,7 +248,7 @@ export function EducationSection({ profile: p, onChange }: SectionProps) {
               <Field label="Degree type" hint="Fills the degree dropdown">
                 <Select
                   options={degreeOptions(e.degree)}
-                  value={standardDegree(e.degree) || e.degree}
+                  value={(SPECIFIC_DEGREES as readonly string[]).includes(e.degree) ? e.degree : standardDegree(e.degree) || e.degree}
                   onChange={(ev) => update(i, { degree: ev.target.value })}
                 />
               </Field>
@@ -381,6 +407,13 @@ export function PreferencesSection({ profile: p, onChange }: SectionProps) {
             onChange={(e) => set({ startDate: e.target.value })}
           />
         </Field>
+        <Field label="Bound by a non-compete or non-solicitation agreement?" hint="With your current or a past employer">
+          <Select
+            options={YES_NO}
+            value={p.preferences.nonCompete}
+            onChange={(e) => set({ nonCompete: e.target.value as Profile['preferences']['nonCompete'] })}
+          />
+        </Field>
         <Field label="Willing to relocate?">
           <Select
             options={YES_NO}
@@ -421,9 +454,7 @@ export function EeoSection({ profile: p, onChange }: SectionProps) {
         <Field label="Hispanic or Latino">
           <Select options={opts(EEO_OPTIONS.hispanic)} value={p.eeo.hispanic} onChange={(e) => set({ hispanic: e.target.value })} />
         </Field>
-        <Field label="Race">
-          <Select options={opts(EEO_OPTIONS.race)} value={p.eeo.race} onChange={(e) => set({ race: e.target.value })} />
-        </Field>
+        <RaceField value={p.eeo.race} onChange={(race) => set({ race })} />
         <Field label="Veteran status">
           <Select options={opts(EEO_OPTIONS.veteran)} value={p.eeo.veteran} onChange={(e) => set({ veteran: e.target.value })} />
         </Field>
@@ -450,4 +481,32 @@ export function missingRequired(p: Profile): string[] {
   if (!p.workAuth.authorizedUS) out.push('work authorization');
   if (!p.workAuth.needsSponsorship) out.push('sponsorship');
   return out;
+}
+
+/** Race as checkboxes: pick every race that applies. Forms with one choice get "Two or More Races" when several are picked. */
+function RaceField({ value, onChange }: { value: string; onChange: (race: string) => void }) {
+  const picked = racesOf(value);
+  const toggle = (race: string, on: boolean) => {
+    const next = on ? [...picked, race] : picked.filter((r) => r !== race);
+    onChange(next.length ? EEO_OPTIONS.race.filter((r) => next.includes(r)).join('; ') : DECLINE);
+  };
+  return (
+    <fieldset className="sm:col-span-2">
+      <legend className="mb-1.5 text-sm font-medium text-slate-800">Race (select all that apply)</legend>
+      <div className="grid gap-1.5 sm:grid-cols-2">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={!picked.length} onChange={(e) => e.target.checked && onChange(DECLINE)} />
+          {DECLINE}
+        </label>
+        {EEO_OPTIONS.race
+          .filter((r) => r !== DECLINE)
+          .map((race) => (
+            <label key={race} className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" checked={picked.includes(race)} onChange={(e) => toggle(race, e.target.checked)} />
+              {race}
+            </label>
+          ))}
+      </div>
+    </fieldset>
+  );
 }

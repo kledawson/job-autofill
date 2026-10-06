@@ -1,4 +1,4 @@
-import { DECLINE, type Profile, type YesNo } from '../types';
+import { DECLINE, racesOf, type Profile, type YesNo } from '../types';
 import type { ProfileKey } from './classify';
 import { isPlaceholderOption, normalize } from './match';
 import { bachelorDegreeAliases, splitDegree, standardDegree } from '../degree';
@@ -201,6 +201,26 @@ function clearanceAnswers(level: string, label: string, options: string[], yesNo
   }
 }
 
+const US_STATES: Record<string, string> = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut',
+  DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois',
+  IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana',
+  NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York',
+  NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania',
+  PR: 'Puerto Rico', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas',
+  UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+};
+
+/** "CA" and "California": text boxes take what was saved, dropdowns usually list the full name. */
+function stateVariants(state: string): string[] | null {
+  const s = state.trim();
+  const full = US_STATES[s.toUpperCase()];
+  if (full) return [s, full];
+  const abbr = Object.keys(US_STATES).find((k) => US_STATES[k]!.toLowerCase() === s.toLowerCase());
+  return nonEmpty(s, abbr);
+}
+
 function nonEmpty(...values: (string | undefined)[]): string[] | null {
   const out = values.map((v) => v?.trim() ?? '').filter(Boolean);
   return out.length ? Array.from(new Set(out)) : null;
@@ -215,9 +235,25 @@ function isUS(country: string): boolean | null {
  * Candidate values for a profile key, best first. Several candidates let option matching
  * handle "Bachelor's Degree" vs "BS", or "January" vs "01". Null when the profile has no value.
  */
-export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: boolean; yesNo?: boolean; now?: Date; label?: string; description?: string; required?: boolean; options?: string[] } = {}): string[] | null {
-  const edu = p.education.find((e) => e.school) ?? p.education[0];
-  const job = p.experience.find((x) => x.current) ?? p.experience.find((x) => x.company);
+export function valueFor(
+  key: ProfileKey,
+  p: Profile,
+  opts: {
+    phoneWithCode?: boolean;
+    yesNo?: boolean;
+    now?: Date;
+    label?: string;
+    description?: string;
+    required?: boolean;
+    options?: string[];
+    /** Entry of a numbered Education / Work Experience block. */
+    index?: number;
+    /** The hiring company, for "have you worked for this company / us?". */
+    company?: string;
+  } = {},
+): string[] | null {
+  const edu = opts.index !== undefined ? educationEntries(p)[opts.index] : (p.education.find((e) => e.school) ?? p.education[0]);
+  const job = experienceEntries(p)[opts.index ?? 0];
   switch (key) {
     case 'fullName':
       return nonEmpty([p.firstName, p.lastName].filter(Boolean).join(' '));
@@ -237,6 +273,8 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       const code = normalizeCode(p.countryCode);
       return nonEmpty(code ? `${code} ${national}` : national);
     }
+    case 'phoneType':
+      return ['Mobile', 'Cell', 'Mobile Phone', 'Cell Phone'];
     case 'phoneCountryCode': {
       const code = normalizeCode(p.countryCode);
       if (!code) return null;
@@ -262,7 +300,9 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
         'Able',
       ];
     case 'textConsent':
-      return [p.textConsent ? 'Yes' : 'No'];
+      return p.textConsent
+        ? ['Yes', 'I agree', 'Agree', 'I consent', 'Yes, I agree', 'Opt in']
+        : ['No', 'I do not agree', 'I disagree', 'I do not consent', 'No, I do not agree', 'Opt out'];
     case 'ageRange': {
       const age = parseInt(p.age, 10);
       if (!Number.isFinite(age)) return null;
@@ -281,7 +321,7 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     case 'city':
       return nonEmpty(p.city);
     case 'state':
-      return nonEmpty(p.state);
+      return stateVariants(p.state);
     case 'zip':
       return nonEmpty(p.zip);
     case 'country':
@@ -293,10 +333,12 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     case 'cityState':
       return nonEmpty([p.city, p.state].filter(Boolean).join(', '), p.city);
     case 'location':
+      // Region lists ("North America", "Europe") are matched by the region of the country.
       return nonEmpty(
         [p.city, p.state].filter(Boolean).join(', '),
         [p.city, p.state, p.country].filter(Boolean).join(', '),
         p.city,
+        ...regionOf(p.country),
       );
     case 'linkedin':
       return nonEmpty(p.linkedin);
@@ -310,6 +352,33 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return nonEmpty(p.currentCompany.trim()) ?? (opts.required ? ['N/A'] : null);
     case 'currentTitle':
       return nonEmpty(p.currentTitle.trim()) ?? (opts.required ? ['N/A'] : null);
+    case 'previousCompany':
+      return nonEmpty(previousJob(p).company) ?? (opts.required ? ['N/A'] : null);
+    case 'previousTitle':
+      return nonEmpty(previousJob(p).title) ?? (opts.required ? ['N/A'] : null);
+    case 'recentCompany':
+      return nonEmpty(p.currentCompany, previousJob(p).company) ?? (opts.required ? ['N/A'] : null);
+    case 'recentTitle':
+      return nonEmpty(p.currentTitle, previousJob(p).title) ?? (opts.required ? ['N/A'] : null);
+    case 'link': {
+      const link = uniqueLinks(p)[opts.index ?? 0];
+      return link ? [link] : null;
+    }
+    case 'skills':
+      return p.skills.length ? [p.skills.join(', ')] : null;
+    case 'employedAt':
+      return employedAt(opts.label ?? '', p, opts.company ?? '', opts.now ?? new Date());
+    case 'nonCompete':
+      return yesNo(p.preferences.nonCompete);
+    case 'govEmployee':
+      return yesNo(p.workAuth.govEmployee);
+    case 'otherCitizenship':
+      return yesNo(p.workAuth.otherCitizenship);
+    case 'sanctionedCountry':
+      return sanctionedAnswer(opts.label ?? '', p);
+    case 'locationPreference':
+      // Picked from the options by pickLocationPreference; these are only a fallback for free-text boxes.
+      return nonEmpty([p.city, p.state].filter(Boolean).join(', '), p.city);
     case 'school':
       return nonEmpty(edu?.school);
     case 'degree': {
@@ -329,6 +398,10 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return edu ? month(edu.endDate) : null;
     case 'eduEndYear':
       return edu ? year(edu.endDate) : null;
+    case 'graduatingIn':
+      return graduatingIn(opts.label ?? '', edu);
+    case 'majorIs':
+      return majorIs(opts.label ?? '', edu ? splitDegree(edu).major : '');
     case 'gradDate': {
       const m = /^(\d{4})-(\d{2})/.exec(edu?.endDate ?? '');
       return m ? [`${m[2]}/${m[1]}`] : null;
@@ -403,8 +476,12 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
     }
     case 'gender':
       return eeo(p.eeo.gender);
-    case 'race':
-      return eeo(p.eeo.race);
+    case 'race': {
+      // One choice for several races: "Two or More Races". Checkbox lists tick each one instead (raceChoices).
+      const races = racesOf(p.eeo.race);
+      if (races.length > 1) return TWO_OR_MORE;
+      return eeo(races[0] ?? DECLINE);
+    }
     case 'hispanic':
       return eeo(p.eeo.hispanic);
     case 'veteran':
@@ -413,6 +490,28 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
       return eeo(p.eeo.disability);
     case 'declineOnly':
       return DECLINE_VARIANTS;
+    case 'expTitle':
+      return nonEmpty(job?.title);
+    case 'expCompany':
+      return nonEmpty(job?.company);
+    case 'expLocation':
+      return nonEmpty(job?.location);
+    case 'expDescription':
+      return nonEmpty(bulleted(job?.bullets ?? ''));
+    case 'expCurrent':
+      return job?.current ? ['Yes'] : null;
+    case 'expStartMonth':
+      return job ? month(job.startDate) : null;
+    case 'expStartYear':
+      return job ? year(job.startDate) : null;
+    case 'expStartDate':
+      return job ? monthYear(job.startDate) : null;
+    case 'expEndMonth':
+      return job && !job.current ? month(job.endDate) : null;
+    case 'expEndYear':
+      return job && !job.current ? year(job.endDate) : null;
+    case 'expEndDate':
+      return job && !job.current ? monthYear(job.endDate) : null;
     case 'resume':
     case 'coverLetter':
     case 'transcript':
@@ -420,8 +519,260 @@ export function valueFor(key: ProfileKey, p: Profile, opts: { phoneWithCode?: bo
   }
 }
 
+/**
+ * "Are you graduating from a bachelor's or master's degree program in 2027?": Yes when the saved graduation
+ * year matches and (if the question names degree levels) the saved degree is one of them.
+ */
+function graduatingIn(label: string, edu: Profile['education'][number] | undefined): string[] | null {
+  const asked = /\b(20\d\d)\b/.exec(label)?.[1];
+  const year = /^(\d{4})/.exec(edu?.endDate ?? '')?.[1];
+  if (!asked || !year || !edu) return null;
+  if (year !== asked) return ['No'];
+  const levels = (['bachelor', 'master', 'phd', 'associate'] as const).filter((l) =>
+    l === 'phd' ? /ph\.?d|doctor/i.test(label) : new RegExp(`\\b${l}`, 'i').test(label),
+  );
+  if (!levels.length) return ['Yes'];
+  const level = standardDegree(splitDegree(edu).degree).toLowerCase();
+  if (!level) return null;
+  const held = /bachelor/.test(level) ? 'bachelor' : /master|mba/.test(level) ? 'master' : /doctor|ph/.test(level) ? 'phd' : /associate/.test(level) ? 'associate' : '';
+  return [levels.includes(held as (typeof levels)[number]) ? 'Yes' : 'No'];
+}
+
+/** Words that make "in ..." a category ("a STEM field") rather than one named major. */
+const BROAD_SUBJECT_RE = /\b(field|fields|related|stem|technical|quantitative|similar|equivalent|discipline|area|or)\b/i;
+
+/** "Is your degree in Computer Science?": Yes when the saved major is that subject; No only for a clearly different named major. */
+function majorIs(label: string, major: string): string[] | null {
+  const subject = / in (.+?)\??$/i.exec(label)?.[1]?.replace(/^(a|an|the)\s+/i, '') ?? '';
+  if (!subject || !major.trim()) return null;
+  const s = normalize(subject);
+  const m = normalize(major);
+  if (s && m && (m.includes(s) || s.includes(m))) return ['Yes'];
+  return BROAD_SUBJECT_RE.test(subject) ? null : ['No'];
+}
+
+const TWO_OR_MORE = ['Two or More Races', 'Two or more races', 'Two or More', 'Multiracial', 'Multi-racial', 'Mixed race'];
+
+/**
+ * Each answer to tick on a "select all that apply" race list: every saved race, plus Hispanic or Latino when
+ * that was answered Yes. Declining ticks only the decline option.
+ */
+export function raceChoices(p: Profile): string[][] {
+  const races = racesOf(p.eeo.race).map((r) => eeo(r));
+  if (/^yes$/i.test(p.eeo.hispanic.trim())) races.push(['Hispanic or Latino', 'Hispanic', 'Latino', 'Hispanic or Latinx']);
+  return races.length ? races : [DECLINE_VARIANTS];
+}
+
+/** The saved previous job, else the most recent past job in the work history. */
+function previousJob(p: Profile): { company: string; title: string } {
+  if (p.previousCompany.trim() || p.previousTitle.trim()) return { company: p.previousCompany.trim(), title: p.previousTitle.trim() };
+  const past = p.experience.find((x) => !x.current && (x.company.trim() || x.title.trim()));
+  return { company: past?.company.trim() ?? '', title: past?.title.trim() ?? '' };
+}
+
+/** Each distinct link in the profile, LinkedIn last (forms often ask for it separately). */
+export function uniqueLinks(p: Profile): string[] {
+  const key = (u: string) => u.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const link of [p.portfolio, p.website, p.github, p.linkedin]) {
+    const k = key(link ?? '');
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(link.trim());
+  }
+  return out;
+}
+
+/** Cities that count as one area when picking a nearby office. */
+const METROS: { states: string[]; cities: string[] }[] = [
+  { states: ['ca'], cities: [...BAY_AREA_CITIES, 'santa cruz', 'scotts valley', 'capitola', 'gilroy', 'morgan hill', 'watsonville'] },
+  { states: ['ca'], cities: ['los angeles', 'santa monica', 'culver city', 'pasadena', 'burbank', 'glendale', 'irvine', 'long beach', 'el segundo', 'playa vista', 'venice', 'torrance', 'anaheim', 'costa mesa', 'newport beach', 'hollywood', 'west hollywood', 'beverly hills'] },
+  { states: ['ca'], cities: ['san diego', 'la jolla', 'carlsbad', 'del mar', 'chula vista'] },
+  { states: ['wa'], cities: ['seattle', 'bellevue', 'redmond', 'kirkland', 'bothell', 'tacoma', 'everett', 'renton', 'issaquah', 'sammamish', 'kent', 'lynnwood'] },
+  { states: ['ny', 'nj', 'ct'], cities: ['new york', 'new york city', 'nyc', 'brooklyn', 'queens', 'bronx', 'manhattan', 'staten island', 'long island city', 'jersey city', 'hoboken', 'newark', 'stamford', 'white plains', 'yonkers'] },
+  { states: ['ma'], cities: ['boston', 'cambridge', 'somerville', 'waltham', 'burlington', 'quincy', 'newton', 'lexington', 'woburn'] },
+  { states: ['il'], cities: ['chicago', 'evanston', 'oak brook', 'naperville', 'schaumburg', 'deerfield'] },
+  { states: ['tx'], cities: ['austin', 'round rock', 'cedar park', 'georgetown'] },
+  { states: ['tx'], cities: ['dallas', 'plano', 'irving', 'fort worth', 'richardson', 'frisco', 'addison'] },
+  { states: ['tx'], cities: ['houston', 'the woodlands', 'sugar land', 'katy'] },
+  { states: ['dc', 'va', 'md'], cities: ['washington', 'washington dc', 'arlington', 'alexandria', 'reston', 'mclean', 'herndon', 'tysons', 'bethesda', 'silver spring', 'rockville', 'chantilly'] },
+  { states: ['co'], cities: ['denver', 'boulder', 'aurora', 'lakewood', 'broomfield', 'englewood'] },
+  { states: ['ga'], cities: ['atlanta', 'alpharetta', 'marietta', 'sandy springs'] },
+  { states: ['or', 'wa'], cities: ['portland', 'beaverton', 'hillsboro', 'vancouver'] },
+  { states: ['nc'], cities: ['raleigh', 'durham', 'chapel hill', 'cary', 'morrisville', 'research triangle park'] },
+  { states: ['pa', 'nj'], cities: ['philadelphia', 'king of prussia', 'conshohocken', 'camden'] },
+  { states: ['fl'], cities: ['miami', 'fort lauderdale', 'boca raton', 'miami beach', 'coral gables'] },
+  { states: ['az'], cities: ['phoenix', 'scottsdale', 'tempe', 'chandler', 'mesa'] },
+  { states: ['ut'], cities: ['salt lake city', 'lehi', 'provo', 'draper', 'south jordan'] },
+  { states: ['mn'], cities: ['minneapolis', 'st paul', 'saint paul', 'bloomington'] },
+  { states: ['mi'], cities: ['detroit', 'ann arbor', 'warren', 'dearborn', 'southfield'] },
+  { states: ['oh'], cities: ['cincinnati', 'mason', 'blue ash'] },
+];
+
+/** City (and state, if given) at the start of an option or address: "San Jose, CA, United States" → san jose / ca. */
+function placeOf(text: string): { city: string; state: string } {
+  const [city = '', state = ''] = text.split(/,|\s+-\s+|\(/).map((s) => normalize(s));
+  return { city, state: /^[a-z]{2}$/.test(state) ? state : (Object.entries(US_STATES).find(([, n]) => n.toLowerCase() === state)?.[0].toLowerCase() ?? '') };
+}
+
+function metroOf(place: { city: string; state: string }): number {
+  return METROS.findIndex((m) => m.cities.includes(place.city) && (!place.state || m.states.includes(place.state)));
+}
+
+const NO_FLEXIBILITY_RE = /\b(no|not have|don.?t have|without)\b.*\bflexib|\bno (other|additional|second|third|further) (location|office|preference)|\bonly (the )?(first|above|one)\b|^(none|n\/a|not applicable)$|no preference beyond/i;
+const ANY_OFFICE_RE = /\b(any|all) (office|location)s?\b|open to (any|all)|anywhere|no preference$/i;
+
+/**
+ * The option for the Nth location preference: the person's own city, then other offices in the same area,
+ * never one already chosen for an earlier preference. Past the first, when no office is nearby, the
+ * "no flexibility for another office" option; otherwise -1 (left for the person).
+ */
+export function pickLocationPreference(options: string[], p: Profile, rank: number, chosen: string[]): number {
+  const home = { city: normalize(p.city), state: (stateVariants(p.state) ?? []).map((s) => s.toLowerCase()).find((s) => s.length === 2) ?? '' };
+  if (!home.city) return -1;
+  const homeMetro = metroOf(home);
+  const taken = new Set(chosen.map(normalize));
+  const open = options.map((o, i) => ({ o, i })).filter(({ o }) => !isPlaceholderOption(o));
+  // Offices are never repeated; the "no flexibility" answer can be given for every later preference.
+  const office = open.filter(({ o }) => !ANY_OFFICE_RE.test(o) && !NO_FLEXIBILITY_RE.test(o) && !taken.has(normalize(o)));
+  const same = office.find(({ o }) => placeOf(o).city === home.city);
+  if (same) return same.i;
+  const near = homeMetro >= 0 ? office.find(({ o }) => metroOf(placeOf(o)) === homeMetro) : undefined;
+  if (near) return near.i;
+  if (rank > 1) return open.find(({ o }) => NO_FLEXIBILITY_RE.test(o))?.i ?? -1;
+  return -1;
+}
+
+/** "Ernst & Young, LLP" and "Ernst and Young" are one company: drop legal suffixes, "the", and punctuation. */
+function companyKey(name: string): string {
+  return normalize(name.replace(/&/g, ' and '))
+    .replace(/\b(the|llp|llc|inc|incorporated|corp|corporation|co|company|ltd|limited|plc|gmbh|lp|group|holdings)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Companies a question names: "employee of Ernst & Young, LLP, Workday's auditors" → ["Ernst & Young"]. */
+export function companiesAsked(label: string, hiring: string): string[] {
+  const out: string[] = [];
+  const re = /(?:\b(?:employee|employed|worked|partner|principal|contractor|intern|consultant)\b.{0,40}?\b(?:of|for|by|at|with)|\bwork(?:ing)? for)\s+(.+?)(?=[,?;:()]|\s+(?:or|and|in|within|as|during|since|before|after|at any time)\b|$)/gi;
+  for (const m of label.matchAll(re)) {
+    const name = m[1]!.trim().replace(/^(the|a|an)\s+/i, '');
+    if (/^(this|our) (company|organization|firm|employer)$|^us$|^(this|our) (team|group)$/i.test(name)) {
+      if (hiring.trim()) out.push(hiring.trim());
+    } else if (name && !/^(any|your|my|our|a|an|another)\b/i.test(name)) out.push(name);
+  }
+  return Array.from(new Set(out));
+}
+
+/**
+ * "Are you a current or recent former (within the preceding 24 months) employee of Ernst & Young?": Yes when the
+ * work history has a job there that is current, or ended inside the stated window (any time, when none is
+ * stated); No otherwise. "Currently employed by" asks only about a current job. A partner/principal clause
+ * "at any time" also counts a past job with such a title.
+ */
+function employedAt(label: string, p: Profile, hiring: string, now: Date): string[] | null {
+  const names = companiesAsked(label, hiring).map(companyKey).filter(Boolean);
+  if (!names.length) return null;
+  const l = label.toLowerCase();
+  const currentOnly = /\bcurrent(ly)?\b/.test(l) && !/\b(former|previous(ly)?|ever|past|prior|recent)\b/.test(l);
+  const window = /within (?:the )?(?:preceding|past|last|prior)?\s*(\d+)\s*(month|year)s?|(?:past|last|preceding) (\d+) (month|year)s?/.exec(l);
+  const months = window ? Number(window[1] ?? window[3]) * (/year/.test(window[2] ?? window[4] ?? '') ? 12 : 1) : null;
+  const partnerAnyTime = /(partner|principal)[^.?]{0,60}at any time|at any time[^.?]{0,40}(partner|principal)/.test(l);
+  const jobs = [
+    ...p.experience.filter((x) => x.company.trim()).map((x) => ({ company: x.company, title: x.title, end: x.current ? null : x.endDate, current: x.current })),
+    ...(p.currentCompany.trim() ? [{ company: p.currentCompany, title: p.currentTitle, end: null, current: true }] : []),
+    ...(p.previousCompany.trim() ? [{ company: p.previousCompany, title: p.previousTitle, end: '', current: false }] : []),
+  ];
+  const at = (company: string) => {
+    const k = companyKey(company);
+    return !!k && names.some((n) => n === k || ` ${k} `.includes(` ${n} `) || ` ${n} `.includes(` ${k} `));
+  };
+  const monthsAgo = (end: string) => {
+    const m = /^(\d{4})-(\d{2})/.exec(end);
+    return m ? (now.getFullYear() - Number(m[1])) * 12 + (now.getMonth() + 1 - Number(m[2])) : null;
+  };
+  for (const job of jobs.filter((j) => at(j.company))) {
+    if (job.current) return ['Yes'];
+    if (currentOnly) continue;
+    if (months === null) return ['Yes'];
+    const ago = monthsAgo(job.end ?? '');
+    if (ago === null || ago <= months) return ['Yes'];
+    if (partnerAnyTime && /partner|principal/i.test(job.title)) return ['Yes'];
+  }
+  return ['No'];
+}
+
+const SANCTIONED = ['iran', 'cuba', 'north korea', 'syria', 'crimea', 'donetsk', 'luhansk', 'sudan', 'russia', 'belarus', 'venezuela'];
+
+/**
+ * Export control: "Are you a current citizen, national or resident of any of the following countries...?" Yes when
+ * the country of residence or a saved citizenship is on the question's list. No only when every citizenship is
+ * known (none besides the saved status, or the other ones are listed) and none is on it.
+ */
+function sanctionedAnswer(label: string, p: Profile): string[] | null {
+  const l = ` ${normalize(label)} `;
+  const listed = SANCTIONED.filter((c) => l.includes(` ${c} `));
+  if (!listed.length) return null;
+  const mine = [p.country, ...p.workAuth.otherCountries.split(/[,;/]/)].map((c) => normalize(c)).filter(Boolean);
+  if (mine.some((c) => listed.some((x) => c === x || c.includes(x)))) return ['Yes'];
+  const other = p.workAuth.otherCitizenship;
+  if (other === 'yes' && p.workAuth.otherCountries.trim()) return ['No'];
+  // "No other citizenship" settles it only for a U.S. citizen; anyone else's own nationality is not saved.
+  if (other === 'no' && citizenship(p) === 'citizen') return ['No'];
+  return null;
+}
+
+/** One "• " bullet per line, keeping bullets already written with -, *, or •. */
+export function bulleted(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => `• ${l.replace(/^([-*•‣◦▪]|\d+[.)])\s*/, '')}`)
+    .join('\n');
+}
+
+const REGIONS: [RegExp, string[]][] = [
+  [/^(us|usa|u\.s\.a?\.?|united states( of america)?|canada|mexico)$/i, ['North America', 'Americas', 'NA', 'NAMER']],
+  [/^(brazil|argentina|chile|colombia|peru|uruguay|ecuador|bolivia|paraguay|venezuela|costa rica|panama|guatemala)$/i, ['LATAM', 'Latin America', 'South America', 'Americas']],
+  [/^(united kingdom|uk|ireland|germany|france|spain|portugal|italy|netherlands|belgium|switzerland|austria|poland|sweden|norway|denmark|finland|czechia|czech republic|romania|greece)$/i, ['Europe', 'EMEA', 'EU']],
+  [/^(india|china|japan|south korea|singapore|philippines|vietnam|thailand|malaysia|indonesia|taiwan|hong kong|pakistan|bangladesh)$/i, ['Asia', 'APAC', 'Asia Pacific']],
+  [/^(australia|new zealand)$/i, ['APAC', 'Asia Pacific', 'Oceania']],
+];
+
+/** Region names a location list may use for the country ("North America" for the US). */
+function regionOf(country: string): string[] {
+  return REGIONS.find(([re]) => re.test(country.trim()))?.[1] ?? [];
+}
+
+/** Education entries worth entering, in profile order. Numbered form sections map onto these. */
+export function educationEntries(p: Profile) {
+  return p.education.filter((e) => e.school.trim());
+}
+
+/** Work history entries worth entering, in profile order. */
+export function experienceEntries(p: Profile) {
+  return p.experience.filter((x) => x.company.trim() || x.title.trim());
+}
+
+/** "06/2025", "2025-06", "June 2025" for a YYYY-MM date. */
+function monthYear(yyyyMm: string): string[] | null {
+  const m = /^(\d{4})-(\d{2})/.exec(yyyyMm);
+  if (!m) return null;
+  const name = MONTHS[parseInt(m[2]!, 10) - 1];
+  return [`${m[2]}/${m[1]}`, `${m[1]}-${m[2]}`, ...(name ? [`${name} ${m[1]}`] : [])];
+}
+
 /** Keys whose values are only safe to pick from a list, never typed free-form. */
 export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
+  'graduatingIn',
+  'govEmployee',
+  'employedAt',
+  'nonCompete',
+  'otherCitizenship',
+  'sanctionedCountry',
+  'majorIs',
   'ageAtLeast',
   'textConsent',
   'acknowledge',

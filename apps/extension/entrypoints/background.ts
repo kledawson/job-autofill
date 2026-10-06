@@ -1,15 +1,17 @@
 import { browser, type Browser } from 'wxt/browser';
 import { db, getProfile } from '@/lib/db';
-import { generateJson, generateText, testKey } from '@/lib/gemini';
+import { generateJson, generatePromptJson, generateText, testKey } from '@/lib/gemini';
+import { mappingPrompt, mappingSchema, parseMappings, questionKey } from '@/lib/field-map';
 import { sanitizeDraft, sectionRequest } from '@/lib/resume';
 import {
   fileToPayload,
+  pageStatusKey,
   type BackgroundMessage,
   type BackgroundMessages,
   type ContentMessage,
   type FilePayload,
 } from '@/lib/messages';
-import { detectPlatform, jobKey, toApplicationUrl } from '@/lib/platforms';
+import { detectPlatform, isWebUrl, jobKey, toApplicationUrl } from '@/lib/platforms';
 import { clampToLimit, renderPrompt } from '@/lib/prompt';
 import { getSettings, updateSettings, type PublicSettings } from '@/lib/settings';
 import { appendApplication, createTrackingSheet, sheetsConfigured, updateApplication } from '@/lib/sheets';
@@ -102,6 +104,29 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+/** Pages on the known job sites get the content script automatically; others need the all-sites permission. */
+async function canAccess(url: string): Promise<boolean> {
+  if (detectPlatform(url)) return true;
+  try {
+    return await browser.permissions.contains({ origins: [`${new URL(url).origin}/*`] });
+  } catch {
+    return false;
+  }
+}
+
+const NEEDS_ACCESS = 'Job Autofill needs permission to read this site. Click Fill this page again and choose Allow.';
+
+/** Loads the content script into every frame of a tab it is not running in yet. It ignores repeat loads. */
+async function injectContentScript(tabId: number) {
+  await browser.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    files: ['/content-scripts/content.js'],
+  });
+}
+
+/** When a frame of a tab last started filling, so the top page can stay quiet about a form inside a frame. */
+const fillingFrames = new Map<number, number>();
+
 async function sendToTab(tabId: number, msg: ContentMessage): Promise<unknown> {
   return browser.tabs.sendMessage(tabId, msg);
 }
@@ -140,7 +165,47 @@ const handlers: Handlers = {
     }
   },
 
+  async mapFields({ fields }) {
+    const settings = await getSettings();
+    if (!settings.geminiApiKey) return { ok: false, error: 'No Gemini API key.' };
+    const ids = fields.map(questionKey);
+    const keys: (string | null)[] = Array(fields.length).fill(null);
+    const ask: number[] = [];
+    // Cached answers ('' = no profile fact fits) save a request for wording seen on an earlier form.
+    for (const [i, id] of ids.entries()) {
+      const hit = await db.fieldMappings.where('[platform+label]').equals(['any', id]).first();
+      if (hit) keys[i] = hit.profileKey || null;
+      else ask.push(i);
+    }
+    if (!ask.length) return { ok: true, keys };
+    try {
+      const subset = ask.map((i) => fields[i]!);
+      const raw = await generatePromptJson(settings.geminiApiKey, settings.geminiModel, mappingPrompt(subset), mappingSchema());
+      const mapped = parseMappings(raw, subset.length);
+      for (const [j, i] of ask.entries()) {
+        keys[i] = mapped[j] ?? null;
+        await db.fieldMappings.add({ label: ids[i]!, platform: 'any', profileKey: mapped[j] ?? '', confidence: 1, source: 'ai' });
+      }
+      return { ok: true, keys };
+    } catch (err) {
+      return { ok: false, error: errorText(err) };
+    }
+  },
+
+  async frameFilling(_req, sender) {
+    const at = sender.tab?.id !== undefined ? fillingFrames.get(sender.tab.id) : undefined;
+    return { active: at !== undefined && Date.now() - at < 60000 };
+  },
+
+  async setPageStatus(req, sender) {
+    if (sender.tab?.id !== undefined) {
+      await browser.storage.session.set({ [pageStatusKey(sender.tab.id)]: { ...req.status, origin: req.origin } });
+    }
+    return {};
+  },
+
   async fillStarted(req, sender) {
+    if (sender.tab?.id !== undefined) fillingFrames.set(sender.tab.id, Date.now());
     const key = jobKey(req.url);
     const existing = await db.applications.where('jobKey').equals(key).last();
     const patch = { company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url };
@@ -220,9 +285,8 @@ const handlers: Handlers = {
     } catch {
       return { ok: false, error: 'That does not look like a link. Paste the full job URL.' };
     }
-    const embeddedGreenhouse = parsed.searchParams.has('gh_jid');
-    if (!detectPlatform(parsed.href) && !embeddedGreenhouse) {
-      return { ok: false, error: 'This version supports Greenhouse, Lever, and Ashby links.' };
+    if (!(await canAccess(parsed.href))) {
+      return { ok: false, error: 'Allow Job Autofill to read other sites to fill this link.' };
     }
     const profile = await getProfile();
     if (!profile.firstName || !profile.email) {
@@ -240,6 +304,7 @@ const handlers: Handlers = {
   async fillActiveTab() {
     const tab = await activeTab();
     if (!tab?.id) return { ok: false, error: 'No active tab.' };
+    if (tab.url !== undefined && !isWebUrl(tab.url)) return { ok: false, error: 'Open a job application page first.' };
     const profile = await getProfile();
     if (!profile.firstName || !profile.email) {
       return { ok: false, error: 'Finish your profile first (at least your name and email).' };
@@ -247,14 +312,13 @@ const handlers: Handlers = {
     try {
       await sendToTab(tab.id, { type: 'ping' });
     } catch {
-      // Tabs opened before the extension was installed have no content script yet.
-      if (!tab.url || !detectPlatform(tab.url)) {
-        return { ok: false, error: 'This page is not a Greenhouse, Lever, or Ashby application.' };
+      // Pages outside the known job sites (and tabs opened before install) have no content script yet.
+      if (!tab.url || !(await canAccess(tab.url))) return { ok: false, error: NEEDS_ACCESS };
+      try {
+        await injectContentScript(tab.id);
+      } catch (err) {
+        return { ok: false, error: `Could not read this page: ${errorText(err)}` };
       }
-      await browser.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        files: ['/content-scripts/content.js'],
-      });
       await new Promise((r) => setTimeout(r, 300));
     }
     await sendToTab(tab.id, { type: 'fill' });
@@ -378,7 +442,16 @@ export default defineBackground(() => {
     browser.notifications.clear(notificationId);
   });
 
+  // Links opened from the side panel on sites without an automatic content script get it once loaded.
+  browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
+    if (change.status !== 'complete' || !tab.url || detectPlatform(tab.url)) return;
+    if (!(await pendingTabs()).includes(tabId) || !(await canAccess(tab.url))) return;
+    await injectContentScript(tabId).catch((err) => console.warn('[Job Autofill] could not load into the opened tab', errorText(err)));
+  });
+
   browser.tabs.onRemoved.addListener(async (tabId) => {
+    fillingFrames.delete(tabId);
+    await browser.storage.session.remove(pageStatusKey(tabId));
     const pending = await pendingTabs();
     if (pending.includes(tabId)) await setPendingTabs(pending.filter((id) => id !== tabId));
   });

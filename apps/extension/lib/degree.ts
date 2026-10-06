@@ -1,6 +1,18 @@
 // Degree type ("Bachelor's Degree") and field of study ("Computer Science") are kept apart so each can
 // fill its own field on an application form.
 
+/** Specific degrees offered in the profile, so forms listing "Bachelor of Science" can be answered exactly. */
+export const SPECIFIC_DEGREES = [
+  'Bachelor of Science',
+  'Bachelor of Arts',
+  'Bachelor of Engineering',
+  'Bachelor of Business Administration',
+  'Bachelor of Fine Arts',
+  'Master of Science',
+  'Master of Arts',
+  'Master of Engineering',
+] as const;
+
 export const DEGREE_TYPES = [
   "Associate's Degree",
   "Bachelor's Degree",

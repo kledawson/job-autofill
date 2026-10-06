@@ -1,5 +1,6 @@
-import type { Platform } from '../types';
+import type { Platform, Profile } from '../types';
 import type { AdapterKeys } from './classify';
+import { addEntries } from './entries';
 
 export interface JobInfo {
   company: string;
@@ -16,6 +17,19 @@ export interface Adapter {
   /** Root to scan; the application form when it can be identified. */
   formRoot(doc: Document): ParentNode;
   jobInfo(doc: Document): JobInfo;
+  /**
+   * Multi-step applications (Workday's My Information, My Experience, ...): keep watching the whole page
+   * and fill each step as it appears, and wait for the form while the person signs in.
+   */
+  multiStep?: boolean;
+  /** Start filling (and watching) at once instead of waiting for a recognisable form first. */
+  watchWholeFlow?: boolean;
+  /** Fields this adapter must recognise before a page counts as an application form (default: any 2 fields). */
+  minProfileFields?: number;
+  /** Runs before each scan, e.g. to add one work-experience entry per profile entry. */
+  prepare?(root: ParentNode, profile: Profile, done: WeakSet<Element>): Promise<boolean>;
+  /** Fetches the job description from the page's own site when the form page does not show it. */
+  fetchDescription?(doc: Document): Promise<string>;
 }
 
 const text = (doc: ParentNode, sel: string) => (doc.querySelector(sel)?.textContent ?? '').replace(/\s+/g, ' ').trim();
@@ -152,4 +166,179 @@ const ashby: Adapter = {
   },
 };
 
-export const ADAPTERS: Record<Platform, Adapter> = { greenhouse, lever, ashby };
+function stripHtml(html: string): string {
+  return html
+    .replace(/<(br|\/p|\/li|\/h\d)\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&[a-z]+;/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n')
+    .trim();
+}
+
+const meta = (doc: Document, prop: string) =>
+  (doc.querySelector(`meta[property="${prop}"], meta[name="${prop}"]`)?.getAttribute('content') ?? '').trim();
+
+/** schema.org JobPosting data, which most careers sites embed for search engines. */
+function jobPostingData(doc: Document): { title: string; company: string; description: string } | null {
+  const visit = (node: any): any => {
+    if (!node || typeof node !== 'object') return null;
+    if (Array.isArray(node)) return node.map(visit).find(Boolean) ?? null;
+    const type = node['@type'];
+    if (type === 'JobPosting' || (Array.isArray(type) && type.includes('JobPosting'))) return node;
+    return visit(node['@graph']);
+  };
+  for (const script of Array.from(doc.querySelectorAll('script[type="application/ld+json"]'))) {
+    try {
+      const job = visit(JSON.parse(script.textContent ?? ''));
+      if (!job) continue;
+      const org = job.hiringOrganization;
+      return {
+        title: String(job.title ?? '').trim(),
+        company: String((typeof org === 'string' ? org : org?.name) ?? '').trim(),
+        description: stripHtml(String(job.description ?? '')).slice(0, 8000),
+      };
+    } catch {
+      // Malformed JSON-LD is common; ignore it.
+    }
+  }
+  return null;
+}
+
+/** "careers.acme.com" → "Acme". */
+function companyFromHost(host: string): string {
+  const parts = host.replace(/^www\./, '').split('.');
+  const generic = /^(careers?|jobs?|apply|talent|recruiting|hire|work|join)$/i;
+  const name = parts.length > 2 && generic.test(parts[0]!) ? parts[1]! : parts[0]!;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function shortHeading(doc: Document): string {
+  const h1 = text(doc, 'h1');
+  return h1.length > 0 && h1.length < 120 ? h1 : '';
+}
+
+/** Any careers site or form without a dedicated adapter: everything comes from labels and page metadata. */
+const other: Adapter = {
+  platform: 'other',
+  keys: {},
+  multiStep: true,
+  minProfileFields: 2,
+  formRoot(doc) {
+    // The form with the most inputs, unless the fields are not inside a form at all.
+    let best: Element | null = null;
+    let bestCount = 0;
+    for (const form of Array.from(doc.querySelectorAll('form'))) {
+      const n = form.querySelectorAll('input:not([type="hidden"]), select, textarea, button[aria-haspopup="listbox"]').length;
+      if (n > bestCount) {
+        best = form;
+        bestCount = n;
+      }
+    }
+    return best && bestCount >= 3 ? best : doc.body;
+  },
+  jobInfo(doc) {
+    const data = jobPostingData(doc);
+    const title = doc.title.split(/\s+[|–—-]\s+/)[0]?.trim() ?? '';
+    const description =
+      data?.description ||
+      longText(doc, '[itemprop="description"], [class*="job-description" i], [class*="jobDescription" i], [id*="job-description" i], [id*="jobDescription" i]').slice(0, 8000);
+    return {
+      role: data?.title || shortHeading(doc) || meta(doc, 'og:title') || title,
+      company: data?.company || meta(doc, 'og:site_name') || companyFromHost(doc.location.hostname),
+      description,
+    };
+  },
+  prepare: addEntries,
+};
+
+/** Workday career sites: {tenant}.wd5.myworkdayjobs.com/{lang}/{site}/job/{location}/{Title_JR123}/apply/... */
+function workdayPosting(doc: Document): { tenant: string; site: string; jobPath: string } | null {
+  const parts = doc.location.pathname.split('/').filter(Boolean);
+  if (/^[a-z]{2}(-[A-Z]{2})?$/.test(parts[0] ?? '')) parts.shift();
+  let tenant = doc.location.hostname.split('.')[0] ?? '';
+  // myworkdaysite.com keeps the tenant in the path: /recruiting/{tenant}/{site}/job/...
+  if (parts[0] === 'recruiting') {
+    parts.shift();
+    tenant = parts.shift() ?? tenant;
+  }
+  const site = parts[0] ?? '';
+  const job = parts.indexOf('job');
+  if (!site || job < 0) return null;
+  const end = parts.indexOf('apply');
+  const jobPath = parts.slice(job + 1, end > job ? end : undefined).join('/');
+  return jobPath ? { tenant, site, jobPath } : null;
+}
+
+const workday: Adapter = {
+  platform: 'workday',
+  multiStep: true,
+  watchWholeFlow: true,
+  minProfileFields: 2,
+  keys: {
+    // Current Workday ids
+    'name--legalName--firstName': 'firstName',
+    'name--legalName--lastName': 'lastName',
+    'name--preferredName--firstName': 'preferredName',
+    'emailAddress--emailAddress': 'email',
+    'phoneNumber--phoneNumber': 'phone',
+    'phoneNumber--countryPhoneCode': 'phoneCountryCode',
+    'address--addressLine1': 'address',
+    'address--city': 'city',
+    'address--postalCode': 'zip',
+    'address--countryRegion': 'state',
+    'country--country': 'country',
+    jobTitle: 'expTitle',
+    companyName: 'expCompany',
+    roleDescription: 'expDescription',
+    currentlyWorkHere: 'expCurrent',
+    school: 'school',
+    degree: 'degree',
+    fieldOfStudy: 'major',
+    gradeAverage: 'gpa',
+    // Older data-automation-id names
+    legalNameSection_firstName: 'firstName',
+    legalNameSection_lastName: 'lastName',
+    email: 'email',
+    'phone-number': 'phone',
+    countryPhoneCode: 'phoneCountryCode',
+    addressSection_addressLine1: 'address',
+    addressSection_city: 'city',
+    addressSection_postalCode: 'zip',
+    addressSection_countryRegion: 'state',
+    countryDropdown: 'country',
+    linkedinQuestion: 'linkedin',
+    'file-upload-input-ref': 'resume',
+  },
+  // The application pages, without the site header's language and account menus.
+  formRoot: (doc) => doc.querySelector('[data-automation-id="applyFlowPage"]') ?? doc.querySelector('main') ?? doc.body,
+  jobInfo(doc) {
+    const posting = workdayPosting(doc);
+    const fromPath = (posting?.jobPath.split('/').pop() ?? '').replace(/_[A-Z]*[-_]?\d[\w-]*$/, '').replace(/-/g, ' ').trim();
+    const tenant = posting?.tenant ?? '';
+    return {
+      role: text(doc, '[data-automation-id="jobPostingHeader"]') || fromPath || shortHeading(doc),
+      company: meta(doc, 'og:site_name') || (tenant ? tenant.charAt(0).toUpperCase() + tenant.slice(1) : ''),
+      description: longText(doc, '[data-automation-id="jobPostingDescription"]'),
+    };
+  },
+  prepare: addEntries,
+  async fetchDescription(doc) {
+    const posting = workdayPosting(doc);
+    if (!posting) return '';
+    try {
+      const res = await fetch(`${doc.location.origin}/wday/cxs/${posting.tenant}/${posting.site}/job/${posting.jobPath}`, {
+        headers: { accept: 'application/json' },
+        credentials: 'omit',
+      });
+      const body = await res.json();
+      return stripHtml(String(body?.jobPostingInfo?.jobDescription ?? '')).slice(0, 8000);
+    } catch {
+      return '';
+    }
+  },
+};
+
+export const ADAPTERS: Record<Platform, Adapter> = { greenhouse, lever, ashby, workday, other };
