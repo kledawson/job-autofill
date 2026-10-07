@@ -345,9 +345,9 @@ export function valueFor(
     case 'github':
       return nonEmpty(p.github);
     case 'portfolio':
-      return nonEmpty(p.portfolio || p.website);
+      return nonEmpty(p.portfolio, p.website);
     case 'website':
-      return nonEmpty(p.website || p.portfolio || p.github);
+      return nonEmpty(p.website, p.portfolio, p.github);
     case 'currentCompany':
       return nonEmpty(p.currentCompany.trim()) ?? (opts.required ? ['N/A'] : null);
     case 'currentTitle':

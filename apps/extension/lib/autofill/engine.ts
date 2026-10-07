@@ -94,6 +94,8 @@ function byDocumentOrder(a: FieldRecord, b: FieldRecord): number {
   return composedCompare(a.field.el, b.field.el);
 }
 
+const LINK_KEYS = new Set<string>(['linkedin', 'github', 'portfolio', 'website']);
+
 export class FillSession {
   private records = new Map<HTMLElement, FieldRecord>();
   private jobInfo: JobInfo;
@@ -599,6 +601,18 @@ export class FillSession {
         index: rec.cls.kind === 'profile' ? rec.cls.index : undefined,
         company: this.jobInfo.company,
       }) : null;
+      // Two URL boxes ("Website", "Other website") never get the same link: skip any already in another link box.
+      if (values && key !== undefined && LINK_KEYS.has(key)) {
+        const norm = (u: string) => u.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+        const taken = new Set(
+          [...this.records.values()]
+            .filter((r) => r !== rec && r.cls.kind === 'profile' && LINK_KEYS.has(r.cls.key) && r.field.el.isConnected)
+            .map((r) => norm(displayedValue(r.field)))
+            .filter(Boolean),
+        );
+        const fresh = values.filter((v) => !taken.has(norm(v)));
+        values.splice(0, values.length, ...fresh);
+      }
       const topOption = key !== undefined && TOP_OPTION_KEYS.has(key);
       const choice: ChoiceOpts = {
         topOption,
