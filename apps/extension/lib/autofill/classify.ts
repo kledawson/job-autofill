@@ -5,6 +5,7 @@ export type ProfileKey =
   | 'firstName'
   | 'lastName'
   | 'preferredName'
+  | 'hasPreferredName'
   | 'pronouns'
   | 'email'
   | 'phone'
@@ -187,7 +188,7 @@ const RULES: Rule[] = [
   ['locationPreference', /\b(location|office|site) (preference|choice)\b|\b(preferred|desired) (office|work) location|\b(first|second|third|1st|2nd|3rd|top) (choice|preference)\b.*\b(location|office)/],
   // "Please select the country where you currently reside"
   ['country', /\bcountry (where|in which|that) you (currently )?(live|reside|are based|are located)|which country (do )?you (currently )?(live|reside)|what country (do )?you (currently )?(live|reside)|country of (current )?residen/],
-  ['location', /location|where (are you|do you) (currently )?(based|located|live)|where do you plan (on|to) work|current city/],
+  ['location', /location|where (are you|do you) (currently )?(based|located|live|reside)|where do you plan (on|to) work|current city/],
   ['city', /^city\b/],
   ['state', /^(state|province|state\/province|region)\b/],
   ['country', /^country\b|country of residence/],
@@ -282,6 +283,8 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
   }
 
   if (field.kind === 'file') {
+    // Ashby's "Autofill from resume" box runs the site's parser, which rewrites other fields after they are filled.
+    if (field.el.closest('.ashby-application-form-autofill-uploader') || /autofill (from|with|using) (your )?(resume|cv|r\u00e9sum\u00e9)/.test(label)) return { kind: 'unknown' };
     if (/transcript/.test(label) || /transcript/i.test(field.id + field.name)) return { kind: 'profile', key: 'transcript', source: 'rule' };
     if (/cover/.test(label) || /cover/.test(field.id + field.name)) return { kind: 'profile', key: 'coverLetter', source: 'rule' };
     if (/resume|\bcv\b|résumé/.test(label) || /resume|cv/i.test(field.id + field.name)) {
@@ -295,6 +298,11 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
 
   // "Phone Extension" would otherwise take the phone number.
   if (label.length < 40 && /\bextension\b|^ext\.?$/.test(label)) return { kind: 'unknown' };
+
+  // Workday-style "I have a preferred name" checkbox: ticking it reveals the preferred-name boxes.
+  if (field.kind === 'checkbox' && /^(i )?(have|use|go by) a (different )?preferred( first)? name\b/.test(label)) {
+    return { kind: 'profile', key: 'hasPreferredName', source: 'rule' };
+  }
 
   if (HONEYPOT_RE.test(label) || /honeypot|hpcs|beecatcher/i.test(field.name + field.id + field.path)) return { kind: 'challenge' };
 

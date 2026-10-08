@@ -2,6 +2,7 @@
 // extension can read and edit the spreadsheet the person links.
 import { browser } from 'wxt/browser';
 import type { Application } from './types';
+import { postingUrl } from './platforms';
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
@@ -117,7 +118,7 @@ function cell(app: Application, key: SheetColumn): string {
     case 'dateApplied':
       return day(app.submittedAt ?? Date.now());
     case 'jobUrl':
-      return app.url;
+      return postingUrl(app.url);
     case 'location':
       return app.location ?? '';
     case 'workModel':
@@ -251,9 +252,15 @@ export async function appendApplication(sheetId: string, app: Application, tabId
   const identity = cells.filter((c) => c.key === 'company' || c.key === 'role' || c.key === 'jobUrl').map((c) => c.index);
   const urlColumn = cells.find(c => c.key === 'jobUrl');
   if (urlColumn) {
-    const canonical = (url: string) => { try { const u = new URL(url); u.hash = ''; return u.href; } catch { return url; } };
+    const canonical = (url: string) => postingUrl(url);
     const existing = rows.findIndex(r => canonical(String(r[firstCol + urlColumn.index] ?? '')) === canonical(app.url));
-    if (existing >= 0) return headerAt + 2 + existing;
+    if (existing >= 0) {
+      // Already tracked: fill in details the row is missing (e.g. added by an earlier attempt), never overwrite.
+      const row = rows[existing] ?? [];
+      const missing = cells.filter((c) => !String(row[firstCol + c.index] ?? '').trim() && c.value);
+      if (missing.length) await write(missing.map((c) => ({ range: `${columnLetter(firstCol + c.index)}${headerAt + 2 + existing}`, values: [[c.value]] })));
+      return headerAt + 2 + existing;
+    }
   }
   if (!identity.length && !urlColumn) throw new Error('Add a Company, Position or Job Posting URL header to identify applications.');
   const rowNumber = headerAt + 2 + firstEmptyRow(rows, identity.length ? identity : cells.map((c) => c.index), firstCol);

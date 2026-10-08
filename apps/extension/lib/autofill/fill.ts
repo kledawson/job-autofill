@@ -273,6 +273,21 @@ export function fillYesNo(field: ScannedField, candidates: string[], opts: { str
   return 'filled';
 }
 
+/** Gives a site that shows its state (Ashby's aria-pressed) a moment to redraw after a click; false if the answer never shows. */
+export async function yesNoTook(field: ScannedField, timeout = 1500): Promise<boolean> {
+  if (!yesNoExposesState(field)) return true;
+  return !!(await waitFor(() => yesNoSelected(field), timeout));
+}
+
+/** True when the buttons report whether they are pressed, so the page itself can confirm an answer. */
+export function yesNoExposesState(field: ScannedField): boolean {
+  return field.members.some((b) => b.hasAttribute('aria-pressed'));
+}
+
+export function yesNoSelected(field: ScannedField): boolean {
+  return field.members.some((b) => b.getAttribute('aria-pressed') === 'true' || SELECTED_CLASS.test(b.className));
+}
+
 export function fillFile(field: ScannedField, file: File): FillOutcome {
   const input = field.el as HTMLInputElement;
   if ((input.files && input.files.length) || uploadedAlready(input)) return 'already';
@@ -291,7 +306,7 @@ export function fillFile(field: ScannedField, file: File): FillOutcome {
 }
 
 /** A file the site already shows as attached next to this upload box (Workday keeps the box empty after uploading). */
-function uploadedAlready(input: HTMLInputElement): boolean {
+export function uploadedAlready(input: HTMLInputElement): boolean {
   let node = input.parentElement;
   for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
     if (node.querySelectorAll('input[type="file"]').length > 1) return false;
@@ -310,7 +325,7 @@ export function displayedValue(field: ScannedField): string {
       return s.selectedIndex >= 0 && fieldHasValue(field) ? (s.options[s.selectedIndex]?.text ?? '') : '';
     }
     case 'listbox':
-      return listboxHasValue(field) ? (field.el.textContent ?? '').trim() : '';
+      return listboxHasValue(field) ? shownText(field.el).trim() : '';
     case 'radio':
       return field.options[(field.members as HTMLInputElement[]).findIndex((m) => m.checked)] ?? '';
     case 'yesno':
@@ -495,7 +510,14 @@ function activateOption(option: HTMLElement) {
 /** The text the dropdown button shows as its answer. */
 function listboxShown(button: HTMLElement): string {
   const label = button.querySelector('[data-automation-id="promptSelectionLabel"], [data-automation-id="selectedItemLabel"]');
-  return (label?.textContent ?? button.textContent ?? '').replace(/\s+/g, ' ').trim();
+  return (label?.textContent ?? shownText(button)).replace(/\s+/g, ' ').trim();
+}
+
+/** A button's text without parts the page hides (a leftover "Select One" next to the chosen answer). */
+function shownText(el: HTMLElement): string {
+  const copy = el.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('[hidden], [aria-hidden="true"], [style*="display: none"], [style*="display:none"]').forEach(n => n.remove());
+  return copy.textContent ?? '';
 }
 
 export function listboxHasValue(field: ScannedField): boolean {
