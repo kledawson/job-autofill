@@ -273,6 +273,21 @@ export function fillYesNo(field: ScannedField, candidates: string[], opts: { str
   return 'filled';
 }
 
+/** Gives a site that shows its state (Ashby's aria-pressed) a moment to redraw after a click; false if the answer never shows. */
+export async function yesNoTook(field: ScannedField, timeout = 1500): Promise<boolean> {
+  if (!yesNoExposesState(field)) return true;
+  return !!(await waitFor(() => yesNoSelected(field), timeout));
+}
+
+/** True when the buttons report whether they are pressed, so the page itself can confirm an answer. */
+export function yesNoExposesState(field: ScannedField): boolean {
+  return field.members.some((b) => b.hasAttribute('aria-pressed'));
+}
+
+export function yesNoSelected(field: ScannedField): boolean {
+  return field.members.some((b) => b.getAttribute('aria-pressed') === 'true' || SELECTED_CLASS.test(b.className));
+}
+
 export function fillFile(field: ScannedField, file: File): FillOutcome {
   const input = field.el as HTMLInputElement;
   if ((input.files && input.files.length) || uploadedAlready(input)) return 'already';

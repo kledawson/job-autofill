@@ -28,6 +28,9 @@ import {
   fillCheckbox,
   uploadedAlready,
   fillYesNo,
+  yesNoExposesState,
+  yesNoSelected,
+  yesNoTook,
   sleep,
   timing,
   type FillOutcome,
@@ -484,6 +487,7 @@ export class FillSession {
       // Some forms reset a dropdown when a later field is touched; put back any that went blank.
       this.traceDropdowns('before restore');
       await this.restoreDropdowns(fresh);
+      await this.restoreYesNo(fresh);
       this.traceDropdowns('end of pass');
       watcher.disconnect();
       await this.closeOpenDropdowns();
@@ -597,6 +601,22 @@ export class FillSession {
         await this.fillProfileField(rec);
       }
       await sleep(timing.settle);
+    }
+  }
+
+  /** A site that re-renders or resets (Ashby after a resume is read) can clear a Yes/No we answered; answer it again. */
+  private async restoreYesNo(records: FieldRecord[]) {
+    for (let round = 0; round < 3; round++) {
+      await sleep(timing.settle);
+      const lost = records.filter(
+        (r) => r.field.kind === 'yesno' && r.outcome === 'filled' && r.field.el.isConnected && yesNoExposesState(r.field) && !yesNoSelected(r.field),
+      );
+      if (!lost.length) return;
+      console.warn(`[Job Autofill] re-answering ${lost.length} Yes/No question(s) the page cleared (round ${round + 1})`);
+      for (const rec of lost) {
+        rec.outcome = undefined;
+        await this.fillProfileField(rec);
+      }
     }
   }
 
@@ -772,6 +792,7 @@ export class FillSession {
           break;
         case 'yesno':
           rec.outcome = fillYesNo(field, values, { strict: savedAnswer !== undefined, pick: choice.pick });
+          if (rec.outcome === 'filled' && !(await yesNoTook(field))) rec.outcome = 'failed';
           break;
         default:
           rec.outcome = 'nomatch';
@@ -851,11 +872,11 @@ export class FillSession {
       const { field } = rec;
       if (canRemember(rec)) memoryQuestions.add(field.label);
       const weFilled = rec.outcome === 'filled';
-      // Yes/No buttons and file inputs do not always expose their state; trust our own fill there.
+      // File inputs and Yes/No buttons that do not expose their state (no aria-pressed) cannot be read back; trust our own fill there.
       const mode = selectionMode(field);
       const selected = mode === 'multiple' ? selectedValues(field) : [];
       // Workday keeps its upload box empty once a file is attached, so a file the page already lists counts as present.
-      const has = mode === 'multiple' ? selected.length > 0 : fieldHasValue(field) || (weFilled && (field.kind === 'yesno' || field.kind === 'file')) || (field.kind === 'file' && uploadedAlready(field.el as HTMLInputElement));
+      const has = mode === 'multiple' ? selected.length > 0 : fieldHasValue(field) || (weFilled && ((field.kind === 'yesno' && !yesNoExposesState(field)) || field.kind === 'file')) || (field.kind === 'file' && uploadedAlready(field.el as HTMLInputElement));
       const incomplete = rec.saved?.target.kind === 'answers' && rec.outcome !== 'already' &&
         (rec.outcome !== 'filled' || !sameSelections(selected, rec.selectionLabels ?? []));
       let state: ReviewState | null = null;

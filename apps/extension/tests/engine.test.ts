@@ -610,6 +610,30 @@ describe('Ashby', () => {
     expect(submits).toBe(0);
   });
 
+  it('answers a Yes/No again when the page clears it, and flags one the page will not keep', async () => {
+    const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    const buttons = Array.from(doc.querySelectorAll('[data-field-path="3080cfba-auth"] button[data-option]'));
+    // Like Ashby: clicking the pressed option clears it. The page also resets the answer once, as a resume parse would.
+    let resets = 0;
+    for (const btn of buttons) {
+      btn.addEventListener('click', () => {
+        const wasPressed = btn.getAttribute('aria-pressed') === 'true';
+        btn.parentElement!.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === btn && !wasPressed)));
+        if (resets++ === 0) setTimeout(() => buttons.forEach((b) => b.setAttribute('aria-pressed', 'false')), 0);
+      });
+    }
+    const { d } = deps();
+    const summary = await new FillSession(doc, ADAPTERS.ashby, d).run();
+    expect(doc.querySelector('[data-field-path="3080cfba-auth"] button[data-option="yes"]')!.getAttribute('aria-pressed')).toBe('true');
+    expect(summary.missingLabels).not.toContain('Are you legally authorized to work in the United States?');
+
+    // A page that ignores the click entirely is reported as unanswered, not as filled.
+    const stuck = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    const { d: d2 } = deps();
+    const result = await new FillSession(stuck, ADAPTERS.ashby, d2).run();
+    expect(result.missingLabels.some((l) => l.startsWith('Are you legally authorized'))).toBe(true);
+  });
+
   it('always agrees to "Acknowledge, confirm, and agree" as a dropdown or a checkbox', async () => {
     const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/abc/apply');
     doc.body.innerHTML = `<form><label for="a">Acknowledge, confirm, and agree to the following statements. *</label>
