@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { browser } from 'wxt/browser';
 import { db, getProfile, saveProfile } from '@/lib/db';
 import type { ResumeDraft } from '@/lib/resume';
 import { extractPdfText } from '@/lib/resume-pdf';
@@ -8,7 +9,7 @@ import { DEFAULT_PROMPT_TEMPLATE, PROMPT_PLACEHOLDERS } from '@/lib/prompt';
 import { DEFAULT_GEMINI_MODEL, updateSettings, type PublicSettings } from '@/lib/settings';
 import { emptyProfile, type Profile, type StoredFile } from '@/lib/types';
 import { useLiveQuery } from './hooks';
-import { Button, Card, Field, Input, Notice, Textarea } from './ui';
+import { Button, Card, Field, Input, Notice, Textarea, useToast } from './ui';
 
 function formatBytes(n: number) {
   return n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`;
@@ -18,12 +19,22 @@ function FileSlot({ kind, label, hint }: { kind: StoredFile['kind']; label: stri
   const file = useLiveQuery(() => db.files.get(kind), [kind]);
   const input = useRef<HTMLInputElement>(null);
   const [error, setError] = useState('');
+  const [toast, showToast] = useToast();
+  const noun = { resume: 'Resume', coverLetter: 'Cover letter', transcript: 'Transcript' }[kind] ?? 'Document';
+
+  /** Opens the saved PDF in a new browser tab, titled with the file's name. */
+  function view() {
+    window.open(browser.runtime.getURL(`/viewer.html?kind=${kind}` as never), '_blank');
+  }
 
   async function onPick(f: File | undefined) {
     setError('');
     if (!f) return;
+    if (f.type !== 'application/pdf' && !/\.pdf$/i.test(f.name)) return setError('Files must be PDFs.');
     if (f.size > 10 * 1024 * 1024) return setError('Files over 10 MB are rejected by most application forms.');
+    const replaced = !!file;
     await db.files.put({ kind, name: f.name, type: f.type || 'application/pdf', blob: f, updatedAt: Date.now() });
+    showToast(`${noun} ${replaced ? 'replaced' : 'uploaded'}`);
   }
 
   return (
@@ -33,7 +44,7 @@ function FileSlot({ kind, label, hint }: { kind: StoredFile['kind']; label: stri
           <p className="text-sm font-medium text-slate-800">{label}</p>
           {file ? (
             <p className="truncate text-sm text-slate-600">
-              {file.name} · {formatBytes(file.blob.size)} · updated {new Date(file.updatedAt).toLocaleDateString()}
+              {file.name} · {formatBytes(file.blob.size)} · Last updated {new Date(file.updatedAt).toLocaleDateString()}
             </p>
           ) : (
             <p className="text-sm text-slate-500">{hint}</p>
@@ -41,7 +52,12 @@ function FileSlot({ kind, label, hint }: { kind: StoredFile['kind']; label: stri
         </div>
         <div className="flex shrink-0 gap-2">
           {file && (
-            <Button variant="ghost" onClick={() => db.files.delete(kind)}>
+            <Button variant="secondary" onClick={view}>
+              View
+            </Button>
+          )}
+          {file && (
+            <Button variant="secondary" onClick={() => confirm(`Remove your ${noun.toLowerCase()} (${file.name})? Applications won’t attach it until you upload another.`) && db.files.delete(kind)}>
               Remove
             </Button>
           )}
@@ -53,7 +69,7 @@ function FileSlot({ kind, label, hint }: { kind: StoredFile['kind']; label: stri
       <input
         ref={input}
         type="file"
-        accept=".pdf,application/pdf,.doc,.docx"
+        accept=".pdf,application/pdf"
         className="hidden"
         onChange={(e) => {
           void onPick(e.target.files?.[0]);
@@ -61,6 +77,7 @@ function FileSlot({ kind, label, hint }: { kind: StoredFile['kind']; label: stri
         }}
       />
       {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+      {toast}
     </div>
   );
 }
@@ -77,9 +94,9 @@ export function DocumentsSection({
   onNeedKey?: () => void;
 }) {
   return (
-    <Card title="Documents" description="Attached to the resume, cover letter, and transcript upload fields. Stored only on this computer.">
+    <Card title="Documents" description="Attached to the resume, cover letter, and transcript upload fields. Files must be PDFs. Stored only on this computer.">
       <div className="space-y-3">
-        <FileSlot kind="resume" label="Resume (PDF)" hint="Required by almost every application" />
+        <FileSlot kind="resume" label="Resume" hint="Required by almost every application" />
         {onResumeDraft && <ResumeImport onResumeDraft={onResumeDraft} hasGeminiKey={!!hasGeminiKey} onNeedKey={onNeedKey} />}
         <FileSlot kind="coverLetter" label="Cover letter" hint="Optional. Attached when a form has a cover letter upload." />
         <FileSlot kind="transcript" label="Transcript" hint="Optional. Attached when a form has a transcript upload." />
@@ -233,7 +250,7 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
 
   return (
     <Card
-      title="Gemini (free responses)"
+      title="Gemini (Free Responses)"
       description={
         <>
           Create a free key at{' '}
@@ -263,7 +280,7 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
           </Button>
           {hasKey && (
             <Button
-              variant="ghost"
+              variant="secondary"
               onClick={async () => {
                 await sendToBackground('setGeminiKey', { apiKey: '' });
                 setStatus({ tone: 'info', text: 'Key removed.' });
@@ -301,8 +318,8 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
 
   return (
     <Card
-      title="Google Sheets tracking"
-      description="When you click “Mark as submitted”, the extension adds one row to your sheet in the first empty row of your sheet, filling the columns it recognizes."
+      title="Google Sheets Tracking"
+      description="When you click “Mark as submitted”, the extension adds one row to your sheet in the first empty row of your sheet, filling the columns it recognizes"
     >
       <div className="space-y-4">
         {!settings.sheetsAvailable && (
@@ -313,7 +330,7 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
         )}
         {settings.sheetId ? (
           <div className="flex flex-wrap items-center gap-3">
-            <Notice tone="success">Connected.</Notice>
+            <Notice tone="success">Connected</Notice>
             <a className="text-sm font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
               Open tracking sheet
             </a>
@@ -356,7 +373,7 @@ export function PromptSection({ settings }: { settings: PublicSettings | null })
   const missing = PROMPT_PLACEHOLDERS.filter((p) => p === '{question}' && !template.includes(p));
 
   return (
-    <Card title="Free-response prompt" description="The instructions Gemini gets for every free-response question.">
+    <Card title="Free-Response Prompt" description="The instructions Gemini gets for every free-response question">
       <div className="space-y-3">
         <p className="text-sm text-slate-600">
           Placeholders:{' '}
@@ -387,7 +404,7 @@ export function PromptSection({ settings }: { settings: PublicSettings | null })
             Save prompt
           </Button>
           <Button
-            variant="ghost"
+            variant="secondary"
             onClick={() => {
               setTemplate(DEFAULT_PROMPT_TEMPLATE);
               setSaved(false);
@@ -438,7 +455,7 @@ export function DataSection({ onImported }: { onImported: () => void }) {
   }
 
   return (
-    <Card title="Your data" description="Everything lives in this browser. There is no server.">
+    <Card title="Your Data" description="Everything lives in this browser. There is no server.">
       <div className="flex flex-wrap gap-2">
         <Button variant="secondary" onClick={exportProfile}>
           Export profile (JSON)

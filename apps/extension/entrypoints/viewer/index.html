@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      html, body { margin: 0; background: #e2e8f0; font: 14px system-ui, sans-serif; color: #0f172a; }
+      header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 16px; background: #0f172a; color: #fff; }
+      h1 { margin: 0; min-width: 0; flex: 1 1 12rem; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+      .group { display: flex; align-items: center; gap: 6px; }
+      .group button, .group a { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 10px; border: 1px solid #94a3b8; border-radius: 8px; background: transparent; color: #fff; font: inherit; text-decoration: none; cursor: pointer; }
+      .group button:hover, .group a:hover { background: #1e293b; }
+      .group button:disabled { opacity: 0.4; cursor: default; }
+      .group input { width: 11rem; height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #94a3b8; border-radius: 8px; background: #fff; color: #0f172a; font: inherit; }
+      .group output { min-width: 4.5rem; color: #cbd5e1; font-size: 13px; text-align: center; }
+      :focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+      main { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 16px; overflow-x: auto; }
+      .page { position: relative; flex: none; margin-inline: auto; background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 0.25); }
+      .page canvas { display: block; width: 100%; height: 100%; }
+      .textLayer span.hit { border-radius: 2px; background: rgb(250 204 21 / 0.55); }
+      .textLayer span.current { background: rgb(249 115 22 / 0.7); }
+      p { padding: 16px; color: #475569; }
+      @media print {
+        html, body { background: #fff; }
+        header { display: none; }
+        main { display: block; padding: 0; overflow: visible; }
+        .page { width: 100% !important; height: auto !important; margin: 0; box-shadow: none; break-after: page; }
+        .page canvas { height: auto; }
+        .textLayer { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -6,11 +6,13 @@ import {
   EeoSection,
   ExperienceSection,
   LinksSection,
+  missingRequired,
   PreferencesSection,
+  SkillsSection,
   WorkAuthSection,
 } from '@/components/ProfileSections';
 import { DataSection, DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
-import { Button, cx } from '@/components/ui';
+import { Button, SELECT_ARROW, cx } from '@/components/ui';
 import { mergeResumeDraft } from '@/lib/resume';
 import { KnowledgeSection } from '@/components/KnowledgeBase';
 
@@ -55,6 +57,7 @@ export default function Settings() {
 
   if (!profile) return null;
   const sectionProps = { profile, onChange: update };
+  const gaps = missingRequired(profile);
 
   return (
     <div className="mx-auto flex max-w-5xl gap-8 px-4 py-8">
@@ -84,7 +87,7 @@ export default function Settings() {
       <main className="min-w-0 flex-1 space-y-4 pb-24">
         <select
           aria-label="Settings section"
-          className="mb-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm sm:hidden"
+          className={`mb-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-10 text-sm sm:hidden ${SELECT_ARROW}`}
           value={tab}
           onChange={(e) => chooseTab(e.target.value as Tab)}
         >
@@ -102,6 +105,7 @@ export default function Settings() {
             <WorkAuthSection {...sectionProps} />
             <EducationSection {...sectionProps} />
             <ExperienceSection {...sectionProps} />
+            <SkillsSection {...sectionProps} />
             <PreferencesSection {...sectionProps} />
             <EeoSection {...sectionProps} />
           </div>
@@ -139,10 +143,14 @@ export default function Settings() {
       {tab === 'profile' && (
         <div className="fixed inset-x-0 bottom-0 border-t border-slate-200 bg-white/95 backdrop-blur">
           <div className="mx-auto flex max-w-5xl items-center justify-end gap-3 px-4 py-3">
-            <span className="text-sm text-slate-500">
-              {dirty ? 'Unsaved changes' : savedAt ? 'Saved' : 'All changes saved'}
-            </span>
-            <Button onClick={save} disabled={!dirty}>
+            {gaps.length > 0 ? (
+              <span className="text-sm text-red-700">Fill out required fields to save: {gaps.join(', ')}</span>
+            ) : (
+              <span className="text-sm text-slate-500">
+                {dirty ? 'Unsaved changes' : savedAt ? 'Saved' : 'All changes saved'}
+              </span>
+            )}
+            <Button onClick={save} disabled={!dirty || gaps.length > 0}>
               Save profile
             </Button>
           </div>

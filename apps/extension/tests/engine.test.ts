@@ -308,6 +308,7 @@ describe('remembered mappings', () => {
     expect(input().value).toBe('');
     const linked = remembered([{ ...source, target: { kind: 'profile', key: 'firstName' } }]);
     linked.d.context.profile.firstName = '';
+    linked.d.context.profile.preferredName = '';
     await new FillSession(document, ADAPTERS.greenhouse, linked.d).run();
     expect(input().value).toBe('');
   });

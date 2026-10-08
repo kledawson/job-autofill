@@ -245,7 +245,7 @@ describe('Workday', () => {
     expect(document.getElementById('address--countryRegion')!.textContent).toBe('California');
     expect(document.getElementById('phoneNumber--phoneType')!.textContent).toBe('Mobile');
     expect(chips('phoneNumber--countryPhoneCode')).toEqual(['United States of America (+1)']);
-    expect(value('name--legalName--firstName')).toBe('Jordan');
+    expect(value('name--legalName--firstName')).toBe('Jo');
     expect(value('name--legalName--lastName')).toBe('Rivera');
     expect(value('address--city')).toBe('San Francisco');
     expect(value('address--postalCode')).toBe('94110');
@@ -310,7 +310,7 @@ describe('Workday', () => {
 
     document.body.innerHTML = MY_INFORMATION;
     wireMyInformation();
-    expect(await until(() => value('name--legalName--firstName') === 'Jordan')).toBe(true);
+    expect(await until(() => value('name--legalName--firstName') === 'Jo')).toBe(true);
     expect(await until(() => document.getElementById('address--countryRegion')!.textContent === 'California')).toBe(true);
 
     document.body.innerHTML = MY_EXPERIENCE;
@@ -336,12 +336,28 @@ describe('any careers site', () => {
     expect(formReady(doc, ADAPTERS.other)).toBe(true);
   });
 
+  it('keeps the legal first name when the form has its own preferred-name box', async () => {
+    const doc = loadFixture('careers-site.html', URL);
+    const first = doc.getElementById('fn')!;
+    const preferred = doc.createElement('input');
+    preferred.id = 'pn';
+    const label = doc.createElement('label');
+    label.htmlFor = 'pn';
+    label.textContent = 'Preferred name';
+    first.insertAdjacentElement('afterend', preferred);
+    first.insertAdjacentElement('afterend', label);
+    const { d } = deps();
+    await new FillSession(doc, ADAPTERS.other, d).run();
+    expect(value('fn')).toBe('Jordan');
+    expect(value('pn')).toBe('Jo');
+  });
+
   it('fills recognised fields, asks AI only about the rest, and never submits', async () => {
     const doc = loadFixture('careers-site.html', URL);
     const { d, mapped } = deps();
     const summary = await new FillSession(doc, ADAPTERS.other, d).run();
 
-    expect(value('fn')).toBe('Jordan');
+    expect(value('fn')).toBe('Jo');
     expect(value('ln')).toBe('Rivera');
     expect(value('em')).toBe('jordan@example.com');
     expect(value('ph')).toBe('415-555-0100');
@@ -365,7 +381,7 @@ describe('any careers site', () => {
     d.context.hasGeminiKey = false;
     await new FillSession(doc, ADAPTERS.other, d).run();
     expect(d.mapFields).not.toHaveBeenCalled();
-    expect(value('fn')).toBe('Jordan');
+    expect(value('fn')).toBe('Jo');
     expect(value('uni')).toBe('');
   });
 });
@@ -420,7 +436,7 @@ describe('forms captioned with plain text (Gem)', () => {
     const { d } = deps();
     const summary = await new FillSession(doc, ADAPTERS.other, d).run();
     const inputs = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="text"]')).map((i) => i.value);
-    expect(inputs).toEqual(['Jordan', 'Rivera', 'jordan@example.com', 'https://linkedin.com/in/jordanrivera']);
+    expect(inputs).toEqual(['Jo', 'Rivera', 'jordan@example.com', 'https://linkedin.com/in/jordanrivera']);
     expect(doc.querySelector<HTMLInputElement>('input[type="file"]')!.files?.[0]?.name).toBe('resume.pdf');
     expect((doc.getElementById('q1-yes') as HTMLInputElement).checked).toBe(true);
     expect((doc.getElementById('q2-yes') as HTMLInputElement).checked).toBe(true);
@@ -510,7 +526,7 @@ describe('BambooHR', () => {
     expect(files).toEqual(['resume.pdf', 'transcript.pdf']);
     expect(document.getElementById('state-btn')!.textContent).toBe('California');
     expect(value('nickname_x1')).toBe('');
-    expect(value('firstName')).toBe('Jordan');
+    expect(value('firstName')).toBe('Jo');
     expect(value('educationInstitutionName')).toBe('University of California, Berkeley');
     expect(value('gpa')).toBe('3.8');
     expect(value('date-available')).toBe('June 2026');
@@ -1349,7 +1365,7 @@ describe('forms built from web components (SmartRecruiters)', () => {
     await new FillSession(document, ADAPTERS.other, deps().d).run();
     const inner = (hostId: string, inputId: string) =>
       (document.getElementById(hostId)!.shadowRoot!.querySelector('spl-internal-form-field')!.shadowRoot!.getElementById(inputId) as HTMLInputElement).value;
-    expect(inner('h-first', 'first-name-input')).toBe('Jordan');
+    expect(inner('h-first', 'first-name-input')).toBe('Jo');
     expect(inner('h-last', 'last-name-input')).toBe('Rivera');
     expect(inner('h-email', 'email-input')).toBe('jordan@example.com');
     expect(inner('h-li', 'linkedin-input')).toContain('linkedin.com');
@@ -1379,7 +1395,7 @@ describe('patterns from Teamtailor, JazzHR, and SmartRecruiters', () => {
     const fields = scanFields(document.body);
     expect(fields.map((f) => f.label)).toEqual(['First name', 'Select your location']);
     await new FillSession(document, ADAPTERS.other, deps().d).run();
-    expect(value('fn')).toBe('Jordan');
+    expect(value('fn')).toBe('Jo');
     expect(Array.from(document.querySelectorAll<HTMLInputElement>('input[name="loc"]')).find((r) => r.checked)?.parentElement?.textContent?.trim()).toBe('North America');
   });
 
