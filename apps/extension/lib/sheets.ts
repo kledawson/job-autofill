@@ -254,7 +254,13 @@ export async function appendApplication(sheetId: string, app: Application, tabId
   if (urlColumn) {
     const canonical = (url: string) => postingUrl(url);
     const existing = rows.findIndex(r => canonical(String(r[firstCol + urlColumn.index] ?? '')) === canonical(app.url));
-    if (existing >= 0) return headerAt + 2 + existing;
+    if (existing >= 0) {
+      // Already tracked: fill in details the row is missing (e.g. added by an earlier attempt), never overwrite.
+      const row = rows[existing] ?? [];
+      const missing = cells.filter((c) => !String(row[firstCol + c.index] ?? '').trim() && c.value);
+      if (missing.length) await write(missing.map((c) => ({ range: `${columnLetter(firstCol + c.index)}${headerAt + 2 + existing}`, values: [[c.value]] })));
+      return headerAt + 2 + existing;
+    }
   }
   if (!identity.length && !urlColumn) throw new Error('Add a Company, Position or Job Posting URL header to identify applications.');
   const rowNumber = headerAt + 2 + firstEmptyRow(rows, identity.length ? identity : cells.map((c) => c.index), firstCol);

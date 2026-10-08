@@ -348,6 +348,8 @@ export function valueFor(
         [p.city, p.state].filter(Boolean).join(', '),
         [p.city, p.state, p.country].filter(Boolean).join(', '),
         p.city,
+        // Lists of states ("California", "Texas"): the profile state by name and abbreviation.
+        ...(isUS(p.country) !== false ? (stateVariants(p.state) ?? []) : []),
         ...regionOf(p.country),
       );
     case 'linkedin':

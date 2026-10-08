@@ -188,7 +188,7 @@ const RULES: Rule[] = [
   ['locationPreference', /\b(location|office|site) (preference|choice)\b|\b(preferred|desired) (office|work) location|\b(first|second|third|1st|2nd|3rd|top) (choice|preference)\b.*\b(location|office)/],
   // "Please select the country where you currently reside"
   ['country', /\bcountry (where|in which|that) you (currently )?(live|reside|are based|are located)|which country (do )?you (currently )?(live|reside)|what country (do )?you (currently )?(live|reside)|country of (current )?residen/],
-  ['location', /location|where (are you|do you) (currently )?(based|located|live)|where do you plan (on|to) work|current city/],
+  ['location', /location|where (are you|do you) (currently )?(based|located|live|reside)|where do you plan (on|to) work|current city/],
   ['city', /^city\b/],
   ['state', /^(state|province|state\/province|region)\b/],
   ['country', /^country\b|country of residence/],
