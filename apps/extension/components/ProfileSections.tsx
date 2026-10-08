@@ -391,11 +391,21 @@ export function ExperienceSection({ profile: p, onChange }: SectionProps) {
   );
 }
 
-/** Skills as removable, draggable chips. Order matters: autofill adds them top to bottom. */
+const moved = <T,>(list: T[], from: number, to: number): T[] => {
+  const next = [...list];
+  next.splice(to, 0, ...next.splice(from, 1));
+  return next;
+};
+
+const CHIP = 'select-none touch-none rounded-full py-1 pr-4 pl-3 text-sm';
+
+/** Skills as removable chips. Drag a chip anywhere in the list to reorder; autofill adds them in this order. */
 export function SkillsSection({ profile: p, onChange }: SectionProps) {
   const [text, setText] = useState('');
-  const [dragging, setDragging] = useState<number | null>(null);
-  const [over, setOver] = useState<number | null>(null);
+  // While dragging: the skill held, where its slot is now, and the pointer position for the floating copy.
+  const [drag, setDrag] = useState<{ skill: string; over: number; x: number; y: number; dx: number; dy: number } | null>(null);
+  const [pressed, setPressed] = useState<{ skill: string; id: number; x: number; y: number; dx: number; dy: number } | null>(null);
+  const chips = useRef<(HTMLLIElement | null)[]>([]);
   const set = (skills: string[]) => onChange({ ...p, skills });
   const add = () => {
     const known = new Set(p.skills.map((k) => k.toLowerCase()));
@@ -408,10 +418,49 @@ export function SkillsSection({ profile: p, onChange }: SectionProps) {
   };
   const move = (from: number, to: number) => {
     if (from === to || to < 0 || to >= p.skills.length) return;
-    const next = [...p.skills];
-    next.splice(to, 0, ...next.splice(from, 1));
-    set(next);
+    set(moved(p.skills, from, to));
   };
+  // The order shown right now: the held chip's slot follows the pointer, the others make room.
+  const shown = drag ? moved(p.skills, p.skills.indexOf(drag.skill), drag.over) : p.skills;
+
+  // Window-level listeners: reordering moves the chips in the page, which would drop a pointer captured on one.
+  useEffect(() => {
+    if (!pressed) return;
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pressed.id) return;
+      if (!drag) {
+        if (Math.hypot(e.clientX - pressed.x, e.clientY - pressed.y) < 4) return;
+        setDrag({ skill: pressed.skill, over: p.skills.indexOf(pressed.skill), x: e.clientX, y: e.clientY, dx: pressed.dx, dy: pressed.dy });
+        return;
+      }
+      // The slot goes after every other chip that sits before the pointer (earlier row, or same row and left of it).
+      // Judging by position, not by the chip under the pointer, keeps the others from flickering as they shift.
+      const before = chips.current.filter((c, i) => {
+        if (!c || i === drag.over) return false;
+        const r = c.getBoundingClientRect();
+        if (r.bottom < e.clientY) return true;
+        return r.top <= e.clientY && r.left + r.width / 2 < e.clientX;
+      }).length;
+      setDrag({ ...drag, over: before, x: e.clientX, y: e.clientY });
+    };
+    const finish = (commit: boolean) => {
+      if (drag && commit) move(p.skills.indexOf(drag.skill), drag.over);
+      setPressed(null);
+      setDrag(null);
+    };
+    const onUp = (e: PointerEvent) => e.pointerId === pressed.id && finish(true);
+    const onCancel = (e: PointerEvent) => e.pointerId === pressed.id && finish(false);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pressed, drag, p.skills]);
+
   return (
     <Card title="Skills" description="Add several at once by separating them with commas. Skills are added to applications one by one, in this order, so drag your most important skills to the front">
       <form
@@ -428,49 +477,52 @@ export function SkillsSection({ profile: p, onChange }: SectionProps) {
       </form>
       {p.skills.length > 0 && (
         <ul className="mt-4 flex flex-wrap gap-x-2 gap-y-3" aria-label="Your skills, most important first">
-          {p.skills.map((skill, i) => (
-            <li
-              key={skill}
-              draggable
-              tabIndex={0}
-              title="Drag to reorder, or press Alt + Left or Right Arrow"
-              onDragStart={() => setDragging(i)}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setOver(i);
-              }}
-              onDrop={() => {
-                if (dragging !== null) move(dragging, i);
-                setDragging(null);
-                setOver(null);
-              }}
-              onDragEnd={() => {
-                setDragging(null);
-                setOver(null);
-              }}
-              onKeyDown={(e) => {
-                if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
-                e.preventDefault();
-                const to = i + (e.key === 'ArrowLeft' ? -1 : 1);
-                move(i, to);
-                requestAnimationFrame(() => (e.currentTarget.parentElement?.children[to] as HTMLElement | undefined)?.focus());
-              }}
-              className={`relative cursor-grab rounded-full bg-indigo-50 py-1 pr-4 pl-3 text-sm text-indigo-800 ring-1 ring-indigo-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
-                dragging === i ? 'opacity-40' : ''
-              } ${over === i && dragging !== null && dragging !== i ? 'ring-2 ring-indigo-500' : ''}`}
-            >
-              {skill}
-              <button
-                type="button"
-                aria-label={`Remove ${skill}`}
-                className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-white text-xs leading-none text-slate-500 shadow ring-1 ring-slate-300 hover:bg-red-50 hover:text-red-700"
-                onClick={() => confirm(`Remove “${skill}” from your skills?`) && set(p.skills.filter((_, j) => j !== i))}
+          {shown.map((skill, i) => {
+            const held = drag?.skill === skill;
+            return (
+              <li
+                key={skill}
+                ref={(node) => {
+                  chips.current[i] = node;
+                }}
+                tabIndex={0}
+                title="Drag to reorder, or press Alt + Left or Right Arrow"
+                onPointerDown={(e) => {
+                  if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setPressed({ skill, id: e.pointerId, x: e.clientX, y: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top });
+                }}
+                onKeyDown={(e) => {
+                  if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+                  e.preventDefault();
+                  const to = i + (e.key === 'ArrowLeft' ? -1 : 1);
+                  move(i, to);
+                  requestAnimationFrame(() => (e.currentTarget.parentElement?.children[to] as HTMLElement | undefined)?.focus());
+                }}
+                className={`${CHIP} relative ${held ? 'bg-transparent text-transparent' : 'cursor-grab bg-indigo-50 text-indigo-800 ring-1 ring-indigo-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500'}`}
               >
-                ×
-              </button>
-            </li>
-          ))}
+                {skill}
+                <button
+                  type="button"
+                  aria-label={`Remove ${skill}`}
+                  className={`absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-white text-xs leading-none text-slate-500 shadow ring-1 ring-slate-300 hover:bg-red-50 hover:text-red-700 ${held ? 'invisible' : ''}`}
+                  onClick={() => confirm(`Remove “${skill}” from your skills?`) && set(p.skills.filter((k) => k !== skill))}
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
         </ul>
+      )}
+      {drag && (
+        <div
+          aria-hidden
+          className={`${CHIP} pointer-events-none fixed z-50 cursor-grabbing bg-indigo-50 text-indigo-800 shadow-lg ring-2 ring-indigo-500`}
+          style={{ left: drag.x - drag.dx, top: drag.y - drag.dy }}
+        >
+          {drag.skill}
+        </div>
       )}
     </Card>
   );

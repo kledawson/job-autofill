@@ -974,3 +974,27 @@ test('View opens the saved PDF in a new tab titled with its file name', async ()
   await viewer.close();
   await page.close();
 });
+
+test('a skill chip follows the pointer and lands where it is released', async () => {
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.goto(`chrome-extension://${extensionId}/options.html#profile`);
+  await page.getByRole('textbox', { name: 'Skill', exact: true }).fill('Zed1, Zed2, Zed3');
+  await page.getByRole('button', { name: 'Add Skill' }).click();
+  const list = page.getByLabel('Your skills, most important first');
+  const order = async () => (await list.getByRole('listitem').allTextContents()).filter((t) => t.startsWith('Zed')).map((t) => t.replace('×', ''));
+  expect(await order()).toEqual(['Zed1', 'Zed2', 'Zed3']);
+
+  const from = (await list.getByRole('listitem').filter({ hasText: 'Zed1' }).boundingBox())!;
+  const to = (await list.getByRole('listitem').filter({ hasText: 'Zed3' }).boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  // Past the middle of the last chip, so the skill lands after it.
+  await page.mouse.move(to.x + to.width - 2, to.y + to.height / 2, { steps: 12 });
+  // While held, a copy of the chip floats with the pointer.
+  await expect(page.locator('div.fixed', { hasText: 'Zed1' })).toBeVisible();
+  await page.mouse.up();
+  expect(await order()).toEqual(['Zed2', 'Zed3', 'Zed1']);
+  await expect(page.locator('div.fixed', { hasText: 'Zed1' })).toHaveCount(0);
+  await page.close();
+});
