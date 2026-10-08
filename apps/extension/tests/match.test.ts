@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestOption, characterLimitFor, similarity } from '../lib/autofill/match';
+import { bestGpaOption, bestOption, characterLimitFor, similarity } from '../lib/autofill/match';
 import { DECLINE_VARIANTS } from '../lib/autofill/values';
 
 describe('option matching', () => {
@@ -43,5 +43,18 @@ describe('option matching', () => {
     expect(characterLimitFor('In 150 words or fewer, describe…')).toBe(900);
     expect(characterLimitFor('Tell us about yourself', 400)).toBe(400);
     expect(characterLimitFor('Tell us about yourself')).toBe(1500);
+  });
+});
+
+describe('numeric GPA choices', () => {
+  it('never matches a different decimal score by token overlap', () => { expect(bestGpaOption(['3.65'], ['3.7', '3.8'])).toBe(-1); });
+  it('matches equivalent exact score formatting and a stated 4.0 scale', () => { expect(bestGpaOption(['3.50'], ['3.4', '3.5 out of 4.0'])).toBe(1); });
+  it('allows a unique containing range while rejecting overlapping ranges', () => {
+    expect(bestGpaOption(['3.65'], ['3.0–3.4', '3.5–4.0'])).toBe(1);
+    expect(bestGpaOption(['3.5'], ['3.0–3.5', '3.5–4.0'])).toBe(-1);
+  });
+  it('rejects unknown scales and duplicate equivalent options', () => {
+    expect(bestGpaOption(['3.5'], ['3.5 out of 5.0'])).toBe(-1);
+    expect(bestGpaOption(['3.5'], ['3.5', '3.50'])).toBe(-1);
   });
 });

@@ -24,7 +24,7 @@ export interface MappingContext { platform: Platform; company: string; url: stri
 export type SelectionMode = 'single' | 'multiple' | 'unknown';
 export interface SavedField { label: string; kind: string; options: string[]; selectionMode?: SelectionMode }
 export interface ReviewField { token: string; label: string; answered: boolean; suggestionId?: number; selectedCount?: number; selectionMode?: SelectionMode; reason?: string }
-export interface CapturedAnswer extends SavedField { token: string; captureId: string; value: string; values?: string[] }
+export interface CapturedAnswer extends SavedField { token: string; captureId: string; value: string; values?: string[]; section?: { kind: 'education' | 'experience' | 'website'; index: number }; profileUpdate?: import('./profile-learning').ProfileUpdate }
 export interface AnswerSelection { value: string; aliases: string[] }
 export type MappingTarget = { kind: 'answer'; value: string } | { kind: 'profile'; key: RememberableProfileKey } | { kind: 'answers'; selections: AnswerSelection[] };
 export interface MappingDraft {
@@ -273,14 +273,20 @@ export const targetText = (target: MappingTarget) => target.kind === 'answers' ?
 export function parseCapture(value: unknown): CapturedAnswer {
   const v = object(value);
   const [field] = parseSavedFields([v]);
+  let section: CapturedAnswer['section'];
+  if (v.section !== undefined) {
+    const sec = object(v.section);
+    if (!['education', 'experience', 'website'].includes(sec.kind as string) || !Number.isSafeInteger(sec.index) || (sec.index as number) < 0 || (sec.index as number) > 100) throw new Error('Invalid captured section.');
+    section = sec as unknown as CapturedAnswer['section'];
+  }
   if (typeof v.token !== 'string' || !/^[a-z0-9-]{1,100}$/i.test(v.token) || typeof v.captureId !== 'string' || !/^[a-z0-9-]{1,100}$/i.test(v.captureId) || typeof v.value !== 'string' || v.value.length > 10000) throw new Error('Invalid captured answer.');
   if (field!.selectionMode === 'multiple') {
     if (!Array.isArray(v.values) || v.values.length > 20 || v.values.some(s => typeof s !== 'string' || !s.trim() || s.length > 1000)) throw new Error('Invalid captured selections.');
     if (v.values.length) parseSelections(v.values.map(value => ({ value, aliases: [] })));
-    return { ...field!, token: v.token, captureId: v.captureId, value: '', values: v.values as string[] };
+    return { ...field!, section, token: v.token, captureId: v.captureId, value: '', values: v.values as string[] };
   }
   if (v.values !== undefined) throw new Error('A single-choice answer cannot contain a list.');
-  return { ...field!, token: v.token, captureId: v.captureId, value: v.value };
+  return { ...field!, section, token: v.token, captureId: v.captureId, value: v.value };
 }
 
 export function parseQuestionList(value: unknown): string[] {

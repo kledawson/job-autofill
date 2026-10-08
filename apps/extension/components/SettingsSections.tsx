@@ -1,3 +1,4 @@
+import { confirmDelete } from './confirm-delete';
 import { useRef, useState } from 'react';
 import { browser } from 'wxt/browser';
 import { db, getProfile, saveProfile } from '@/lib/db';
@@ -57,7 +58,7 @@ function FileSlot({ kind, label, hint }: { kind: StoredFile['kind']; label: stri
             </Button>
           )}
           {file && (
-            <Button variant="secondary" onClick={() => confirm(`Remove your ${noun.toLowerCase()} (${file.name})? Applications won’t attach it until you upload another.`) && db.files.delete(kind)}>
+            <Button variant="secondary" onClick={async () => { if (await confirmDelete('Remove ' + noun.toLowerCase() + '?', file.name + ' — Applications will not attach it until you upload another.', 'Remove')) { try { await db.files.delete(kind); showToast(noun + ' removed'); } catch { setError('Could not remove the document. Try again.'); } } }}>
               Remove
             </Button>
           )}
@@ -302,42 +303,74 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
 }
 
 export function SheetsSection({ settings }: { settings: PublicSettings | null }) {
+  const [status, setStatus] = useState('');
+  const [showSetup, setShowSetup] = useState(false);
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   if (!settings) return null;
 
   async function connect() {
+    setError(''); setStatus('');
+    if (!settings?.sheetsAvailable) {
+      setShowSetup(true);
+      setError('The link is not enough: Google sign-in has not been configured in this extension build. Complete the setup steps, rebuild and reload the extension, then connect your sheet.');
+      return;
+    }
     setBusy(true);
-    setError('');
-    const res = await sendToBackground('connectSheets', { url: link });
-    if (res.ok) setLink('');
-    else setError(res.error);
-    setBusy(false);
+    try {
+      const res = await sendToBackground('connectSheets', { url: link });
+      if (!res.ok) throw new Error(res.error);
+      setLink(''); setStatus('Connected to the selected tab.');
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not connect the sheet.'); }
+    finally { setBusy(false); }
   }
 
   return (
     <Card
       title="Google Sheets Tracking"
-      description="When you click “Mark as submitted”, the extension adds one row to your sheet in the first empty row of your sheet, filling the columns it recognizes"
+      description="Mark as submitted adds an application to the selected tab, under the columns it recognizes."
     >
       <div className="space-y-4">
         {!settings.sheetsAvailable && (
           <Notice tone="warn">
-            Google sign-in is not configured in this build, so tracking is off until you add an OAuth client ID. Filling still
-            works. See the README.
+            <p className="font-medium">Google sign-in setup required</p>
+            <p className="mt-1">This build cannot connect a spreadsheet yet. Your sheet link alone cannot enable Google sign-in.</p>
+            <Button variant="ghost" onClick={() => setShowSetup(!showSetup)} aria-expanded={showSetup}>{showSetup ? 'Hide setup steps' : 'Show setup steps'}</Button>
           </Notice>
         )}
+        {showSetup && !settings.sheetsAvailable && <section className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm" aria-label="Google sign-in setup steps">
+          <p className="font-semibold">One-time setup for this extension build</p>
+          <ol className="list-decimal space-y-2 pl-5">
+            <li>In <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="text-indigo-700 underline">Google Cloud Console</a>, enable the Google Sheets API and create an OAuth client of type <strong>Chrome Extension</strong>.</li>
+            <li>Use extension ID <code className="break-all">kjepjmmbimmbpdfinkippakkmhbglccc</code>. Add your Google account as a test user and include the spreadsheets scope.</li>
+            <li>Copy <code>apps/extension/.env.example</code> to <code>apps/extension/.env</code> and set <code>WXT_GOOGLE_CLIENT_ID</code> to the public client ID.</li>
+            <li>Run <code>npm run build</code>, reload Job Autofill at <code>chrome://extensions</code>, and reopen Settings. Then paste your sheet link and connect.</li>
+          </ol>
+          <p className="text-xs text-slate-600">You do not need to share a client secret, password or access token. The full instructions are in the extension README.</p>
+        </section>}
         {settings.sheetId ? (
           <div className="flex flex-wrap items-center gap-3">
-            <Notice tone="success">Connected</Notice>
+            <Notice tone="success">Connected{settings.sheetTabName ? ` · ${settings.sheetTabName}` : ' · First tab'}</Notice>
             <a className="text-sm font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
               Open tracking sheet
             </a>
+            <Button variant="secondary" disabled={busy} onClick={async () => {
+              setBusy(true); setError(''); setStatus('');
+              try {
+                const res = await sendToBackground('testSheets', {});
+                if (!res.ok) throw new Error(res.error);
+                setStatus('Connection works — tab: ' + res.tab + '. ' + (res.columns.length ? 'Recognized columns: ' + res.columns.join(', ') + '.' : 'Empty tab: headers will be created on first submission.') + ' No rows were written.');
+              } catch (err) { setError(err instanceof Error ? err.message : 'Could not test the sheet.'); }
+              finally { setBusy(false); }
+            }}>{busy ? 'Testing…' : 'Test connection'}</Button>
             <Button
-              variant="secondary"
+              variant="secondary" disabled={busy}
               onClick={async () => {
-                await sendToBackground('disconnectSheets', {});
+                setBusy(true); setError(''); setStatus('');
+                try { await sendToBackground('disconnectSheets', {}); setStatus('Disconnected.'); }
+                catch (err) { setError(err instanceof Error ? err.message : 'Could not disconnect the sheet.'); }
+                finally { setBusy(false); }
               }}
             >
               Disconnect
@@ -347,11 +380,11 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
           <div className="space-y-2">
             <Field
               label="Google Sheets link"
-              hint="Create a blank sheet in Google Sheets, then paste its link. You’ll be asked to let the extension edit your spreadsheets."
+              hint={settings.sheetsAvailable ? "Paste the link to the tab you want to track applications in. Google will ask you to approve spreadsheet access." : "Paste a sheet link, then click Connect sheet to see the required Google sign-in setup."}
             >
               <Input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/…" autoComplete="off" />
             </Field>
-            <Button onClick={connect} disabled={busy || !link.trim() || !settings.sheetsAvailable}>
+            <Button onClick={connect} disabled={busy || !link.trim()}>
               {busy ? 'Connecting…' : 'Connect sheet'}
             </Button>
           </div>
@@ -361,7 +394,8 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
           applied (and “Found”), link, location, work model, base pay, and application status (set to “Applied”). Other
           columns are left alone. An empty sheet gets these headers added.
         </p>
-        {error && <Notice tone="error">{error}</Notice>}
+        {status && <div role="status"><Notice tone="success">{status}</Notice></div>}
+        {error && <div role="alert"><Notice tone="error">{error}</Notice></div>}
       </div>
     </Card>
   );
@@ -448,10 +482,9 @@ export function DataSection({ onImported }: { onImported: () => void }) {
   }
 
   async function deleteAll() {
-    if (!confirm('Delete your profile, resume, history, and settings from this browser? Your Google Sheet is not touched.')) return;
-    await sendToBackground('deleteAllData', {});
-    setMessage({ tone: 'success', text: 'All local data deleted.' });
-    onImported();
+    if (!await confirmDelete('Delete all local data?', 'Your profile, documents, Memories, history and settings will be deleted from this browser. Your Google Sheet is kept.', 'Delete all data')) return;
+    try { await sendToBackground('deleteAllData', {}); setMessage({ tone: 'success', text: 'All local data deleted.' }); onImported(); }
+    catch { setMessage({ tone: 'error', text: 'Could not delete all local data. Try again.' }); }
   }
 
   return (

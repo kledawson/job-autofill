@@ -1,3 +1,4 @@
+import { ProfileAnswer } from '@/components/ProfileAnswer';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
 import { useLiveQuery, usePublicSettings } from '@/components/hooks';
@@ -7,7 +8,7 @@ import { db, getProfile } from '@/lib/db';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
 import { ALL_SITES, detectPlatform, PLATFORM_NAMES } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
-import { draftForCapture, MappingEditor, MemoryLibrary } from '@/components/KnowledgeBase';
+import { draftForCapture, MappingEditor } from '@/components/KnowledgeBase';
 import { BatchRemember } from '@/components/BatchRemember';
 import type { CapturedAnswer, MappingDraft, ReviewField } from '@/lib/remembered-mappings';
 
@@ -330,21 +331,21 @@ function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; p
         </div>
       )}
 
-      {batch && <BatchRemember applicationId={app.id!} context={context} {...batch} onCancel={() => setBatch(undefined)} onSaved={(note, count) => { setBatch(undefined); setRemembered(`${count} question${count === 1 ? '' : 's'} remembered. ${note}`); }} />}
+      {batch && <BatchRemember applicationId={app.id!} context={context} {...batch} onCancel={() => setBatch(undefined)} onSaved={(note, count) => { setBatch(undefined); setRemembered(note); }} />}
       {teaching && (
         <div className="space-y-3 border-t border-slate-200 pt-3">
-          <MappingEditor key={teaching.capture.captureId} id={teaching.id} capture={teaching.capture} context={context} initial={teaching.initial}
+          {teaching.capture.profileUpdate ? <ProfileAnswer capture={teaching.capture} applicationId={app.id!} onCancel={() => setTeaching(undefined)} onSaved={note => { setTeaching(undefined); setRemembered(note); }} /> : <MappingEditor key={teaching.capture.captureId} id={teaching.id} capture={teaching.capture} context={context} initial={teaching.initial}
             onCancel={() => setTeaching(undefined)} onSaved={async mappingId => {
               const res = await sendToBackground('applySavedAnswer', { applicationId: app.id!, token: teaching.capture.token, captureId: teaching.capture.captureId, mappingId });
               setTeaching(undefined);
               if (!res.ok) { setError(`Answer saved, but could not apply: ${res.error}`); return; }
               setRemembered(res.note);
-            }} />
+            }} />}
         </div>
       )}
-      {remembered && <div role="status"><Notice tone="success">{remembered} Edit it in Memories below.</Notice></div>}
+      {remembered && <div role="status"><Notice tone="success">{remembered}</Notice></div>}
 
-      {!teaching && !batch && app.status !== 'Filling' && <MemoryLibrary context={context} questions={app.memoryQuestions ?? [...reviewFields.map(f => f.label), ...(app.missingQuestions ?? []).filter((q): q is string => !!q)]} />}
+      <a className="text-xs text-indigo-700 underline" href={browser.runtime.getURL('/options.html#memories' as never)} target="_blank" rel="noreferrer">Manage Memories in Settings</a>
 
       {app.status === 'Ready for review' && (
         <>

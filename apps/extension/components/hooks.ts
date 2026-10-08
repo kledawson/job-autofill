@@ -2,7 +2,7 @@ import { browser } from 'wxt/browser';
 import { sortProfileEntries } from '@/lib/sort-entries';
 import { liveQuery } from 'dexie';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getProfile, saveProfile } from '@/lib/db';
+import { db, getProfile, saveProfile } from '@/lib/db';
 import { sendToBackground } from '@/lib/messages';
 import type { PublicSettings } from '@/lib/settings';
 import type { Profile } from '@/lib/types';
@@ -30,6 +30,8 @@ function sameData(a: unknown, b: unknown): boolean {
 
 export function useProfile() {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const live = useLiveQuery(getProfile);
+  const [saveError, setSaveError] = useState('');
   /** The profile as last loaded or saved. Unsaved changes are whatever differs from it, so undoing an edit clears them. */
   const [saved, setSaved] = useState<Profile | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -45,17 +47,24 @@ export function useProfile() {
     void reload();
   }, [reload]);
 
+  useEffect(() => {
+    if (live && !dirty) { const next = sortProfileEntries(live); setProfile(next); setSaved(next); setSaveError(''); }
+  }, [live, dirty]);
   const update = useCallback((next: Profile) => setProfile(next), []);
 
   const save = useCallback(async () => {
     if (!profile) return;
     // Entries are re-ordered (most recent first) only when saving, so they never jump while being edited.
     const sorted = sortProfileEntries(profile);
-    setProfile(sorted);
-    await saveProfile(sorted);
-    setSaved(sorted);
-    setSavedAt(Date.now());
-  }, [profile]);
+    try {
+      await db.transaction('rw', db.profile, async () => {
+        if (!sameData(sortProfileEntries(await getProfile()), saved)) throw new Error('Your saved profile changed in another window. Reload the profile before saving this draft.');
+        await saveProfile(sorted);
+      });
+      const loaded = sortProfileEntries(await getProfile());
+      setProfile(loaded); setSaved(loaded); setSaveError(''); setSavedAt(Date.now());
+    } catch (err) { setSaveError(err instanceof Error ? err.message : 'Could not save your profile.'); }
+  }, [profile, saved]);
 
   /** Replaces and saves in one step (used when merging resume data). */
   const replace = useCallback(async (next: Profile) => {
@@ -65,7 +74,7 @@ export function useProfile() {
     setSavedAt(Date.now());
   }, []);
 
-  return { profile, update, save, replace, dirty, savedAt, reload };
+  return { profile, update, save, replace, dirty, savedAt, reload, saveError };
 }
 
 export function usePublicSettings() {

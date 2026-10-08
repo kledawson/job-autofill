@@ -153,7 +153,7 @@ export default defineContentScript({
             if (!session || filling) throw new Error('Click Fill this page and wait for it to finish first.');
             if (msg.type === 'captureAnswer') sendResponse({ ok: true, capture: session.captureAnswer(msg.token, msg.question) });
             else if (msg.type === 'captureAnswers') sendResponse({ ok: true, ...session.captureAnswers(msg.fields) });
-            else if (msg.type === 'validateCaptures') { session.validateCaptures(msg.entries); sendResponse({ ok: true }); }
+            else if (msg.type === 'validateCaptures') { sendResponse({ ok: true, captures: session.validateCaptures(msg.entries) }); }
             else if (msg.type === 'finishRemembering') { session.finishRemembering(msg.entries); sendResponse({ ok: true }); }
             else sendResponse({ ok: true, note: await session.applyAnswer(msg.token, msg.captureId, msg.mapping) });
           } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not read this field.' }); }

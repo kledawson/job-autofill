@@ -10,6 +10,8 @@ const DEFAULTS: Settings = {
   promptTemplate: DEFAULT_PROMPT_TEMPLATE,
   sheetId: '',
   sheetUrl: '',
+  sheetTabId: null,
+  sheetTabName: '',
   onboardingComplete: false,
 };
 

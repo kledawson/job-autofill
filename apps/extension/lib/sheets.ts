@@ -66,12 +66,32 @@ async function request(path: string, init: RequestInit, interactive = false): Pr
 
 const quoteTab = (title: string) => `'${title.replace(/'/g, "''")}'`;
 
-/** Confirms the signed-in Google account can open the spreadsheet; returns its canonical URL and first tab. */
-export async function openSheet(sheetId: string, interactive = false): Promise<{ url: string; tab: string }> {
-  const body = await request(`/${sheetId}?fields=spreadsheetUrl,sheets.properties.title`, { method: 'GET' }, interactive);
-  const tab: string | undefined = body?.sheets?.[0]?.properties?.title;
-  if (!tab) throw new Error('That spreadsheet has no tabs.');
-  return { url: body.spreadsheetUrl, tab };
+/** Stable numeric tab ID in the query/fragment; invalid explicit IDs never fall back silently. */
+export function sheetTabId(text: string): number | undefined {
+  const url = new URL(text);
+  const raw = url.searchParams.get('gid') ?? new URLSearchParams(url.hash.slice(1)).get('gid');
+  if (raw === null) return undefined;
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error('The sheet tab ID is invalid. Copy its link again.');
+  return Number(raw);
+}
+export async function openSheet(sheetId: string, interactive = false, tabId?: number): Promise<{ url: string; tab: string; tabId: number }> {
+  const body = await request('/' + sheetId + '?fields=spreadsheetUrl,sheets.properties(title,sheetId)', { method: 'GET' }, interactive);
+  const tabs = body?.sheets ?? [];
+  const chosen = tabId === undefined ? tabs[0]?.properties : tabs.find((t: any) => t.properties?.sheetId === tabId)?.properties;
+  if (!chosen || typeof chosen.title !== 'string' || !Number.isSafeInteger(chosen.sheetId)) throw new Error(tabId === undefined ? 'That spreadsheet has no tabs.' : 'The selected sheet tab no longer exists. Reconnect using the correct tab link.');
+  const url = new URL(body.spreadsheetUrl); url.hash = 'gid=' + chosen.sheetId;
+  return { url: url.href, tab: chosen.title, tabId: chosen.sheetId };
+}
+/** Read-only test, using the same OAuth and tab resolution as submission writes. */
+export async function testSheetConnection(sheetId: string, tabId?: number) {
+  const sheet = await openSheet(sheetId, true, tabId);
+  const top = await request('/' + sheetId + '/values/' + encodeURIComponent(quoteTab(sheet.tab)) + '!A1:AZ10?valueRenderOption=FORMULA', { method: 'GET' });
+  const grid: string[][] = top?.values ?? [];
+  const headers = grid.find(r => r.filter(c => String(c).trim()).length >= 2) ?? grid.find(r => r.some(c => String(c).trim())) ?? [];
+  const sample = { company: '', role: '', url: '', filledAt: 0, status: 'Submitted', platform: 'other', jobKey: '', aiAnswers: 0, filledCount: 0, missingCount: 0, missingLabels: [] } as Application;
+  const columns = planRow(headers, sample).map(c => c.key);
+  if (headers.length && !columns.some(c => ['company', 'role', 'jobUrl'].includes(c))) throw new Error('Add a Company, Position or Job Posting URL header so applications can be tracked safely.');
+  return { ...sheet, columns };
 }
 
 /** Prevent page text like "=IMPORTXML(...)" from being evaluated as a formula. */
@@ -190,12 +210,12 @@ export function firstEmptyRow(rows: string[][], targets: number[], firstCol: num
 }
 
 /**
- * Adds the application to the sheet's first tab, in the topmost row with no company or position, with each
+ * Adds the application to the selected tab, in the topmost row with no company or position, with each
  * detail under the header that names it. Other cells in the row are left alone (dropdowns, defaults).
  * An empty sheet gets a header row first. Returns the 1-based row number.
  */
-export async function appendApplication(sheetId: string, app: Application): Promise<number> {
-  const { tab } = await openSheet(sheetId);
+export async function appendApplication(sheetId: string, app: Application, tabId?: number): Promise<number> {
+  const { tab } = await openSheet(sheetId, false, tabId);
   const sheet = encodeURIComponent(quoteTab(tab));
   const write = (data: { range: string; values: string[][] }[]) =>
     request(`/${sheetId}/values:batchUpdate`, {
@@ -206,7 +226,7 @@ export async function appendApplication(sheetId: string, app: Application): Prom
       }),
     });
 
-  const top = await request(`/${sheetId}/values/${sheet}!A1:AZ10`, { method: 'GET' });
+  const top = await request(`/${sheetId}/values/${sheet}!A1:AZ10?valueRenderOption=FORMULA`, { method: 'GET' });
   const grid: string[][] = top?.values ?? [];
   const filled = (r: string[]) => r.filter((c) => String(c).trim()).length;
   let headerAt = grid.findIndex((r) => filled(r) >= 2);
@@ -225,12 +245,19 @@ export async function appendApplication(sheetId: string, app: Application): Prom
     throw new Error('None of the columns in your sheet look like company, position, date applied, link, location, work model, pay, or status.');
   }
 
-  const below = await request(`/${sheetId}/values/${sheet}!A${headerAt + 2}:AZ`, { method: 'GET' });
+  const below = await request(`/${sheetId}/values/${sheet}!A${headerAt + 2}:AZ?valueRenderOption=FORMULA`, { method: 'GET' });
   const rows: string[][] = below?.values ?? [];
   // A row is free when it has no company or position; stray content in other columns doesn't count.
-  const identity = cells.filter((c) => c.key === 'company' || c.key === 'role').map((c) => c.index);
+  const identity = cells.filter((c) => c.key === 'company' || c.key === 'role' || c.key === 'jobUrl').map((c) => c.index);
+  const urlColumn = cells.find(c => c.key === 'jobUrl');
+  if (urlColumn) {
+    const canonical = (url: string) => { try { const u = new URL(url); u.hash = ''; return u.href; } catch { return url; } };
+    const existing = rows.findIndex(r => canonical(String(r[firstCol + urlColumn.index] ?? '')) === canonical(app.url));
+    if (existing >= 0) return headerAt + 2 + existing;
+  }
+  if (!identity.length && !urlColumn) throw new Error('Add a Company, Position or Job Posting URL header to identify applications.');
   const rowNumber = headerAt + 2 + firstEmptyRow(rows, identity.length ? identity : cells.map((c) => c.index), firstCol);
-  console.info(`[Job Autofill] sheet "${tab}": ${rows.length} rows below the headers, writing row ${rowNumber}`);
-  await write(cells.map((c) => ({ range: `${columnLetter(firstCol + c.index)}${rowNumber}`, values: [[c.value]] })));
+
+  await write(cells.filter(c => !String(rows[rowNumber - headerAt - 2]?.[firstCol + c.index] ?? '').trim()).map((c) => ({ range: `${columnLetter(firstCol + c.index)}${rowNumber}`, values: [[c.value]] })));
   return rowNumber;
 }

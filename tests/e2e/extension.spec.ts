@@ -350,7 +350,7 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
   if (process.env.SCREENSHOTS) await missing.screenshot({ path: join(process.env.SCREENSHOTS, 'save-this-answer-button.png') });
   await missing.getByRole('button', { name: 'Save this answer' }).click();
   await expect(panel.getByLabel('Your answer')).toHaveValue('Company website');
-  await panel.getByLabel('Where should this answer be reused?').selectOption('all');
+  await panel.getByLabel('Reuse for', { exact: true }).selectOption('all');
   await panel.getByText('Improve future matching', { exact: true }).click();
   await panel.getByRole('button', { name: 'Add wording', exact: true }).click();
   await panel.getByLabel('Question wording 1', { exact: true }).fill('How did you discover this opening?');
@@ -443,7 +443,7 @@ test('saved meanings match new question and option wording locally, with scope a
   const card = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: q });
   await card.getByRole('button', { name: 'Remember answer', exact: true }).click();
   await panel.getByLabel('Your answer').selectOption('Company website');
-  await panel.getByLabel('Where should this answer be reused?').selectOption('all');
+  await panel.getByLabel('Reuse for', { exact: true }).selectOption('all');
   // Editing the page after capture must not be overwritten, even when the save itself succeeds.
   await form.locator('#semantic-choice').selectOption('Referral');
   await panel.getByRole('button', { name: 'Save & apply' }).click();
@@ -528,10 +528,10 @@ test('saves React-select answers and reuses both one-chip and multiple-chip list
   await form.getByRole('option', { name: 'Never held a clearance', exact: true }).click();
   const card = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Active Security Clearance(s)' });
   await card.getByRole('button', { name: 'Save these answers', exact: true }).click();
-  await expect(panel.getByLabel('Selected answer 1', { exact: true })).toHaveValue('Never held a clearance');
+  await expect(panel.getByRole('region', { name: 'Confirm profile update' })).toContainText('None / never held');
   await expect(panel.getByText('Choose an answer from the dropdown before saving.', { exact: false })).toHaveCount(0);
-  await panel.getByRole('button', { name: 'Save & apply', exact: true }).click();
-  await expect(panel.getByText('Saved for future applications.', { exact: false })).toBeVisible();
+  await panel.getByRole('button', { name: 'Save to profile', exact: true }).click();
+  await expect(panel.getByText('profile field updated', { exact: false })).toBeVisible();
   await expect(form.locator('.select__multi-value__label')).toHaveText('Never held a clearance');
   await expect(form.locator('.select__multi-value')).toHaveCount(1);
   await form.reload(); await inject();
@@ -669,7 +669,7 @@ test('bulk conflicts roll back all new mappings and allow excluding the conflict
 });
 
 
-test('Memories supports visible inline editing, useful search and confirmed deletion without leaving the sidebar', async () => {
+test('Memories management stays in Settings with visible editing, search and consistent deletion', async () => {
   const settings = await context.newPage(); await settings.goto(`chrome-extension://${extensionId}/options.html#knowledge`);
   await expect(settings).toHaveURL(/#memories$/); // Old bookmarks still work.
   await expect(settings.getByRole('button', { name: 'Memories', exact: true })).toHaveAttribute('aria-current', 'page');
@@ -717,7 +717,9 @@ test('Memories supports visible inline editing, useful search and confirmed dele
   await settings.getByLabel('Search memories').fill('UX memory');
   if (process.env.SCREENSHOTS) { await settings.getByLabel('Search memories').fill('UX memory question 22'); await settings.screenshot({ path: join(process.env.SCREENSHOTS, 'memories-search.png') }); await settings.getByLabel('Search memories').fill('UX memory'); }
   await last.getByRole('button', { name: 'Delete', exact: true }).click();
-  await last.getByRole('button', { name: 'Keep memory', exact: true }).click();
+  await shot(settings, 'proof-delete-memory-dialog');
+  await expect(settings.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+  await settings.keyboard.press('Escape');
   await expect(last).toContainText('Updated synthetic answer');
   // An edit stays reachable if another open extension window deletes its record.
   const first = settings.getByRole('listitem').filter({ hasText: 'UX memory question 01' });
@@ -737,34 +739,21 @@ test('Memories supports visible inline editing, useful search and confirmed dele
   });
   await inject(); await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
   await expect(form.locator('#remembered-ux')).toHaveValue('Updated synthetic answer', { timeout: 30_000 });
-  const library = panel.getByRole('region', { name: 'Page memories', exact: true });
-  const card = library.getByRole('listitem').filter({ hasText: 'UX memory question 22' });
-  await expect(card).toBeVisible(); // Completed fields remain manageable.
-  await expect(card).toContainText('Last used');
+  await expect(panel.getByRole('region', { name: 'Page memories', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('link', { name: 'Manage Memories in Settings' })).toHaveAttribute('href', /options.html#memories$/);
+  await shot(panel, 'proof-sidebar-no-memory-library');
+  await settings.getByLabel('Search memories').fill('UX memory question 22');
+  const card = settings.getByRole('listitem').filter({ hasText: 'UX memory question 22' });
   await card.getByRole('button', { name: 'Edit', exact: true }).click();
-  await expect(card.getByLabel('Your answer')).toBeFocused();
-  await card.getByLabel('Your answer').fill('Sidebar correction');
+  await card.getByLabel('Your answer').fill('Settings correction');
   await card.getByRole('button', { name: 'Save memory', exact: true }).click();
-  await expect(library.getByText('Memory saved for future fills.', { exact: false })).toBeVisible();
-  await expect(card).toContainText('Last used');
   await expect(form.locator('#remembered-ux')).toHaveValue('Updated synthetic answer');
-  await panel.reload(); await form.bringToFront();
-  await expect(card).toContainText('Sidebar correction');
   await form.reload(); await inject(); await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
-  await expect(form.locator('#remembered-ux')).toHaveValue('Sidebar correction', { timeout: 30_000 });
-  await card.getByRole('button', { name: 'Edit', exact: true }).click();
-  await shot(panel, 'memories-sidebar-edit');
-  await card.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(form.locator('#remembered-ux')).toHaveValue('Settings correction', { timeout: 30_000 });
   await card.getByRole('button', { name: 'Delete', exact: true }).click();
-  await card.getByRole('button', { name: 'Delete memory', exact: true }).click();
+  await settings.getByRole('dialog').getByRole('button', { name: 'Delete memory', exact: true }).click();
   await expect(card).toHaveCount(0);
-  await expect(library.getByText('Memory deleted.', { exact: false })).toBeVisible();
-  await expect(form.locator('#remembered-ux')).toHaveValue('Sidebar correction');
-  await library.getByRole('button', { name: /^All memories/ }).click();
-  await library.getByLabel('Search memories').fill('UX memory question 21');
-  await expect(library.getByRole('listitem')).toHaveCount(1);
-  await settings.reload(); await settings.getByLabel('Search memories').fill('UX memory question 22');
-  await expect(last).toHaveCount(0);
+  await expect(form.locator('#remembered-ux')).toHaveValue('Settings correction');
   // Do not leak synthetic records into subsequent tests.
   await settings.evaluate(async ids => { for (const id of ids) await chrome.runtime.sendMessage({ type: 'removeRememberedMapping', id }); }, seeded);
 });
@@ -775,7 +764,8 @@ test('optional AI suggests wordings only after a click and requires individual a
   await settings.getByRole('button', { name: 'Add memory' }).click();
   await settings.getByRole('textbox', { name: 'Question', exact: true }).fill('Which recruiting event introduced this team?');
   await settings.getByLabel('Your answer').fill('Synthetic campus fair');
-  await settings.getByLabel('Where should this answer be reused?').selectOption('company:');
+  await settings.getByRole('button', { name: 'More limits: company or website' }).click();
+  await settings.getByLabel('Reuse for', { exact: true }).selectOption('company:');
   await settings.getByLabel('Company name').fill('Contoso Labs');
   await settings.getByRole('button', { name: 'Save memory' }).click();
   const created = settings.getByRole('listitem').filter({ hasText: 'Which recruiting event introduced this team?' });
@@ -852,7 +842,8 @@ test('guided variations preview real matching and scope, and profile links show 
   await expect(settings.getByText('Would ask you to confirm', { exact: true })).toBeVisible();
   await settings.getByRole('button', { name: 'Add wording', exact: true }).click();
   await settings.getByLabel('Question wording 1', { exact: true }).fill('Which exam result applies to you?');
-  await settings.getByLabel('Where should this answer be reused?').selectOption('company:');
+  await settings.getByRole('button', { name: 'More limits: company or website' }).click();
+  await settings.getByLabel('Reuse for', { exact: true }).selectOption('company:');
   await settings.getByRole('textbox', { name: 'Company name', exact: true }).fill('Contoso Labs');
   await settings.getByLabel('Test another company or application').check();
   await settings.getByLabel('Example company', { exact: true }).fill('Different employer');
@@ -972,6 +963,11 @@ test('View opens the saved PDF in a new tab titled with its file name', async ()
   await expect(viewer.getByText('No matches')).toBeVisible();
   await expect(viewer.getByRole('button', { name: 'Print' })).toBeVisible();
   await viewer.close();
+  await slot.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+  await shot(page, 'proof-delete-document-dialog');
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(slot).toContainText('Cover Letter For Review.pdf');
   await page.close();
 });
 
@@ -997,4 +993,188 @@ test('a skill chip follows the pointer and lands where it is released', async ()
   expect(await order()).toEqual(['Zed2', 'Zed3', 'Zed1']);
   await expect(page.locator('div.fixed', { hasText: 'Zed1' })).toHaveCount(0);
   await page.close();
+});
+
+
+test('Save all updates education facts atomically, leaves contextual memories and confirms profile replacement', async () => {
+  const settings = await context.newPage(); await settings.goto(`chrome-extension://${extensionId}/options.html#profile`);
+  const memories = await context.newPage(); await memories.goto(`chrome-extension://${extensionId}/options.html#memories`);
+  const panel = await context.newPage(); await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await panel.setViewportSize({ width: 420, height: 1000 });
+  const original = await settings.evaluate(async () => (await chrome.runtime.sendMessage({ type: 'getFillContext' })).profile);
+  async function putProfile(profile: any) {
+    await settings.evaluate(async profile => {
+      const database: IDBDatabase = await new Promise((resolve, reject) => { const request = indexedDB.open('job-autofill'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      try { await new Promise<void>((resolve, reject) => { const tx = database.transaction('profile', 'readwrite'); tx.objectStore('profile').put({ ...profile, updatedAt: Date.now() }); tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); }); } finally { database.close(); }
+    }, profile);
+  }
+  const previousKey = await settings.evaluate(async () => (await chrome.storage.local.get('geminiApiKey')).geminiApiKey ?? '');
+  await settings.evaluate(() => chrome.runtime.sendMessage({ type: 'setGeminiKey', apiKey: '' }));
+  let legacyGpaId: number | undefined;
+  const fresh = structuredClone(original); fresh.firstName = 'Learning'; fresh.lastName = 'Fixture'; fresh.email = 'learning@example.com'; fresh.education[0].degree = 'Bachelor of Science'; fresh.education[0].school = ''; fresh.education[0].gpa = '';
+  await putProfile(fresh);
+  const seeded = await memories.evaluate(() => chrome.runtime.sendMessage({ type: 'saveRememberedMapping', mapping: { question: 'Profile learning fictional tools', aliases: [], scope: 'all', target: { kind: 'answers', selections: [{ value: 'Unavailable fictional tool', aliases: [] }] } } }));
+  const form = await context.newPage();
+  const errors: string[] = []; form.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
+  await form.goto(`${LEVER_URL}/apply?profile-learning=1`);
+  const inject = () => form.evaluate(() => { document.querySelector('form')!.innerHTML = '<label for="learn-school">School*</label><input id="learn-school" required><label for="learn-gpa">GPA*</label><input id="learn-gpa" required><label for="learn-commute">Can you commute to Cupertino?*</label><select id="learn-commute" required><option value="">Select…</option><option>Yes</option><option>No</option></select><label for="learn-tools">Profile learning fictional tools*</label><select id="learn-tools" multiple required><option>Python</option><option>TS</option></select>'; });
+  try {
+    await inject(); await form.bringToFront(); expect(await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }))).toMatchObject({ ok: true });
+    await expect(form.locator('#learn-gpa')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 }).catch(async err => { throw new Error(err.message + '\n' + errors.join('\n') + '\n' + await panel.locator('body').innerText()); });
+    await form.locator('#learn-school').fill('Fictional Learning University'); await form.locator('#learn-gpa').fill('3.65'); await form.locator('#learn-commute').selectOption('Yes'); await form.locator('#learn-tools').selectOption(['Python', 'TS']);
+    await panel.getByRole('button', { name: 'Save all answered questions (4)' }).click();
+    const review = panel.getByRole('region', { name: 'Review answers to remember' });
+    await expect(review.getByText('Update profile', { exact: true })).toHaveCount(2);
+    await expect(review.getByText('Create memory', { exact: true })).toHaveCount(2);
+    await review.getByLabel('Reuse answers for question 4', { exact: true }).selectOption('all');
+    await shot(panel, 'profile-aware-save-all');
+    if (process.env.SCREENSHOTS) {
+      await panel.setViewportSize({ width: 420, height: 1800 });
+      await review.locator('li').nth(1).screenshot({ path: join(process.env.SCREENSHOTS, 'proof-profile-destination.png') });
+      await panel.setViewportSize({ width: 420, height: 1000 });
+    }
+    await review.getByRole('button', { name: 'Save 4 answered questions' }).click();
+    await expect(review.getByRole('alert')).toContainText('different memory');
+    const unchanged = await settings.evaluate(async () => (await chrome.runtime.sendMessage({ type: 'getFillContext' })).profile);
+    expect(unchanged.education[0].gpa).toBe(''); expect(unchanged.education[0].school).toBe('');
+    await shot(panel, 'proof-atomic-batch-rejected');
+    await memories.reload(); await expect(memories.getByRole('listitem').filter({ hasText: 'Can you commute to Cupertino?' })).toHaveCount(0);
+    await review.getByLabel('Profile learning fictional tools', { exact: true }).uncheck();
+    await review.getByRole('button', { name: 'Save 3 answered questions' }).click();
+    await expect(panel.getByText('2 profile fields updated; 1 memory saved.', { exact: false })).toBeVisible();
+    await expect(settings.getByLabel('GPA', { exact: true })).toHaveValue('3.65');
+    await settings.getByLabel('GPA', { exact: true }).scrollIntoViewIfNeeded();
+    await shot(settings, 'proof-profile-updated');
+    if (process.env.SCREENSHOTS) await settings.getByRole('heading', { name: 'Education', exact: true }).locator('xpath=ancestor::section[1]').screenshot({ path: join(process.env.SCREENSHOTS, 'proof-education-card.png') });
+    await shot(panel, 'proof-mixed-batch-saved');
+    await memories.reload(); await expect(memories.getByRole('listitem').filter({ hasText: 'Can you commute to Cupertino?' })).toContainText('Yes');
+    await expect(memories.getByRole('listitem').filter({ hasText: /^GPA/ })).toHaveCount(0);
+    await form.reload(); await inject(); await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+    await expect(form.locator('#learn-gpa')).toHaveValue('3.65', { timeout: 30_000 });
+    await expect(form.locator('#learn-school')).toHaveValue('Fictional Learning University');
+    await expect(form.locator('#learn-commute')).toHaveValue('Yes');
+    await form.addStyleTag({ content: 'body{font-family:system-ui;padding:32px}form{display:grid;grid-template-columns:270px 340px;gap:20px;align-items:center}input,select{font:inherit;padding:10px}label{font-weight:600}' });
+    await shot(form, 'proof-next-form-reused');
+    // Preserve a legacy rule while making it follow the explicitly confirmed profile fact.
+    const legacyGpa = await memories.evaluate(() => chrome.runtime.sendMessage({ type: 'saveRememberedMapping', mapping: { question: 'GPA', aliases: ['Grade point average'], scope: 'all', target: { kind: 'answer', value: '3.65' } } }));
+    expect(legacyGpa.ok).toBe(true); if (legacyGpa.ok) legacyGpaId = legacyGpa.id;
+    // A readable version-1 record must remain readable when explicitly relinked.
+    await memories.evaluate(id => new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
+      request.onsuccess = () => { const d = request.result, tx = d.transaction('rememberedMappings', 'readwrite'); const store = tx.objectStore('rememberedMappings'), row = store.get(id); row.onsuccess = () => { const m = row.result; delete m.meaning; delete m.answerAliases; store.put({ ...m, schemaVersion: 1 }); }; tx.oncomplete = () => { d.close(); resolve(); }; tx.onabort = () => { d.close(); reject(tx.error); }; };
+    }), legacyGpaId);
+    // A dropdown with a new exact GPA cannot be filled from the previous value.
+    await form.reload(); await form.evaluate(() => { document.querySelector('form')!.innerHTML = '<label for="replace-gpa">GPA*</label><select id="replace-gpa" required><option value="">Select…</option><option>3.7</option></select><label for="replacement-email">Email*</label><input id="replacement-email" type="email" required>'; });
+    await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }));
+    await expect(form.locator('#replace-gpa')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+    await form.locator('#replace-gpa').selectOption('3.7');
+    await panel.getByRole('button', { name: 'Save this answer', exact: true }).click();
+    const confirmation = panel.getByRole('region', { name: 'Confirm profile update' });
+    await expect(confirmation.getByRole('button', { name: 'Save to profile' })).toBeDisabled();
+    if (process.env.SCREENSHOTS) await confirmation.screenshot({ path: join(process.env.SCREENSHOTS, 'proof-replace-profile-confirmation.png') });
+    await confirmation.getByRole('checkbox').check();
+    const changed = await settings.evaluate(async () => (await chrome.runtime.sendMessage({ type: 'getFillContext' })).profile); changed.education[0].gpa = '3.6'; await putProfile(changed);
+    await confirmation.getByRole('button', { name: 'Save to profile' }).click();
+    await expect(confirmation.getByRole('alert')).toContainText('profile changed');
+    await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await panel.getByRole('button', { name: 'Save this answer', exact: true }).click();
+    await confirmation.getByRole('checkbox').check(); await confirmation.getByRole('button', { name: 'Save to profile' }).click();
+    await expect(settings.getByLabel('GPA', { exact: true })).toHaveValue('3.7');
+    const linked = await memories.evaluate(() => new Promise<any>((resolve, reject) => {
+      const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
+      request.onsuccess = () => { const d = request.result, tx = d.transaction('rememberedMappings'); const rows = tx.objectStore('rememberedMappings').getAll(); tx.oncomplete = () => { d.close(); resolve(rows.result.find((m: any) => m.question === 'GPA')); }; };
+    }));
+    expect(linked).toMatchObject({ id: legacyGpaId, schemaVersion: 3, scope: 'all', aliases: ['Grade point average'], target: { kind: 'profile', key: 'gpa' } });
+    await form.reload(); await inject(); await form.bringToFront(); await panel.evaluate(() => chrome.runtime.sendMessage({ type: "fillActiveTab" }));
+    await expect(form.locator("#learn-gpa")).toHaveValue("3.7", { timeout: 30_000 });
+    await memories.reload(); await memories.getByLabel("Search memories").fill("GPA");
+    await expect(memories.getByRole("listitem").filter({ hasText: /^GPA/ })).toContainText("Linked profile detail");
+    await shot(memories, "proof-legacy-memory-follows-profile");
+    await form.addStyleTag({ content: 'body{font-family:system-ui;padding:32px}form{display:grid;grid-template-columns:270px 340px;gap:20px;align-items:center}input,select{font:inherit;padding:10px}label{font-weight:600}' });
+    await shot(form, "proof-gpa-updated-reused");
+  } finally {
+    await putProfile(original);
+    await settings.evaluate(apiKey => chrome.runtime.sendMessage({ type: 'setGeminiKey', apiKey }), previousKey);
+    if (legacyGpaId) await memories.evaluate(id => chrome.runtime.sendMessage({ type: "removeRememberedMapping", id }), legacyGpaId);
+    if (seeded.ok) await memories.evaluate(id => chrome.runtime.sendMessage({ type: 'removeRememberedMapping', id }), seeded.id);
+  }
+});
+test('Sheets link gives actionable setup feedback instead of a disabled button', async () => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/options.html#connections`);
+  const state = await page.evaluate(() => chrome.runtime.sendMessage({ type: 'getPublicSettings' }));
+  test.skip(state.sheetsAvailable, 'This case specifically covers a build without an OAuth client.');
+  const link = process.env.JAF_SHEET_TEST_URL ?? 'https://docs.google.com/spreadsheets/d/fictional-proof/edit?gid=42';
+  await page.getByLabel('Google Sheets link', { exact: true }).fill(link);
+  const connect = page.getByRole('button', { name: 'Connect sheet', exact: true });
+  await expect(connect).toBeEnabled(); await connect.click();
+  await expect(page.getByRole('alert')).toContainText('Google sign-in has not been configured');
+  await expect(page.getByRole('region', { name: 'Google sign-in setup steps' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Google sign-in setup steps' })).toContainText('WXT_GOOGLE_CLIENT_ID');
+  await shot(page, 'proof-sheets-setup-required');
+  await page.close();
+});
+
+test('Reuse controls offer broad matching or explicit application, company and site limits', async () => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/options.html#memories`);
+  await page.getByRole('button', { name: 'Add memory', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Question', exact: true }).fill('Can you commute to a fictional office?');
+  await page.getByRole('textbox', { name: 'Your answer', exact: true }).fill('Yes');
+  await expect(page.getByLabel('Reuse for', { exact: true })).toHaveValue('all');
+  await shot(page, 'proof-scope-all-applications');
+  await page.getByLabel('Reuse for', { exact: true }).selectOption('application:');
+  await page.getByRole('textbox', { name: 'Application URL', exact: true }).fill('https://jobs.example.test/apply/123');
+  await expect(page.getByRole('textbox', { name: 'Application URL', exact: true })).toHaveValue('https://jobs.example.test/apply/123');
+  await page.getByRole('button', { name: 'More limits: company or website', exact: true }).click();
+  await page.getByLabel('Reuse for', { exact: true }).selectOption('company:');
+  await page.getByRole('textbox', { name: 'Company name', exact: true }).fill('Fictional Company');
+  await shot(page, 'proof-scope-company');
+  await page.getByLabel('Reuse for', { exact: true }).selectOption('site:');
+  await page.getByRole('textbox', { name: 'Website URL', exact: true }).fill('https://jobs.example.test');
+  await expect(page.getByRole('textbox', { name: 'Company name', exact: true })).toHaveCount(0);
+  await shot(page, 'proof-scope-website');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.close();
+});
+
+test('SIMULATED Google responses exercise the real connection UI and selected-tab diagnostics', async () => {
+  const page = await context.newPage(); await page.goto(`chrome-extension://${extensionId}/options.html#connections`);
+  await page.evaluate(() => chrome.runtime.sendMessage({ type: 'getPublicSettings' }));
+  const liveWorker = context.serviceWorkers().find(w => w.url().includes(extensionId));
+  if (!liveWorker) throw new Error('No running extension service worker.');
+  const requests: { url: string; method: string }[] = [];
+  const pattern = 'https://sheets.googleapis.com/**';
+  await context.route(pattern, async route => {
+    const req = route.request(); requests.push({ url: req.url(), method: req.method() });
+    const body = req.url().includes('/values/') ? { values: [['Company', 'Position', 'Posting URL', 'Application status']] } :
+      { spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/fictional-proof/edit', sheets: [{ properties: { sheetId: 0, title: 'Other tab' } }, { properties: { sheetId: 42, title: 'Fictional Pipeline' } }] };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
+  // Test-only mocks in the isolated browser worker. No build configuration or personal browser is changed.
+  await liveWorker.evaluate(() => {
+    (globalThis as any).__sheetProofOriginals = { manifest: chrome.runtime.getManifest, token: chrome.identity.getAuthToken };
+    chrome.runtime.getManifest = () => ({ ...(globalThis as any).__sheetProofOriginals.manifest(), oauth2: { client_id: 'fictional-test-client.apps.googleusercontent.com', scopes: ['https://www.googleapis.com/auth/spreadsheets'] } });
+    chrome.identity.getAuthToken = async () => ({ token: 'fictional-test-token' });
+  });
+  try {
+    await page.reload();
+    await page.getByLabel('Google Sheets link', { exact: true }).fill('https://docs.google.com/spreadsheets/d/fictional-proof/edit?gid=42');
+    await page.getByRole('button', { name: 'Connect sheet', exact: true }).click();
+    await expect(page.getByText('Connected · Fictional Pipeline', { exact: true })).toBeVisible();
+    expect(await page.evaluate(async () => (await chrome.runtime.sendMessage({ type: 'getPublicSettings' })).sheetTabId)).toBe(42);
+    await page.getByRole('heading', { name: 'Google Sheets Tracking', exact: true }).locator('xpath=ancestor::section[1]').getByRole('button', { name: 'Test connection', exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('Connection works — tab: Fictional Pipeline');
+    await expect(page.getByRole('status')).toContainText('No rows were written.');
+    await expect(page.getByRole('status')).toContainText('Company Name, Position, Job Posting URL, Application Status');
+    expect(requests.length).toBe(4); expect(requests.every(r => r.method === 'GET')).toBe(true);
+    expect(requests.filter(r => r.url.includes('/values/')).every(r => decodeURIComponent(r.url).includes("'Fictional Pipeline'!A1:AZ10"))).toBe(true);
+    await shot(page, 'SIMULATED-sheets-connection-ui');
+    await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+    await expect(page.getByText('Disconnected.', { exact: true })).toBeVisible();
+    expect(await page.evaluate(async () => (await chrome.runtime.sendMessage({ type: 'getPublicSettings' })).sheetTabId)).toBeNull();
+  } finally {
+    await liveWorker.evaluate(() => { const originals = (globalThis as any).__sheetProofOriginals; chrome.runtime.getManifest = originals.manifest; chrome.identity.getAuthToken = originals.token; delete (globalThis as any).__sheetProofOriginals; });
+    await context.unroute(pattern); await page.close();
+  }
 });

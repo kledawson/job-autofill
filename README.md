@@ -4,8 +4,8 @@ A local-first Chrome extension for assisted job application autofill and applica
 
 **Status:** working MVP in [`apps/extension`](apps/extension/README.md): fills Greenhouse, Lever, Ashby, Workday, and other careers-site applications from a saved profile, writes free responses with Gemini (optional), tracks applications in Google Sheets (optional), and never submits for you.
 
-Recent improvements: multi-select memories, batch saving, quick sidebar editing, and a redesigned
-**Memories** library. See the [changelog](CHANGELOG.md).
+Recent improvements: multi-select memories, batch saving with profile updates, simpler reuse controls,
+and a searchable **Memories** library in Settings. See the [changelog](CHANGELOG.md).
 
 ## Start here
 
@@ -23,7 +23,7 @@ remember reusable answers -> submit manually -> mark submitted.
 - Fill supported fields from your profile or confirmed memories, with verified writes and preserved user edits.
 - Remember single answers or multiple selections, with approved variations and company/application/site scopes.
 - Review and save several answered questions together using **Save all answered questions**.
-- Edit or delete memories directly in the sidebar, or browse the searchable **Settings → Memories** library.
+- Save recognized facts to the profile; manage custom answers in **Settings → Memories**.
 - Track applications locally; optionally configure Gemini drafts and Google Sheets tracking.
 
 Applicant data stays local by default. External integrations are opt-in, and the extension never submits applications.

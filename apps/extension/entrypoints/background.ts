@@ -1,5 +1,5 @@
 import { browser, type Browser } from 'wxt/browser';
-import { db, getProfile, getRememberedMappings, saveRememberedMapping, saveRememberedMappingBatch } from '@/lib/db';
+import { db, getProfile, getRememberedMappings, saveRememberedMapping, saveConfirmedAnswers } from '@/lib/db';
 import { generateJson, generatePromptJson, generateText, testKey } from '@/lib/gemini';
 import { mappingPrompt, mappingSchema, parseMappings, questionKey } from '@/lib/field-map';
 import { parseCapture, parseMappingDraft, parseQuestionList, selectRememberedMappings, SavedAnswerIndex, scopeRank, parseReviewFields, parseSavedFields, applicationKey, type MappingContext } from '@/lib/remembered-mappings';
@@ -15,9 +15,10 @@ import {
 import { detectPlatform, platformFor, isWebUrl, jobKey, toApplicationUrl } from '@/lib/platforms';
 import { clampToLimit, renderPrompt } from '@/lib/prompt';
 import { getSettings, updateSettings, type PublicSettings } from '@/lib/settings';
-import { appendApplication, openSheet, parseSheetUrl, sheetsConfigured } from '@/lib/sheets';
+import { appendApplication, SHEET_COLUMNS, parseSheetUrl, sheetTabId, testSheetConnection, sheetsConfigured } from '@/lib/sheets';
 import type { Application, StoredFile } from '@/lib/types';
 import { formatLocation, formatPay, normalizeWorkMode, WORK_MODELS } from '@/lib/job-details';
+import { proposeConfirmedProfileUpdate } from '@/lib/profile-learning';
 import { questionMeaning, sameMeaning } from '@/lib/answer-semantics';
 
 type Sender = Browser.runtime.MessageSender;
@@ -72,7 +73,7 @@ async function syncSheet(id: number) {
 
 async function writeSheetRow(id: number) {
   console.info(`[Job Autofill] adding application ${id} to the sheet`);
-  const { sheetId } = await getSettings();
+  const { sheetId, sheetTabId: tabId } = await getSettings();
   const app = await db.applications.get(id);
   if (!app || app.status !== 'Submitted') return;
   if (app.sheetRow) {
@@ -90,7 +91,7 @@ async function writeSheetRow(id: number) {
     return;
   }
   try {
-    const sheetRow = await appendApplication(sheetId, app);
+    const sheetRow = await appendApplication(sheetId, app, tabId ?? undefined);
     console.info(`[Job Autofill] application ${id} added to the sheet at row ${sheetRow}`);
     await db.applications.update(id, { sheetRow, sheetError: undefined });
   } catch (err) {
@@ -221,13 +222,13 @@ const handlers: Handlers = {
       if (match.suggestionId !== req.suggestionId) throw new Error('The suggestion changed. Fill the page again.');
       suggestion = records.find(m => m.id === req.suggestionId);
     }
-    return { ok: true, capture: validated, ...(suggestion ? { suggestion } : {}) };
+    return { ok: true, capture: { ...validated, profileUpdate: proposeConfirmedProfileUpdate(validated, await getProfile(), await getRememberedMappings(), context) ?? undefined }, ...(suggestion ? { suggestion } : {}) };
   },
 
   async capturePageAnswers(req, sender) {
     requireExtensionPage(sender);
     if (!Array.isArray(req.tokens) || !req.tokens.length || req.tokens.length > 100 || req.tokens.some(t => typeof t !== 'string') || new Set(req.tokens).size !== req.tokens.length) throw new Error('Choose up to 100 distinct answered questions.');
-    const { app } = await applicationForCapture(req.applicationId, req.tokens[0]!, sender);
+    const { app, context } = await applicationForCapture(req.applicationId, req.tokens[0]!, sender);
     const fields = req.tokens.map(token => {
       const field = app.reviewFields?.find(f => f.token === token);
       if (!field) throw new Error('The review list changed. Fill the page again.');
@@ -242,26 +243,32 @@ const handlers: Handlers = {
       if (typeof row?.label !== 'string' || row.label.length > 700 || typeof row.reason !== 'string' || row.reason.length > 300) throw new Error('Invalid skipped field.');
       return { label: row.label as string, reason: row.reason as string };
     });
-    return { ok: true, captures, skipped };
+    const profile = await getProfile(), records = await getRememberedMappings();
+    return { ok: true, captures: captures.map(c => ({ ...c, profileUpdate: proposeConfirmedProfileUpdate(c, profile, records, context) ?? undefined })), skipped };
   },
 
   async savePageAnswers(req, sender) {
     requireExtensionPage(sender);
     if (!Array.isArray(req.entries) || !req.entries.length || req.entries.length > 100 || req.entries.some(e => !e || typeof e.token !== 'string' || typeof e.captureId !== 'string') || new Set(req.entries.map(e => e.token)).size !== req.entries.length) throw new Error('Choose up to 100 distinct answers to save.');
-    const { app } = await applicationForCapture(req.applicationId, req.entries[0]!.token, sender);
-    const mappings = req.entries.map(entry => {
-      const draft = parseMappingDraft(entry.mapping);
-      if (!app.reviewFields?.some(f => f.token === entry.token && f.label === draft.question) || draft.target.kind === 'profile') throw new Error('The captured question changed. Read the answers again.');
-      return draft;
-    });
+    const { app, context } = await applicationForCapture(req.applicationId, req.entries[0]!.token, sender);
     const entries = req.entries.map(({ token, captureId }) => ({ token, captureId }));
     const frame = { frameId: app.frameId ?? 0 };
     const validation = await browser.tabs.sendMessage(app.tabId!, { type: 'validateCaptures', entries } satisfies ContentMessage, frame);
     if (!validation?.ok) throw new Error(validation?.error ?? 'The page answers changed. Read them again before saving.');
-    const ids = await saveRememberedMappingBatch(mappings);
-    // Saving does not write page fields. A late navigation cannot undo the durable approved batch.
+    if (!Array.isArray(validation.captures) || validation.captures.length !== entries.length) throw new Error('Read the answers again with the updated extension.');
+    const captures = validation.captures.map(parseCapture);
+    const confirmed = req.entries.map((entry, i) => {
+      const capture = captures[i]!;
+      if (capture.token !== entry.token || capture.captureId !== entry.captureId || !app.reviewFields?.some(f => f.token === entry.token && f.label === capture.label)) throw new Error('The captured question changed.');
+      if (Boolean(entry.profile) === Boolean(entry.mapping)) throw new Error('Choose one destination per answer.');
+      if (entry.profile) return { capture, profile: entry.profile };
+      const mapping = parseMappingDraft(entry.mapping);
+      if (mapping.question !== capture.label || mapping.target.kind === 'profile') throw new Error('The captured question changed.');
+      return { capture, mapping };
+    });
+    const counts = await saveConfirmedAnswers(confirmed, context);
     const finished = await browser.tabs.sendMessage(app.tabId!, { type: 'finishRemembering', entries } satisfies ContentMessage, frame).catch(() => null);
-    return { ok: true, count: new Set(ids).size, note: finished?.ok ? 'Answers saved for future applications. Your page answers were kept.' : 'Answers saved. The page changed; refresh the review list with Fill this page.' };
+    return { ok: true, count: counts.memoryCount, profileCount: counts.profileCount, note: counts.profileCount + ' profile field' + (counts.profileCount === 1 ? '' : 's') + ' updated; ' + counts.memoryCount + ' memor' + (counts.memoryCount === 1 ? 'y' : 'ies') + ' saved. ' + (finished?.ok ? 'Your page answers were kept.' : 'The page changed; refresh the review list with Fill this page.') };
   },
 
   async applySavedAnswer(req, sender) {
@@ -587,7 +594,8 @@ const handlers: Handlers = {
     }
   },
 
-  async connectSheets({ url }) {
+  async connectSheets({ url }, sender) {
+    requireExtensionPage(sender);
     if (!sheetsConfigured()) {
       return {
         ok: false,
@@ -597,16 +605,26 @@ const handlers: Handlers = {
     const sheetId = parseSheetUrl(url);
     if (!sheetId) return { ok: false, error: 'That is not a Google Sheets link. It should look like https://docs.google.com/spreadsheets/d/…' };
     try {
-      const sheet = await openSheet(sheetId, true);
-      await updateSettings({ sheetId, sheetUrl: sheet.url });
+      const sheet = await testSheetConnection(sheetId, sheetTabId(url));
+      await updateSettings({ sheetId, sheetUrl: sheet.url, sheetTabId: sheet.tabId, sheetTabName: sheet.tab });
       return { ok: true, sheetUrl: sheet.url };
     } catch (err) {
       return { ok: false, error: `Could not open that sheet with your Google account: ${errorText(err)}` };
     }
   },
 
-  async disconnectSheets() {
-    await updateSettings({ sheetId: '', sheetUrl: '' });
+  async testSheets(_req, sender) {
+    requireExtensionPage(sender);
+    const settings = await getSettings();
+    if (!settings.sheetId || !sheetsConfigured()) throw new Error('Connect a sheet and configure Google sign-in first (see README).');
+    const sheet = await testSheetConnection(settings.sheetId, settings.sheetTabId ?? undefined);
+    await updateSettings({ sheetTabName: sheet.tab, sheetUrl: sheet.url, sheetTabId: sheet.tabId });
+    return { ok: true, tab: sheet.tab, columns: sheet.columns.map(key => SHEET_COLUMNS.find(column => column.key === key)!.label) };
+  },
+
+  async disconnectSheets(_req, sender) {
+    requireExtensionPage(sender);
+    await updateSettings({ sheetId: '', sheetUrl: '', sheetTabId: null, sheetTabName: '' });
     return {};
   },
 

@@ -32,7 +32,7 @@ import {
   type FillOutcome,
 } from './fill';
 import { clearOutline, outline, type ReviewState } from './highlight';
-import { characterLimitFor } from './match';
+import { bestGpaOption, characterLimitFor } from './match';
 import { composedCompare, isSignInPage, scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE } from './classify';
 import { pickLocationPreference, raceChoices, SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
@@ -109,7 +109,7 @@ export class FillSession {
   private resumeFile: File | null;
   private coverLetterFile: File | null;
   private transcriptFile: File | null;
-  private captures = new Map<string, { rec: FieldRecord; value: string; question: string; values: string[]; members: HTMLElement[]; mode: string }>();
+  private captures = new Map<string, { rec: FieldRecord; value: string; question: string; values: string[]; members: HTMLElement[]; mode: import('../remembered-mappings').SelectionMode }>();
 
   constructor(
     private doc: Document,
@@ -165,7 +165,7 @@ export class FillSession {
     const captureId = crypto.randomUUID();
     if (reset) this.captures.clear();
     this.captures.set(captureId, { rec, value, question, values, members: [...field.members], mode });
-    return { token, captureId, label: field.label, kind: field.kind, options: field.options.filter(o => !isPlaceholderOption(o)).slice(0, 200), value, selectionMode: mode, ...(mode === 'multiple' ? { values } : {}) };
+    return { token, captureId, section: field.section, label: field.label, kind: field.kind, options: field.options.filter(o => !isPlaceholderOption(o)).slice(0, 200), value, selectionMode: mode, ...(mode === 'multiple' ? { values } : {}) };
   }
 
   captureAnswers(fields: { token: string; label: string }[]) {
@@ -187,7 +187,11 @@ export class FillSession {
 
   validateCaptures(entries: { token: string; captureId: string }[]) {
     if (this.stopped || this.busy || !Array.isArray(entries) || !entries.length || entries.length > 100 || new Set(entries.map(e => e.captureId)).size !== entries.length) throw new Error('These captures expired. Read the answers again.');
-    for (const entry of entries) this.checkedCapture(entry.token, entry.captureId);
+    return entries.map(entry => {
+      const snapshot = this.checkedCapture(entry.token, entry.captureId);
+      const field = snapshot.rec.field;
+      return { token: entry.token, captureId: entry.captureId, label: field.label, section: field.section, kind: field.kind, options: field.options.slice(0, 200), value: snapshot.mode === 'multiple' ? '' : snapshot.value, selectionMode: snapshot.mode, ...(snapshot.mode === 'multiple' ? { values: snapshot.values } : {}) } satisfies CapturedAnswer;
+    });
   }
 
   finishRemembering(entries: { token: string; captureId: string }[]) {
@@ -206,7 +210,7 @@ export class FillSession {
     const snapshot = this.captures.get(captureId);
     if (!snapshot || snapshot.rec.token !== token || this.stopped || this.busy) throw new Error('This capture expired. Remember the answer again.');
     const current = scanFields(this.root()).find(f => f.el === snapshot.rec.field.el);
-    if (!current || current.label !== snapshot.question || selectionMode(current) !== snapshot.mode ||
+    if (!current || current.label !== snapshot.question || JSON.stringify(current.section) !== JSON.stringify(snapshot.rec.field.section) || selectionMode(current) !== snapshot.mode ||
       current.members.length !== snapshot.members.length || current.members.some((m, i) => m !== snapshot.members[i]) ||
       (snapshot.mode === 'multiple' ? !sameSelections(selectedValues(current), snapshot.values) : displayedValue(current).trim() !== snapshot.value)) throw new Error('The page answer changed after capture. Read the answers again.');
     snapshot.rec.field = current;
@@ -684,6 +688,7 @@ export class FillSession {
         values.splice(0, values.length, ...remembered.values);
         if (remembered.pick) choice.pick = remembered.pick;
       }
+      if (key === 'gpa' && values) choice.pick = options => bestGpaOption(values!, options);
       const first = values?.[0];
       if (savedAnswer !== undefined && field.maxLength && savedAnswer.length > field.maxLength) {
         rec.outcome = 'nomatch';
