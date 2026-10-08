@@ -34,19 +34,23 @@ Sheets sync needs a Google OAuth client. Filling works without it.
 3. Create an OAuth client ID of type **Chrome Extension** with item ID `kjepjmmbimmbpdfinkippakkmhbglccc`.
 4. Copy `apps/extension/.env.example` to `apps/extension/.env`, set `WXT_GOOGLE_CLIENT_ID`, and run `npm run build` again.
 
+If this build has no OAuth client ID, pasting a link and choosing **Connect sheet** now shows the one-time setup steps instead of leaving the button disabled. A spreadsheet link alone cannot configure Google sign-in.
+
 Then, in onboarding or Settings → Connections → Google Sheets tracking:
 
 Create a sheet in Google Sheets, paste its link, and choose **Connect sheet** and approve access. There is nothing
 else to configure: the sheet's headers decide what is saved.
 
-When you click **Mark as submitted** in the side panel, one row is added to the first tab, in the topmost row with
+When you click **Mark as submitted** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
 no company or position, and the side panel shows the row number with a link. The extension reads the header row and
 fills the columns it recognizes, whatever their order: company name, position, date applied (and a "Found" column,
 which gets the same date), link, location, work model, base pay (the pay range posted on the job page, when it
 has one), and application status (set to "Applied"). Other columns, such as Referral or Next action, and cells
 such as dropdowns are left alone, and a detail with no matching column is skipped. If the sheet is empty,
-those headers are written first. Nothing is written when an application is only filled. If the write fails, the
+those headers are written first. Existing values and formulas are preserved. Keep a Posting URL column so retries can recognize a previously written application. Nothing is written when an application is only filled. If the write fails, the
 side panel offers **Retry adding to sheet**.
+
+Connections shows the linked tab name. **Test connection** reads its headers through the extension’s OAuth connection without adding a row. A renamed tab keeps working because its numeric ID is saved; a deleted tab requires reconnecting. Existing connections without a tab ID use the first tab until tested or reconnected.
 
 ## Gemini (optional)
 
@@ -100,35 +104,39 @@ multiple specific choices such as BA and BS, the extension leaves that choice fo
    Clearing the page answer returns the card to its empty state. Select the button to capture only that
    field's current answer. Confirm the preselected
    answer, or choose an available dropdown option in the panel if the page field is still empty.
-3. Choose **Where should this answer be reused?**: all applications, this company, this application, or this site.
-   Known general facts default to all applications; unknown/employer-specific answers default narrowly.
-4. Click **Save & apply**. It saves locally and writes only that empty selected field. Existing page
+3. Confirmation shows **Update profile** for a supported fact, such as an exact GPA for a known education
+   entry. Choose **Save to profile** and confirm replacing any different existing value. No separate Memory
+   is created. Ambiguous education entries, GPA ranges and unknown scales remain Memories.
+   Custom answers show **Reuse for**: All applications or This application; **More limits** reveals
+   company/website restrictions. Contextual answers default narrowly.
+4. For a Memory, click **Save & apply**. It saves locally and writes only that empty selected field. Existing page
    answers are preserved. A changed/rerendered field requires a fresh capture, while the memory remains safe.
 
 To remember several questions at once:
 
 1. Wait for autofill to finish, then answer the remaining review questions on the application page.
 2. Click **Save all answered questions (N)** above the review list. The button becomes active as you answer.
-3. Check the captured answers and where each should be reused. Uncheck any you want to leave out.
-4. Click **Remember N answered questions** once. Your page answers stay as you entered them.
+3. Review each **Update profile** or **Create memory** destination, replacements and reuse scopes.
+   Uncheck any you want to leave out.
+4. Click **Save N answered questions** (or **Remember N answered questions** for a memory-only batch) once. Your page answers stay as you entered them.
 
 Only answered questions in the review list are captured, up to 100 per batch. Empty or unreadable fields
 are skipped. If an answer changes while you review, cancel and capture again. A conflicting existing
 answer stops the entire save; exclude that question or edit its record in **Settings → Memories**.
 Equivalent existing answers reuse their records without removing approved variations.
 
-After filling, **Memories for this page** in the sidebar shows relevant memories, including completed
-questions. Click **Edit** on a card, change the answer/selections or reuse scope, then **Save memory**.
-The editor opens in that card and focuses the answer. **Cancel** keeps the original memory. **Delete**
-asks for confirmation; **Keep memory** cancels deletion. Changes affect future fills and preserve the
-current page answer. **All memories** also lets you manage unrelated memories without leaving the sidebar.
+The sidebar keeps capture and Save all available. **Manage Memories in Settings** opens the searchable
+library. **Edit** opens inside its card. **Delete** uses the same confirmation dialog as documents and
+profile entries; Cancel or Escape keeps the record. Current page answers stay intact.
 
-**Settings → Memories** offers the same card editor plus **Add memory**, answer-type filters and sorting
+**Settings → Memories** offers inline card editing plus **Add memory**, answer-type filters and sorting
 by update, question or use date. Search accepts multiple words across question wordings, answers,
 alternate choice labels, profile details and companies; case and accents do not matter. Result counts,
 **Clear filters**, empty states and dismissible notifications explain each action. Filters stay disabled
 while editing so a draft cannot vanish. Existing `#knowledge` bookmarks open Memories.
-Saving is explicit; page edits are not silently collected.
+Saving is explicit; page edits are not silently collected. Profile changes appear in an already-open
+Settings window when there is no unsaved draft. Concurrent changes block saving an older draft.
+All applications still requires a matching approved question; narrower scopes allow contextual exceptions.
 
 Recognised question meanings reuse locally with country, timeframe, subject, education-level and
 negation checks. Unfamiliar wording offers **Review suggestion**; compare the old/new questions and save
@@ -177,6 +185,11 @@ Safety: the engine refuses to interact with submit controls, and cancels any for
 fires while it is dispatching events. Voluntary self-identification answers and contact details are
 never sent to Gemini.
 
+A confirmed profile update can relink the matching fixed-answer Memory to the profile. The confirmation
+shows this change; its ID, approved wording, scope and usage history stay intact. Concurrent edits reject
+the save. Unrelated Memories are not migrated. GPA options use exact numeric scores or a single
+compatible range; overlapping ranges and different scores remain manual.
+
 ## Tests
 
 Run from the repository root:
@@ -187,8 +200,6 @@ npm test          # unit tests against fictional Greenhouse, Lever, Ashby, Workd
 npm run test:e2e  # builds, then drives the real extension in Chromium (hermetic: no real sites)
 ```
 
-## Not in the MVP yet
+## Planned improvements
 
-Generic fallback for unknown sites, Workday, Gemini classification of
-unrecognized labels, a Regenerate button, passive submit detection and
-auto-marking Abandoned, an offline Sheets write queue, and multiple profiles.
+An offline Sheets write queue and multiple profiles remain future work.

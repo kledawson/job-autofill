@@ -97,7 +97,7 @@ export interface BackgroundMessages {
   matchSavedAnswers: { req: { fields: SavedField[] }; res: Result<{ matches: { mapping: RememberedMapping | null; suggestionId?: number; reason: string }[] }> };
   capturePageAnswer: { req: { applicationId: number; token: string; suggestionId?: number }; res: Result<{ capture: CapturedAnswer; suggestion?: RememberedMapping }> };
   capturePageAnswers: { req: { applicationId: number; tokens: string[] }; res: Result<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }> };
-  savePageAnswers: { req: { applicationId: number; entries: { token: string; captureId: string; mapping: MappingDraft }[] }; res: Result<{ count: number; note: string }> };
+  savePageAnswers: { req: { applicationId: number; entries: { token: string; captureId: string; mapping?: MappingDraft; profile?: import('./profile-learning').ProfileConfirmation }[] }; res: Result<{ count: number; profileCount: number; note: string }> };
   applySavedAnswer: { req: { applicationId: number; token: string; captureId: string; mappingId: number }; res: Result<{ note: string }> };
   suggestAnswerWordings: { req: { question: string }; res: Result<{ aliases: string[] }> };
   saveRememberedMapping: { req: { mapping: MappingDraft; id?: number }; res: Result<{ id: number }> };
@@ -113,6 +113,7 @@ export interface BackgroundMessages {
   };
   /** Links the spreadsheet at `url` after checking the signed-in Google account can open it. */
   connectSheets: { req: { url: string }; res: Result<{ sheetUrl: string }> };
+  testSheets: { req: {}; res: Result<{ tab: string; columns: string[] }> };
   disconnectSheets: { req: {}; res: {} };
   getPublicSettings: { req: {}; res: PublicSettings };
   deleteAllData: { req: {}; res: {} };

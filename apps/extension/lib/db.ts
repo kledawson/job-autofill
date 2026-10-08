@@ -1,3 +1,5 @@
+import { applyProfileConfirmation, applyValidatedProfileUpdate, type ProfileConfirmation } from './profile-learning';
+import type { CapturedAnswer, MappingDraft, MappingContext } from './remembered-mappings';
 import Dexie, { type EntityTable } from 'dexie';
 import type { Application, FieldMapping, Profile, SavedAnswer, StoredFile } from './types';
 import { emptyProfile } from './types';
@@ -97,4 +99,39 @@ export async function getProfile(): Promise<Profile> {
 
 export async function saveProfile(profile: Profile): Promise<void> {
   await db.profile.put({ ...profile, id: 'me', updatedAt: Date.now() });
+}
+
+/** Profile facts and memories from one confirmed review commit together, or not at all. */
+export async function saveConfirmedAnswers(entries: { capture: CapturedAnswer; mapping?: MappingDraft; profile?: ProfileConfirmation }[], context: MappingContext) {
+  return db.transaction('rw', db.profile, db.rememberedMappings, async () => {
+    const original = await getProfile();
+    const records = await getRememberedMappings();
+    const links = new Map<number, ProfileConfirmation["expected"]["memoryLink"]>();
+    let profile = original;
+    const memories: MappingDraft[] = [];
+    const updated = new Set<string>();
+    for (const entry of entries) {
+      if (Boolean(entry.profile) === Boolean(entry.mapping)) throw new Error('Choose one destination per answer.');
+      if (entry.profile) {
+        applyProfileConfirmation(original, entry.capture, entry.profile, records, context);
+        const link = entry.profile.expected.memoryLink;
+        if (link) {
+          if (links.has(link.id) && links.get(link.id)?.key !== link.key) throw new Error("Two answers change the same Memory. Exclude one before saving.");
+          links.set(link.id, link);
+        }
+        const key = entry.profile.expected.key + ':' + (entry.profile.expected.index ?? '');
+        if (updated.has(key)) throw new Error('Two answers update the same profile field. Exclude one before saving.');
+        profile = applyValidatedProfileUpdate(profile, entry.profile.expected);
+        updated.add(key);
+      } else memories.push(entry.mapping!);
+    }
+    const ids = memories.length ? await saveRememberedMappingBatch(memories) : [];
+    for (const [id, link] of links) {
+      if (ids.includes(id)) throw new Error("Two answers change the same Memory. Exclude one before saving.");
+      const existing = records.find(m => m.id === id)!;
+      await db.rememberedMappings.put({ ...existing, schemaVersion: 3, target: { kind: "profile", key: link!.key }, answerAliases: [], updatedAt: Date.now() });
+    }
+    if (updated.size) await saveProfile(profile);
+    return { memoryCount: new Set(ids).size, profileCount: updated.size };
+  });
 }

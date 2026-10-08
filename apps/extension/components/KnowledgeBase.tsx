@@ -9,6 +9,8 @@ import { valueFor } from '@/lib/autofill/values';
 import type { Profile } from '@/lib/types';
 import { applicationKey, companyKey, scopeLabel, parseMappingDraft, REMEMBERABLE_PROFILE_FIELDS,
   targetText, type AnswerSelection, type CapturedAnswer, type MappingContext, type MappingDraft, type MappingScope, type RememberableProfileKey, type RememberedMapping } from '@/lib/remembered-mappings';
+import { ReuseScope } from './ReuseScope';
+import { confirmDelete } from './confirm-delete';
 import { useLiveQuery } from './hooks';
 import { Button, Field, Input, Notice, Select, Textarea } from './ui';
 
@@ -85,15 +87,6 @@ export function MappingEditor({ initial, id, capture, context, onSaved, onCancel
   const [testUrl, setTestUrl] = useState(sample.url);
   const [preview, setPreview] = useState<{ key: string; result: AnswerPreview; profile?: Profile; records: RememberedMapping[] }>();
   const meaning = questionMeaning(question);
-  const choices: MappingScope[] = ['all'];
-  if (context) {
-    if (context.company && !/^(unknown|company)$/i.test(context.company)) choices.push(`company:${companyKey(context.company)}`);
-    choices.push(`application:${applicationKey(context.url)}`, `site:${new URL(context.url).origin}`);
-  } else {
-    choices.push('company:', 'application:', 'site:');
-  }
-  const scopeSelection = !context && /^(company|application|site):/.test(scope) ? `${scope.split(':')[0]}:` as MappingScope : scope;
-  if (!choices.includes(scopeSelection)) choices.push(scopeSelection);
 
   function draft() {
     return { question, aliases: aliases.map(q => q.trim()).filter(Boolean), scope,
@@ -164,12 +157,7 @@ export function MappingEditor({ initial, id, capture, context, onSaved, onCancel
         <p className="text-xs text-slate-600">Current value: <strong>{profile ? profileValue || 'Not set in your profile' : 'Loading…'}</strong></p>
         <p className="text-xs text-slate-500">Updates in Settings → Profile will be used the next time you fill.</p>
       </div>}
-      <Field label="Where should this answer be reused?" hint={scopeDescription(scope)}>
-        <Select value={scopeSelection} onChange={e => setScope(e.target.value as MappingScope)} options={choices.map(s => [s, s === 'company:' ? 'Specific company' : s === 'application:' ? 'Specific application' : s === 'site:' ? 'Specific site' : scopeLabel(s)])} />
-      </Field>
-      {!context && /^(company|application|site):/.test(scope) && <Field label={scope.startsWith('company:') ? 'Company name' : scope.startsWith('site:') ? 'Site URL' : 'Application URL'} required>
-        <Input required type={scope.startsWith('company:') ? 'text' : 'url'} value={scope.slice(scope.indexOf(':') + 1)} onChange={e => setScope(`${scope.split(':')[0]}:${e.target.value}` as MappingScope)} />
-      </Field>}
+      <ReuseScope value={scope} onChange={setScope} context={context} disabled={busy} />
       <p className="text-xs text-slate-600">{meaning && equivalent ? `Also match recognized questions about ${meaningDescription(meaning)}. Different conditions stay separate.` : 'Match this question and variations you approve. Unfamiliar questions will ask you to confirm.'}</p>
       <details className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
         <summary className="cursor-pointer font-medium text-slate-800">Improve future matching</summary>
@@ -222,12 +210,11 @@ export function MappingEditor({ initial, id, capture, context, onSaved, onCancel
   );
 }
 
-/** One management interface for Settings and the trusted application sidebar. */
+/** Settings owns browsing and management; the sidebar owns capture and confirmation. */
 export function MemoryLibrary({ context, questions = [] }: { context?: MappingContext; questions?: string[] }) {
   const mappings = useLiveQuery(getRememberedMappings);
   const root = useRef<HTMLElement>(null);
   const [editing, setEditing] = useState<RememberedMapping | 'new' | null>(null);
-  const [deleting, setDeleting] = useState<number>();
   const [removing, setRemoving] = useState<number>();
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -235,9 +222,7 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
   const [filter, setFilter] = useState<MemoryFilter>('all');
   const [sort, setSort] = useState<MemorySort>('updated');
   const [all, setAll] = useState(!context);
-  useEffect(() => {
-    if (deleting !== undefined) root.current?.querySelector<HTMLElement>(`[data-memory-id="${deleting}"] [data-keep-memory]`)?.focus({ preventScroll: true });
-  }, [deleting]);
+
   const questionKey = JSON.stringify(questions);
   const pageRecords = useMemo(() => context ? memoriesForPage(mappings ?? [], questions, context) : mappings ?? [],
     [mappings, context?.platform, context?.company, context?.url, questionKey]);
@@ -253,7 +238,7 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
     });
   }
   function beginEdit(memory: RememberedMapping | 'new') {
-    setEditing(memory); setDeleting(undefined); setError(''); setFeedback('');
+    setEditing(memory); setError(''); setFeedback('');
   }
   function cancelEdit() {
     const id = editing && editing !== 'new' ? editing.id : undefined;
@@ -264,7 +249,7 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
     try {
       const res = await sendToBackground('removeRememberedMapping', { id: memory.id });
       if (!res.ok) throw new Error(res.error);
-      setDeleting(undefined); setFeedback('Memory deleted. The answer on your page was kept.'); focusAction();
+      setFeedback('Memory deleted. The answer on your page was kept.'); focusAction();
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not delete this memory.'); }
     finally { setRemoving(undefined); }
   }
@@ -280,15 +265,15 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
       {!context && <Button variant="secondary" disabled={locked} onClick={() => beginEdit('new')}>Add memory</Button>}
     </div>
     {context && <div className="flex flex-wrap gap-2" role="group" aria-label="Memories to show">
-      <Button variant={!all ? 'primary' : 'secondary'} aria-pressed={!all} disabled={locked} onClick={() => { setAll(false); setDeleting(undefined); }}>This page ({pageRecords.length})</Button>
-      <Button variant={all ? 'primary' : 'secondary'} aria-pressed={all} disabled={locked} onClick={() => { setAll(true); setDeleting(undefined); }}>All memories ({mappings?.length ?? 0})</Button>
+      <Button variant={!all ? 'primary' : 'secondary'} aria-pressed={!all} disabled={locked} onClick={() => { setAll(false); }}>This page ({pageRecords.length})</Button>
+      <Button variant={all ? 'primary' : 'secondary'} aria-pressed={all} disabled={locked} onClick={() => { setAll(true); }}>All memories ({mappings?.length ?? 0})</Button>
     </div>}
     <div className="space-y-3">
-      <Field label="Search memories"><Input data-memory-search value={search} disabled={locked} onChange={e => { setSearch(e.target.value); setDeleting(undefined); }} placeholder="Search questions, answers or companies" /></Field>
+      <Field label="Search memories"><Input data-memory-search value={search} disabled={locked} onChange={e => { setSearch(e.target.value); }} placeholder="Search questions, answers or companies" /></Field>
       <div className="flex flex-wrap items-end gap-2">
-        <Field className="min-w-0 flex-1" label="Answer type"><Select disabled={locked} value={filter} onChange={e => { setFilter(e.target.value as MemoryFilter); setDeleting(undefined); }} options={[[ 'all', 'All types' ], [ 'answer', 'One answer' ], [ 'answers', 'Several selections' ], [ 'profile', 'Linked to profile' ]]} /></Field>
+        <Field className="min-w-0 flex-1" label="Answer type"><Select disabled={locked} value={filter} onChange={e => { setFilter(e.target.value as MemoryFilter); }} options={[[ 'all', 'All types' ], [ 'answer', 'One answer' ], [ 'answers', 'Several selections' ], [ 'profile', 'Linked to profile' ]]} /></Field>
         {!context && <Field className="min-w-0 flex-1" label="Sort by"><Select disabled={locked} value={sort} onChange={e => setSort(e.target.value as MemorySort)} options={[[ 'updated', 'Recently updated' ], [ 'question', 'Question A–Z' ], [ 'used', 'Recently used' ]]} /></Field>}
-        {(search || filter !== 'all') && <Button variant="ghost" disabled={locked} onClick={() => { setSearch(''); setFilter('all'); setDeleting(undefined); focusAction(); }}>Clear filters</Button>}
+        {(search || filter !== 'all') && <Button variant="ghost" disabled={locked} onClick={() => { setSearch(''); setFilter('all'); focusAction(); }}>Clear filters</Button>}
       </div>
       <p role="status" className="text-xs text-slate-500">{mappings === undefined ? 'Loading memories…' : `${filtered.length} of ${available.length} ${available.length === 1 ? 'memory' : 'memories'}${context && !all ? ' for this page' : ''}`}{editing ? ' · Finish editing to change filters.' : ''}</p>
     </div>
@@ -302,9 +287,10 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
         <p className="mt-2 break-words text-xs font-medium text-indigo-700">{scopeLabel(m.scope)}</p>
         <p className="mt-1 text-xs text-slate-500">{m.meaning ? 'Recognized variations' : 'Approved wording'} · {m.lastUsed ? `Last used ${new Date(m.lastUsed).toLocaleDateString()}` : 'Not applied yet'}</p>
         {!!m.aliases.length && <details className="mt-2 text-xs text-slate-600"><summary className="cursor-pointer">Approved variations ({m.aliases.length})</summary><ul className="mt-2 space-y-1">{m.aliases.map(q => <li key={q} className="break-words">{q}</li>)}</ul></details>}
-        {deleting === m.id ? <div className="mt-3 space-y-2 rounded-lg border border-red-200 bg-red-50 p-3" role="group" aria-label="Confirm deletion"><p className="font-medium">Delete this memory?</p><p className="text-xs">It will no longer autofill. The answer on your page will stay.</p><div className="flex flex-wrap gap-2"><Button variant="danger" disabled={removing !== undefined} onClick={() => void remove(m)}>{removing === m.id ? 'Deleting…' : 'Delete memory'}</Button><Button data-keep-memory variant="secondary" disabled={removing !== undefined} onClick={() => { setDeleting(undefined); setError(''); setFeedback('Deletion canceled. Your memory was kept.'); focusAction(m.id); }}>Keep memory</Button></div>{error && <div role="alert"><Notice tone="error">{error}</Notice></div>}</div> : <div className="mt-3 flex gap-2"><Button data-memory-edit variant="secondary" disabled={locked} onClick={() => beginEdit(m)}>Edit</Button><Button variant="secondary" disabled={locked} onClick={() => { setDeleting(m.id); setError(''); setFeedback(''); }}>Delete</Button></div>}
+        <div className="mt-3 flex gap-2"><Button data-memory-edit variant="secondary" disabled={locked} onClick={() => beginEdit(m)}>Edit</Button><Button variant="secondary" disabled={locked} onClick={async () => { if (await confirmDelete('Delete this memory?', m.question + ' — It will no longer autofill. Your current page answer will stay.', 'Delete memory')) await remove(m); else { setFeedback('Deletion canceled. Your memory was kept.'); focusAction(m.id); } }}>Delete</Button></div>
       </>}
     </li>)}</ul>
+    {error && <div role="alert"><Notice tone="error">{error}</Notice></div>}
     {feedback && <div className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-sm rounded-lg bg-white shadow-lg"><Notice tone="success"><div className="flex items-start gap-2"><p role="status" aria-live="polite" className="flex-1">{feedback}</p><button aria-label="Dismiss memory notification" className="rounded px-1 font-semibold focus-visible:ring-2 focus-visible:ring-indigo-500" onClick={() => setFeedback('')}>×</button></div></Notice></div>}
   </section>;
 }

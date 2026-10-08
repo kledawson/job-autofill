@@ -1,3 +1,4 @@
+import { parseExactGpa } from '../education-facts';
 import { bachelorDegreeAliases, standardDegree } from '../degree';
 
 // Words that appear in many options and say little on their own ("Stanford University" vs "Aalborg University").
@@ -174,4 +175,20 @@ export function characterLimitFor(label: string, maxLength?: number): number {
   const words = label.match(/(\d[\d,]*)\s*words?/i);
   if (words?.[1]) limit = Math.min(limit, parseInt(words[1].replace(/,/g, ''), 10) * 6);
   return Math.max(100, limit);
+}
+
+/** GPA is numeric, so shared text tokens must never choose a different score. */
+export function bestGpaOption(candidates: string[], options: string[]): number {
+  const raw = candidates.map(parseExactGpa).find(score => score !== null);
+  if (raw === undefined || raw === null) return -1;
+  const score = Number(raw);
+  const exact = options.map((option, i) => { const n = parseExactGpa(option); return n !== null && Number(n) === score ? i : -1; }).filter(i => i >= 0);
+  if (exact.length) return exact.length === 1 ? exact[0]! : -1;
+  const ranges = options.map((option, i) => {
+    const range = /^(\d(?:\.\d+)?)\s*[-–—]\s*(\d(?:\.\d+)?)(?:\s*(?:out of|of|\/)\s*4(?:\.0)?)?$/.exec(option.trim());
+    if (!range) return -1;
+    const lo = +range[1]!, hi = +range[2]!;
+    return lo >= 0 && hi <= 4 && lo <= hi && score >= lo && score <= hi ? i : -1;
+  }).filter(i => i >= 0);
+  return ranges.length === 1 ? ranges[0]! : -1;
 }

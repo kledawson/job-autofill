@@ -1,3 +1,4 @@
+import { educationFactIndex } from '../education-facts';
 import { DECLINE, racesOf, type Profile, type YesNo } from '../types';
 import type { ProfileKey } from './classify';
 import { isPlaceholderOption, normalize } from './match';
@@ -255,7 +256,8 @@ export function valueFor(
     hasPreferredNameField?: boolean;
   } = {},
 ): string[] | null {
-  const edu = opts.index !== undefined ? educationEntries(p)[opts.index] : (p.education.find((e) => e.school) ?? p.education[0]);
+  const factIndex = key === 'gpa' ? educationFactIndex(p, opts.label ?? 'GPA', opts.index) : null;
+  const edu = key === 'gpa' ? (factIndex === null ? undefined : p.education[factIndex]) : opts.index !== undefined ? educationEntries(p)[opts.index] : (p.education.find((e) => e.school) ?? p.education[0]);
   const job = experienceEntries(p)[opts.index ?? 0];
   switch (key) {
     case 'fullName':

@@ -243,5 +243,7 @@ export interface Settings {
   promptTemplate: string;
   sheetId: string;
   sheetUrl: string;
+  sheetTabId?: number | null;
+  sheetTabName?: string;
   onboardingComplete: boolean;
 }

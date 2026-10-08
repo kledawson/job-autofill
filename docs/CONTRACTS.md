@@ -74,9 +74,9 @@ Fill attempts store counts, adapter version, and non-sensitive failure categorie
 - Optional `fillFinished.memoryQuestions: string[]` records at most 200 current eligible question labels,
   each 1–700 characters, including completed questions. It contains no applicant answers. Validation uses
   `parseQuestionList` before any metadata/usage writes; each new fill clears stale labels. Old applications
-  without it fall back to review/missing questions. It supports read-only scoped sidebar memory browsing;
+  without it fall back to review/missing questions. It remains compatible with earlier scoped sidebar memory browsing;
   fuzzy search does not change approved matching. The existing mapping mutation messages support inline
-  editing/deletion from both trusted UIs. Store/table/message identifiers remain compatible with older data.
+  editing/deletion in Settings. Store/table/message identifiers remain compatible with older data.
 - `capturePageAnswer({applicationId, token, suggestionId?})` requires a trusted extension page and checks
   the current tab URL. It routes to the specific frame, returning a selected-field capture with current
   question, value, kind, options, token and single-use `captureId`. No other answers are read.
@@ -90,8 +90,8 @@ Fill attempts store counts, adapter version, and non-sensitive failure categorie
 - `capturePageAnswers({applicationId, tokens})` accepts 1–100 distinct review tokens from a trusted
   extension page. It routes one explicit batch to the tracked frame, returning validated captures and
   skipped-field reasons. It never reads unrelated fields. Captures remain ephemeral in the live session.
-  `savePageAnswers({applicationId, entries: {token, captureId, mapping}[]})` checks every included snapshot
-  before one atomic database transaction. A stale capture, conflicting answer or invalid draft rejects
+  `savePageAnswers({applicationId, entries: {token, captureId, mapping?, profile?}[]})` checks every included snapshot
+  before one atomic database transaction spanning profile and memories. A stale capture, conflicting answer or invalid draft rejects
   the whole batch. Equivalent same-question/scope targets reuse existing IDs and preserve aliases; new
   conflicts never silently replace a record. It returns unique saved-record count and an actionable note.
   Successful persistence survives a subsequent page change; failure to clear review cards then requests
@@ -131,3 +131,28 @@ Fill attempts store counts, adapter version, and non-sensitive failure categorie
   exposed in the result. It neither mutates storage nor adds messages, network calls or permissions.
   Example dropdown choices are not saved as aliases. Real widget handling, required-field formatting,
   existing-value preservation and write verification remain outside this illustrative matching preview.
+
+## Confirmed profile learning and sheet tabs
+
+- Captures may include a validated numbered section. Background enrichment adds an optional profile
+  proposal: allowlisted key, destination label, normalized new value, previous value, education
+  index/entry signature. Page scripts never receive profile proposals.
+- Each confirmed save entry supplies exactly one Memory draft or profile confirmation (value, expected
+  proposal and explicit replacement flag). Background obtains fresh live snapshots, re-derives all
+  proposals against the transaction’s original profile, then commits changes together. Changed facts,
+  reordered entries, invalid/duplicate destinations or Memory conflicts reject the entire save.
+  Return count remains the Memory count; profileCount reports distinct updated profile fields.
+- Learning supports exact contact/link labels, unambiguous education facts (exact GPA on a 4.0 scale),
+  explicit US authorization/sponsorship, supported citizenship categories and single supported active
+  clearance selections. Contextual questions, ambiguous entries, ranges/unknown scales and unsupported
+  facts remain Memories. Existing Memories are never silently migrated into the profile.
+- Settings add optional sheetTabId (number or null) and sheetTabName with backward-compatible defaults.
+  Numeric IDs survive renaming; missing explicit IDs fail. No-ID connections retain first-tab behavior.
+  connectSheets, disconnectSheets and testSheets require trusted extension senders. testSheets returns
+  the resolved tab and recognized columns after read-only OAuth requests.
+
+
+A confirmed profile update can relink the matching fixed-answer Memory to the profile. The confirmation
+shows this change; its ID, approved wording, scope and usage history stay intact. Concurrent edits reject
+the save. Unrelated Memories are not migrated. GPA options use exact numeric scores or a single
+compatible range; overlapping ranges and different scores remain manual.

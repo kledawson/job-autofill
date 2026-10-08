@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Profile-aware saving and simpler Memories
+
+- Keep capture/Save all in the sidebar; browse and manage Memories in Settings.
+- Save supported captured facts to the profile with replacement confirmation and atomic mixed batches.
+- Protect concurrent profile edits and check education levels before GPA learning/reuse.
+- Match GPA dropdowns numerically; skip different scores and ambiguous ranges.
+- Explicitly relink a matching fixed Memory when confirming its profile update, preserving wording/scope.
+- Simplify reuse choices while retaining company/site limits and existing scopes.
+- Use consistent accessible deletion dialogs for Memories, documents, skills, profile entries and local data.
+- Respect spreadsheet tab links, display tab names, add read-only connection tests, preserve occupied
+  cells/formulas and recognize repeated posting URLs during retries.
+- Explain missing Google sign-in configuration when connecting a pasted sheet link, with setup steps.
+- No new dependencies or permissions. Live OAuth testing requires the README’s client-ID setup.
+
 ## 2026-10-06 — Memories improvements
 
 - Remember multiple selections for one question, including supported dropdowns, checkbox groups and

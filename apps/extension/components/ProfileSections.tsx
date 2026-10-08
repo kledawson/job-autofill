@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DECLINE, emptyEducation, emptyExperience, racesOf, type Education, type Experience, type Profile, CLEARANCE_LEVELS, WORK_STATUSES } from '@/lib/types';
 import { DEGREE_TYPES, SPECIFIC_DEGREES, standardDegree } from '@/lib/degree';
+import { confirmDelete } from './confirm-delete';
 import { Button, Card, DateInput, Field, Grid, Input, MonthInput, PrefixInput, Select, Textarea } from './ui';
 
 export interface SectionProps {
@@ -196,7 +197,7 @@ export function WorkAuthSection({ profile: p, onChange }: SectionProps) {
 
 function ListControls({ onRemove, canRemove, what }: { onRemove: () => void; canRemove: boolean; what: string }) {
   return canRemove ? (
-    <Button variant="secondary" onClick={() => confirm(`Remove ${what}? This can’t be undone once you save your profile.`) && onRemove()}>
+    <Button variant="secondary" onClick={async () => { if (await confirmDelete('Remove ' + what + '?', 'This removes the entry from your draft. Save your profile to make the removal permanent.', 'Remove')) onRemove(); }}>
       Remove
     </Button>
   ) : null;
@@ -506,7 +507,7 @@ export function SkillsSection({ profile: p, onChange }: SectionProps) {
                   type="button"
                   aria-label={`Remove ${skill}`}
                   className={`absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-white text-xs leading-none text-slate-500 shadow ring-1 ring-slate-300 hover:bg-red-50 hover:text-red-700 ${held ? 'invisible' : ''}`}
-                  onClick={() => confirm(`Remove “${skill}” from your skills?`) && set(p.skills.filter((k) => k !== skill))}
+                  onClick={async () => { if (await confirmDelete('Remove skill?', skill + ' will be removed from your draft. Save your profile to make it permanent.', 'Remove')) set(p.skills.filter((k) => k !== skill)); }}
                 >
                   ×
                 </button>

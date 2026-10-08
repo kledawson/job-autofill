@@ -10,9 +10,11 @@
 
 - Explicit capture/confirmation of a selected page answer; missing cards remain teachable after manual entry.
 - Searchable Settings → Memories, compact cards, advanced aliases/profile links, and last-used dates.
-- Shared inline memory editing/deletion in the current-page sidebar and Settings; completed questions
-  remain manageable. Search across wordings/answers/choice aliases/scopes, answer-type filters, sorting,
-  result counts, keyboard focus and visible save/cancel/delete feedback. Legacy Settings links still work.
+- Sidebar capture and Save all confirmation; Memory browsing/editing/deletion live in Settings.
+- Supported captured facts update the profile with replacement confirmation; mixed batches commit atomically.
+  Education-level checks prevent GPA reuse across unrelated education entries.
+- Simpler reuse controls with optional company/site limits; consistent accessible deletion dialogs.
+- Sheets tab IDs, read-only connection tests, occupied-cell/formula preservation and URL-based retry detection.
 - Guided **Improve future matching** sections with editable variation rows, readable scope/meaning help,
   current profile-value display and a local **Try a variation** preview; answered cards visibly offer
   **Save this answer**, while empty cards remain white.

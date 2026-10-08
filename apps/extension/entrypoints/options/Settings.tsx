@@ -33,7 +33,7 @@ const tabFromHash = (): Tab => {
 
 export default function Settings() {
   const [tab, setTab] = useState<Tab>(tabFromHash);
-  const { profile, update, save, replace, dirty, savedAt, reload } = useProfile();
+  const { profile, update, save, replace, dirty, savedAt, reload, saveError } = useProfile();
   const { settings } = usePublicSettings();
   const [version, setVersion] = useState(0);
 
@@ -150,6 +150,7 @@ export default function Settings() {
                 {dirty ? 'Unsaved changes' : savedAt ? 'Saved' : 'All changes saved'}
               </span>
             )}
+            {saveError && <p role="alert" className="text-sm text-red-700">{saveError} <button className="underline" onClick={() => void reload()}>Reload saved profile</button></p>}
             <Button onClick={save} disabled={!dirty || gaps.length > 0}>
               Save profile
             </Button>
