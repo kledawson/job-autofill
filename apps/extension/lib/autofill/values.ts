@@ -267,6 +267,9 @@ export function valueFor(
       return nonEmpty(opts.hasPreferredNameField ? p.firstName : p.preferredName || p.firstName);
     case 'lastName':
       return nonEmpty(p.lastName);
+    case 'hasPreferredName':
+      // Only tick it when the saved preferred name actually differs from the legal first name.
+      return p.preferredName && p.preferredName.trim().toLowerCase() !== p.firstName.trim().toLowerCase() ? ['Yes'] : null;
     case 'preferredName':
       return nonEmpty(p.preferredName || p.firstName);
     case 'pronouns':

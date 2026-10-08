@@ -86,6 +86,19 @@ describe('capture and semantic reuse', () => {
     await setup(choice, [mapping]).run();
     expect((document.querySelector('select') as HTMLSelectElement).value).toBe('BS');
   });
+  it('captures a dropdown whose accessible name becomes only its answer', async () => {
+    const q = 'Has an immediate family member ever been employed by Contoso?';
+    const session = setup(`<div><p>${q}*</p><button id="fam" aria-haspopup="listbox" aria-required="true">Select One</button></div>`);
+    const review = (await session.run()).reviewFields!.find(f => f.label === q)!;
+    const button = document.getElementById('fam')!;
+    // Workday-style: once answered, the button is named by its selected value rather than the question.
+    button.innerHTML = '<span id="fam-value">No</span><span hidden>Select One</span>';
+    button.setAttribute('aria-labelledby', 'fam-value');
+    expect(scanFields(document).find(f => f.el === button)!.label).toBe('No');
+    const capture = session.captureAnswer(review.token, review.label);
+    expect(capture.label).toBe(q);
+    expect(capture.value).toBe('No');
+  });
   it('retains manually answered questions and captures only the selected answer', async () => {
     const session = setup(choice + '<label for="other">Unrelated question*</label><input id="other" required>');
     const result = await session.run();

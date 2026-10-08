@@ -5,6 +5,7 @@ export type ProfileKey =
   | 'firstName'
   | 'lastName'
   | 'preferredName'
+  | 'hasPreferredName'
   | 'pronouns'
   | 'email'
   | 'phone'
@@ -295,6 +296,11 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
 
   // "Phone Extension" would otherwise take the phone number.
   if (label.length < 40 && /\bextension\b|^ext\.?$/.test(label)) return { kind: 'unknown' };
+
+  // Workday-style "I have a preferred name" checkbox: ticking it reveals the preferred-name boxes.
+  if (field.kind === 'checkbox' && /^(i )?(have|use|go by) a (different )?preferred( first)? name\b/.test(label)) {
+    return { kind: 'profile', key: 'hasPreferredName', source: 'rule' };
+  }
 
   if (HONEYPOT_RE.test(label) || /honeypot|hpcs|beecatcher/i.test(field.name + field.id + field.path)) return { kind: 'challenge' };
 

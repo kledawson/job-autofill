@@ -26,6 +26,7 @@ import {
   closeIfOpen,
   setNativeValue,
   fillCheckbox,
+  uploadedAlready,
   fillYesNo,
   sleep,
   timing,
@@ -150,22 +151,44 @@ export class FillSession {
     return this.details;
   }
 
+  /**
+   * The scanned field for a record. Workday re-renders a question once it is answered, so the original element can
+   * be replaced by an identical one: find it again by label and kind, and re-key the record to the new element.
+   */
+  private relocate(rec: FieldRecord): ScannedField | undefined {
+    const scanned = scanFields(this.root());
+    const same = scanned.find((f) => f.el === rec.field.el);
+    if (same) return same;
+    const taken = new Set(this.records.keys());
+    const candidates = scanned.filter((f) => !taken.has(f.el) && f.kind === rec.field.kind && f.label === rec.field.label &&
+      JSON.stringify(f.section) === JSON.stringify(rec.field.section));
+    if (candidates.length !== 1) return undefined;
+    this.records.delete(rec.field.el);
+    this.records.set(candidates[0]!.el, rec);
+    return candidates[0];
+  }
+
   /** Only an explicit request reads an answer; unresolved metadata contains no values. */
   captureAnswer(token: string, question: string, reset = true): CapturedAnswer {
     if (this.busy || this.stopped) throw new Error('Wait for autofill to finish, then try again.');
     const rec = [...this.records.values()].find(r => r.token === token);
-    const field = rec && scanFields(this.root()).find(f => f.el === rec.field.el);
-    if (!rec || !field || field.label !== question || !canRemember({ ...rec, field })) throw new Error('This field changed. Click Fill this page to refresh it.');
-    rec.field = field;
+    const field = rec && this.relocate(rec);
+    // Say which check failed (no values), so a page that rewrites its labels or markup can be diagnosed.
+    const why = !rec ? 'its record is gone' : !field ? 'it is no longer on the page' : !labelMatches(field, question) ? 'its label changed' : !canRemember({ ...rec, field }) ? `${field.kind} fields cannot be saved` : '';
+    if (why || !rec || !field) {
+      console.warn(`[Job Autofill] cannot capture: ${why}`, { was: question.slice(0, 200), now: field?.label.slice(0, 200) });
+      throw new Error(`This field changed (${why}). Click Fill this page to refresh it.`);
+    }
+    rec.field = { ...field, label: rec.field.label };
     const mode = selectionMode(field);
     const values = mode === 'multiple' ? selectedValues(field) : [];
-    const value = mode === 'multiple' ? (values.length === 1 ? values[0]! : '') : fieldHasValue(field) ? displayedValue(field).trim() : '';
+    const value = mode === 'multiple' ? (values.length === 1 ? values[0]! : '') : fieldHasValue(field) ? answerOf(field, question) : '';
     if (mode !== 'multiple' && fieldHasValue(field) && !value) throw new Error('Choose an answer from the dropdown before saving. If the selected answer cannot be read, add it in Settings → Memories.');
     if (values.length) parseSelections(values.map(value => ({ value, aliases: [] })));
     const captureId = crypto.randomUUID();
     if (reset) this.captures.clear();
     this.captures.set(captureId, { rec, value, question, values, members: [...field.members], mode });
-    return { token, captureId, section: field.section, label: field.label, kind: field.kind, options: field.options.filter(o => !isPlaceholderOption(o)).slice(0, 200), value, selectionMode: mode, ...(mode === 'multiple' ? { values } : {}) };
+    return { token, captureId, section: field.section, label: rec.field.label, kind: field.kind, options: field.options.filter(o => !isPlaceholderOption(o)).slice(0, 200), value, selectionMode: mode, ...(mode === 'multiple' ? { values } : {}) };
   }
 
   captureAnswers(fields: { token: string; label: string }[]) {
@@ -210,10 +233,10 @@ export class FillSession {
     const snapshot = this.captures.get(captureId);
     if (!snapshot || snapshot.rec.token !== token || this.stopped || this.busy) throw new Error('This capture expired. Remember the answer again.');
     const current = scanFields(this.root()).find(f => f.el === snapshot.rec.field.el);
-    if (!current || current.label !== snapshot.question || JSON.stringify(current.section) !== JSON.stringify(snapshot.rec.field.section) || selectionMode(current) !== snapshot.mode ||
+    if (!current || !labelMatches(current, snapshot.question) || JSON.stringify(current.section) !== JSON.stringify(snapshot.rec.field.section) || selectionMode(current) !== snapshot.mode ||
       current.members.length !== snapshot.members.length || current.members.some((m, i) => m !== snapshot.members[i]) ||
-      (snapshot.mode === 'multiple' ? !sameSelections(selectedValues(current), snapshot.values) : displayedValue(current).trim() !== snapshot.value)) throw new Error('The page answer changed after capture. Read the answers again.');
-    snapshot.rec.field = current;
+      (snapshot.mode === 'multiple' ? !sameSelections(selectedValues(current), snapshot.values) : answerOf(current, snapshot.question) !== snapshot.value)) throw new Error('The page answer changed after capture. Read the answers again.');
+    snapshot.rec.field = { ...current, label: snapshot.rec.field.label };
     return snapshot;
   }
 
@@ -223,7 +246,7 @@ export class FillSession {
     const { rec } = snapshot;
     const current = scanFields(this.root()).find(f => f.el === rec.field.el);
     if (!current) throw new Error('The page field changed. Capture it again.');
-    rec.field = current;
+    rec.field = { ...current, label: rec.field.label };
     // Never replace an answer entered by the person. Saving and applying an empty field is sufficient.
     if (fieldHasValue(current)) { rec.review = false; rec.outcome = 'already'; rec.selectionReason = undefined; this.deps.onProgress?.(this.verify()); return 'Saved for future applications. Your page answer was kept.'; }
     this.busy = true;
@@ -591,7 +614,7 @@ export class FillSession {
         return;
       }
       const hasCodeField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && r.cls.key === 'phoneCountryCode');
-      const hasPreferredNameField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && r.cls.key === 'preferredName');
+      const hasPreferredNameField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && (r.cls.key === 'preferredName' || r.cls.key === 'hasPreferredName'));
       // react-select style dropdowns expose no options up front, so a question-shaped label stands in.
       const yesNo = isYesNo(field.options) || (!field.options.length && field.kind !== 'text' && QUESTION_RE.test(field.label.trim()));
       // Salary answers follow the pay range posted in the job description when there is one.
@@ -641,7 +664,7 @@ export class FillSession {
       // Skill pickers (Workday "Type to Add Skills"): add each saved skill as its own chip.
       if (key === 'skills' && field.kind === 'prompt') {
         let added = 0;
-        for (const [i, skill] of profile.skills.slice(0, 15).entries()) {
+        for (const [i, skill] of profile.skills.entries()) {
           const out = await fillPrompt(field, [skill], { allowMore: i > 0, strict: true });
           if (i === 0 && out === 'already') {
             added = -1;
@@ -831,7 +854,8 @@ export class FillSession {
       // Yes/No buttons and file inputs do not always expose their state; trust our own fill there.
       const mode = selectionMode(field);
       const selected = mode === 'multiple' ? selectedValues(field) : [];
-      const has = mode === 'multiple' ? selected.length > 0 : fieldHasValue(field) || (weFilled && (field.kind === 'yesno' || field.kind === 'file'));
+      // Workday keeps its upload box empty once a file is attached, so a file the page already lists counts as present.
+      const has = mode === 'multiple' ? selected.length > 0 : fieldHasValue(field) || (weFilled && (field.kind === 'yesno' || field.kind === 'file')) || (field.kind === 'file' && uploadedAlready(field.el as HTMLInputElement));
       const incomplete = rec.saved?.target.kind === 'answers' && rec.outcome !== 'already' &&
         (rec.outcome !== 'filled' || !sameSelections(selected, rec.selectionLabels ?? []));
       let state: ReviewState | null = null;
@@ -855,6 +879,61 @@ export class FillSession {
     return { filledCount, aiAnswers, missingLabels, missingQuestions, reviewFields: reviewFields.slice(0, 200), memoryQuestions: [...memoryQuestions].slice(0, 200),
       usedMappingIds: [...new Set([...this.records.values()].filter(r => r.saved && r.outcome === 'filled' && fieldHasValue(r.field) && (r.saved.target.kind !== 'answers' || sameSelections(selectedValues(r.field), r.selectionLabels ?? []))).map(r => r.saved!.id))].slice(0, 200), aiNote: this.aiNote };
   }
+}
+
+/** The scanned label still names the question, or is just the answer the page now shows (Workday dropdowns relabel to "No"). */
+function labelMatches(field: ScannedField, question: string): boolean {
+  if (sameLabel(field.label, question)) return true;
+  const shown = fieldHasValue(field) ? displayedValue(field).trim().toLowerCase() : '';
+  const label = field.label.trim().toLowerCase();
+  // The button's text may carry the question and "Required" around the answer, so the short label need only appear in it.
+  if (shown && label && (label === shown || (label.length <= 40 && shown.includes(label)))) return true;
+  return questionStillShown(field.el, question);
+}
+
+/**
+ * The question is still written next to this control: in its <label>, its ARIA name or description, or the field
+ * around it (stopping before a container that also holds another control). Covers dropdowns whose accessible name
+ * becomes only the chosen answer ("No") while the question text stays on the page beside them.
+ */
+function questionStillShown(el: HTMLElement, question: string): boolean {
+  const norm = (t: string) => t.toLowerCase().replace(/[*\s]+/g, ' ').trim();
+  const q = norm(question);
+  if (q.length < 4) return false;
+  const doc = el.ownerDocument;
+  const byId = (ids: string | null) => (ids ?? '').split(/\s+/).filter(Boolean).map(id => doc.getElementById(id)?.textContent ?? '');
+  const texts = [el.getAttribute('aria-label') ?? '', ...byId(el.getAttribute('aria-labelledby')), ...byId(el.getAttribute('aria-describedby'))];
+  if (el.id) texts.push(doc.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent ?? '');
+  for (let node = el.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth++) {
+    if ([...node.querySelectorAll(OTHER_CONTROLS)].some(c => c !== el)) break;
+    texts.push(node.textContent ?? '');
+  }
+  return texts.some(t => norm(t).includes(q));
+}
+
+const OTHER_CONTROLS = 'input:not([type="hidden"]), select, textarea, button[aria-haspopup]';
+
+/** The answer a field shows. A Workday dropdown button's text can also hold its question and "Required"; those are removed. */
+function answerOf(field: ScannedField, question: string): string {
+  const shown = displayedValue(field).trim();
+  if (field.kind !== 'listbox') return shown;
+  const clean = shown.replace(new RegExp(question.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), ' ').replace(/\brequired\b/gi, ' ').replace(/\s+/g, ' ').trim();
+  return clean || shown;
+}
+
+/**
+ * Labels match ignoring case, spacing and the required asterisk. A dropdown's accessible name can gain its selected
+ * answer once answered ("Question? Select One" becomes "Question? No"), so a question ending in "?" is compared
+ * up to that mark, and other labels by one being the start of the other.
+ */
+function sameLabel(a: string, b: string): boolean {
+  const norm = (t: string) => t.toLowerCase().replace(/[*\s]+/g, ' ').trim();
+  const [x, y] = [norm(a), norm(b)];
+  if (x === y) return true;
+  const qx = x.indexOf('?');
+  const qy = y.indexOf('?');
+  if (qx > 10 && qy > 10) return x.slice(0, qx) === y.slice(0, qy);
+  return x.length > 20 && y.length > 20 && (x.includes(y) || y.includes(x));
 }
 
 function canRemember(rec: FieldRecord): boolean {

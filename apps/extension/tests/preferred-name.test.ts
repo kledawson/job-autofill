@@ -19,3 +19,11 @@ describe('first name and preferred name', () => {
     expect(valueFor('firstName', plain)).toEqual(['Alexander']);
   });
 });
+
+describe('"I have a preferred name" checkbox', () => {
+  it('is ticked only when the preferred name differs from the legal first name', () => {
+    expect(valueFor('hasPreferredName', profile)).toEqual(['Yes']);
+    expect(valueFor('hasPreferredName', { ...profile, preferredName: '' })).toBeNull();
+    expect(valueFor('hasPreferredName', { ...profile, preferredName: 'alexander' })).toBeNull();
+  });
+});
