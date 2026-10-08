@@ -2,6 +2,7 @@
 // extension can read and edit the spreadsheet the person links.
 import { browser } from 'wxt/browser';
 import type { Application } from './types';
+import { postingUrl } from './platforms';
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
@@ -117,7 +118,7 @@ function cell(app: Application, key: SheetColumn): string {
     case 'dateApplied':
       return day(app.submittedAt ?? Date.now());
     case 'jobUrl':
-      return app.url;
+      return postingUrl(app.url);
     case 'location':
       return app.location ?? '';
     case 'workModel':
@@ -251,7 +252,7 @@ export async function appendApplication(sheetId: string, app: Application, tabId
   const identity = cells.filter((c) => c.key === 'company' || c.key === 'role' || c.key === 'jobUrl').map((c) => c.index);
   const urlColumn = cells.find(c => c.key === 'jobUrl');
   if (urlColumn) {
-    const canonical = (url: string) => { try { const u = new URL(url); u.hash = ''; return u.href; } catch { return url; } };
+    const canonical = (url: string) => postingUrl(url);
     const existing = rows.findIndex(r => canonical(String(r[firstCol + urlColumn.index] ?? '')) === canonical(app.url));
     if (existing >= 0) return headerAt + 2 + existing;
   }

@@ -77,3 +77,31 @@ export function jobKey(raw: string): string {
     return raw;
   }
 }
+
+/**
+ * The posting a person would share, rather than the application form they filled:
+ * Workday drops the location and the /apply steps ("/job/Campbell,-CA/Engineer_JR1/apply/..." → "/job/Engineer_JR1"),
+ * Lever drops /apply, Ashby drops /application.
+ */
+export function postingUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+  url.hash = '';
+  const platform = detectPlatform(url.href);
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (platform === 'workday') {
+    const job = parts.indexOf('job');
+    const apply = parts.indexOf('apply', job + 1);
+    const posting = parts.slice(job + 1, apply > job ? apply : undefined).pop();
+    if (job < 0 || !posting) return url.href;
+    url.pathname = '/' + [...parts.slice(0, job + 1), posting].join('/');
+    url.search = '';
+  } else if ((platform === 'lever' && parts[2] === 'apply') || (platform === 'ashby' && parts[2] === 'application')) {
+    url.pathname = '/' + parts.slice(0, 2).join('/');
+  }
+  return url.href;
+}

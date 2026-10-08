@@ -1,13 +1,15 @@
 import type { Platform, Profile } from '../types';
 import type { AdapterKeys } from './classify';
 import { addEntries } from './entries';
-import { findJobPosting } from '../job-details';
+import { findJobPosting, formatLocation } from '../job-details';
 
 export interface JobInfo {
   company: string;
   role: string;
   /** Description text found on the page, if any. */
   description: string;
+  /** "City, ST" when the platform states it more reliably than the page (Workday's URL); blank otherwise. */
+  location?: string;
   /** For platforms whose form page lacks the description: identifiers to fetch it by. */
   remote?: { platform: 'lever' | 'ashby'; org: string; jobId: string };
 }
@@ -258,6 +260,17 @@ function workdayPosting(doc: Document): { tenant: string; site: string; jobPath:
   return jobPath ? { tenant, site, jobPath } : null;
 }
 
+/** Workday's location slug: "Campbell,-CA", "Santa-Clara-CA" or "US-CA-San-Jose" → "City, ST"; blank for anything else. */
+export function workdayLocation(slug: string): string {
+  let text = decodeURIComponent(slug);
+  const countryFirst = /^usa?-([A-Z]{2})-(.+)$/i.exec(text);
+  if (countryFirst) return formatLocation(`${countryFirst[2]!.replace(/-/g, ' ')}, ${countryFirst[1]!.toUpperCase()}`);
+  text = text.replace(/-/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text.includes(',')) text = text.replace(/ ([A-Z]{2})$/, ', $1');
+  if (/multiple|locations|various/i.test(text)) return '';
+  return formatLocation(text);
+}
+
 const workday: Adapter = {
   platform: 'workday',
   multiStep: true,
@@ -304,7 +317,9 @@ const workday: Adapter = {
     const posting = workdayPosting(doc);
     const fromPath = (posting?.jobPath.split('/').pop() ?? '').replace(/_[A-Z]*[-_]?\d[\w-]*$/, '').replace(/-/g, ' ').trim();
     const tenant = posting?.tenant ?? '';
+    const segments = posting?.jobPath.split('/') ?? [];
     return {
+      location: segments.length > 1 ? workdayLocation(segments[0]!) : '',
       role: text(doc, '[data-automation-id="jobPostingHeader"]') || fromPath || shortHeading(doc),
       company: meta(doc, 'og:site_name') || (tenant ? tenant.charAt(0).toUpperCase() + tenant.slice(1) : ''),
       description: longText(doc, '[data-automation-id="jobPostingDescription"]'),

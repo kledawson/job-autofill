@@ -136,7 +136,7 @@ export class FillSession {
         pay: next.pay || this.details.pay,
       };
     };
-    const read = () => merge(readJobDetails(this.doc, this.description ?? this.jobInfo.description, this.jobInfo.role));
+    const read = () => merge(readJobDetails(this.doc, this.description ?? this.jobInfo.description, this.jobInfo.role, this.jobInfo.location));
     read();
     const remote = this.jobInfo.remote;
     if (remote && this.deps.jobDetails && !this.detailsFetched && !(this.details.location && this.details.workMode && this.details.pay)) {
