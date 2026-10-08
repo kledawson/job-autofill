@@ -113,6 +113,16 @@ export default function SidePanel() {
       setOpened(false);
     }
   }, [opened, current, here?.tabId, here?.key]);
+  // A fill started by anything other than this panel's button (a message, shortcut or another panel) reports status while it runs.
+  useEffect(() => {
+    if (!here) return;
+    const key = pageStatusKey(here.tabId);
+    const onChanged = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area === 'session' && changes[key]?.newValue) setShown(here);
+    };
+    browser.storage.onChanged.addListener(onChanged);
+    return () => browser.storage.onChanged.removeListener(onChanged);
+  }, [here?.tabId, here?.key]);
 
   const setupGaps = profile ? missingRequired(profile) : [];
 
