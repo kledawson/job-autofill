@@ -63,12 +63,13 @@ const EEO_ALIASES: Record<string, string[]> = {
   male: ['Man', 'Cisgender man'],
   female: ['Woman', 'Cisgender woman'],
   'non-binary': ['Nonbinary', 'Non binary', 'Genderqueer', 'Non-binary / third gender'],
-  'black or african american': ['Black', 'African American'],
+  'black or african american': ['Black', 'African American', 'Black or African American (Not Hispanic or Latino)'],
+  'middle eastern or north african': ['Middle Eastern', 'North African', 'MENA', 'Middle Eastern or North African (Not Hispanic or Latino)'],
   white: ['Caucasian', 'White (Not Hispanic or Latino)'],
   asian: ['Asian (Not Hispanic or Latino)'],
-  'american indian or alaska native': ['Native American', 'American Indian'],
-  'native hawaiian or other pacific islander': ['Pacific Islander', 'Native Hawaiian'],
-  'two or more races': ['Two or more', 'Multiracial', 'Mixed'],
+  'american indian or alaska native': ['Native American', 'American Indian', 'American Indian or Alaska Native (Not Hispanic or Latino)'],
+  'native hawaiian or other pacific islander': ['Native Hawaiian or Pacific Islander', 'Pacific Islander', 'Native Hawaiian', 'Native Hawaiian or Pacific Islander (Not Hispanic or Latino)'],
+  'two or more races': ['Two or more', 'Multiracial', 'Mixed', 'Multiracial and/or Multiethnic (Not Hispanic or Latino)'],
   'i am not a protected veteran': ['I am not a veteran', 'Not a protected veteran', 'No'],
   'no, i do not have a disability': ['No, I do not have a disability and have not had one in the past', 'No, I don’t have a disability', 'No disability', 'No'],
   'yes, i have a disability (or previously had a disability)': ['Yes, I have a disability', 'Yes'],
@@ -250,6 +251,8 @@ export function valueFor(
     index?: number;
     /** The hiring company, for "have you worked for this company / us?". */
     company?: string;
+    /** The form has its own preferred-name box, so the first-name box keeps the legal first name. */
+    hasPreferredNameField?: boolean;
   } = {},
 ): string[] | null {
   const edu = opts.index !== undefined ? educationEntries(p)[opts.index] : (p.education.find((e) => e.school) ?? p.education[0]);
@@ -258,7 +261,8 @@ export function valueFor(
     case 'fullName':
       return nonEmpty([p.firstName, p.lastName].filter(Boolean).join(' '));
     case 'firstName':
-      return nonEmpty(p.firstName);
+      // Without a separate preferred-name box, the name people actually use goes in the first-name box.
+      return nonEmpty(opts.hasPreferredNameField ? p.firstName : p.preferredName || p.firstName);
     case 'lastName':
       return nonEmpty(p.lastName);
     case 'preferredName':
@@ -551,7 +555,7 @@ function majorIs(label: string, major: string): string[] | null {
   return BROAD_SUBJECT_RE.test(subject) ? null : ['No'];
 }
 
-const TWO_OR_MORE = ['Two or More Races', 'Two or more races', 'Two or More', 'Multiracial', 'Multi-racial', 'Mixed race'];
+const TWO_OR_MORE = ['Two or More Races', 'Two or more races', 'Two or More', 'Multiracial', 'Multi-racial', 'Mixed race', 'Multiracial and/or Multiethnic', 'Multiracial and/or Multiethnic (Not Hispanic or Latino)'];
 
 /**
  * Each answer to tick on a "select all that apply" race list: every saved race, plus Hispanic or Latino when

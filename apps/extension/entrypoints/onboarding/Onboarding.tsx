@@ -9,6 +9,7 @@ import {
   LinksSection,
   missingRequired,
   PreferencesSection,
+  SkillsSection,
   WorkAuthSection,
 } from '@/components/ProfileSections';
 import { DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
@@ -38,7 +39,7 @@ export default function Onboarding() {
   async function next() {
     setWarning('');
     if (STEPS[step] === 'About you') {
-      const missing = missingRequired(profile!).filter((m) => !['work authorization', 'sponsorship'].includes(m));
+      const missing = missingRequired(profile!).filter((m) => !['work authorization', 'sponsorship', 'current status', 'education details', 'job details'].includes(m));
       if (missing.length) return setWarning(`Please add your ${missing.join(', ')}.`);
     }
     if (STEPS[step] === 'Common questions' && (!profile!.workAuth.authorizedUS || !profile!.workAuth.needsSponsorship)) {
@@ -104,7 +105,12 @@ export default function Onboarding() {
       body = <EducationSection {...sectionProps} />;
       break;
     case 'Experience':
-      body = <ExperienceSection {...sectionProps} />;
+      body = (
+        <div className="space-y-4">
+          <ExperienceSection {...sectionProps} />
+          <SkillsSection {...sectionProps} />
+        </div>
+      );
       break;
     case 'Common questions':
       body = (

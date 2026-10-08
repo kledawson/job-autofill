@@ -207,7 +207,6 @@ test('onboarding reads the resume into the profile, then collects the rest', asy
   await expect(page.getByLabel('Phone')).toHaveValue('415-555-0100');
   await expect(page.getByLabel('City')).toHaveValue('San Francisco');
   await expect(page.getByLabel('State')).toHaveValue('CA');
-  await expect(page.getByLabel('Current position')).toHaveValue('Software Engineering Intern');
   await expect(page.getByLabel('GitHub')).toHaveValue('https://github.com/jordanrivera');
   await shot(page, 'onboarding-about');
   await page.getByRole('button', { name: 'Continue' }).click();
@@ -216,11 +215,13 @@ test('onboarding reads the resume into the profile, then collects the rest', asy
   await expect(page.getByLabel('School', { exact: false }).first()).toHaveValue('University of California, Berkeley');
   await expect(page.getByLabel('Degree type')).toHaveValue("Bachelor's Degree");
   await expect(page.getByLabel('Field of study / discipline')).toHaveValue('Computer Science');
-  await expect(page.getByLabel('End (or expected)')).toHaveValue('2026-05');
+  await expect(page.getByLabel('End (or expected)')).toHaveValue('5'); // May
+  await expect(page.getByLabel('Year').first()).toBeVisible();
   await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByLabel('Title')).toHaveValue('Software Engineering Intern');
-  await expect(page.getByLabel('Company')).toHaveValue('Acme Corp');
-  await expect(page.getByLabel('Skills')).toHaveValue('TypeScript, React, Python');
+  await expect(page.getByLabel('Current position')).toHaveValue('Software Engineering Intern');
+  await expect(page.getByRole('textbox', { name: 'Title', exact: true })).toHaveValue('Software Engineering Intern');
+  await expect(page.getByRole('textbox', { name: 'Company', exact: true })).toHaveValue('Acme Corp');
+  await expect(page.getByLabel('Your skills, most important first').getByRole('listitem')).toHaveText(['TypeScript×', 'React×', 'Python×']);
   await page.getByRole('button', { name: 'Continue' }).click();
 
   // Common questions
@@ -892,6 +893,8 @@ test('guided variations preview real matching and scope, and profile links show 
   const profileSettings = await context.newPage();
   await profileSettings.goto(`chrome-extension://${extensionId}/options.html#profile`);
   await profileSettings.getByRole('textbox', { name: 'Phone', exact: true }).fill('415-555-0111');
+  // Saving needs every required field, and this profile has no work status yet.
+  await profileSettings.getByLabel('Current Status').selectOption('US Citizen');
   await profileSettings.getByRole('button', { name: 'Save profile', exact: true }).click();
   await expect(settings.getByText('Current value:', { exact: false })).toContainText('415-555-0111');
   await expect(settings.getByText('Would autofill', { exact: true })).toHaveCount(0);
@@ -944,4 +947,30 @@ test('upgrades the actual old IndexedDB schema without losing legacy answers or 
   }));
   expect(result).toMatchObject({ version: 30, record: { id: 7, schemaVersion: 2, target: { value: 'Referral' }, aliases: ['Approved old alias'] }, profile: { firstName: 'Migration' } });
   expect(result.record.meaning).toBeUndefined();
+});
+
+test('View opens the saved PDF in a new tab titled with its file name', async () => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/options.html#documents`);
+  await page.locator('input[type=file]').nth(1).setInputFiles({ name: 'Cover Letter For Review.pdf', mimeType: 'application/pdf', buffer: RESUME_PDF });
+  await expect(page.getByText('Cover letter uploaded')).toBeVisible();
+  const slot = page.getByText('Cover Letter For Review.pdf').locator('xpath=ancestor::div[contains(@class,"border-dashed")]');
+  const [viewer] = await Promise.all([context.waitForEvent('page'), slot.getByRole('button', { name: 'View', exact: true }).click()]);
+  await expect(viewer).toHaveTitle('Cover Letter For Review.pdf');
+  await expect(viewer.getByRole('heading', { name: 'Cover Letter For Review.pdf' })).toBeVisible();
+  await expect(viewer.locator('canvas').first()).toBeVisible();
+  await expect(viewer.getByRole('link', { name: 'Download' })).toHaveAttribute('download', 'Cover Letter For Review.pdf');
+  // Zoom, search and print controls.
+  await expect(viewer.getByText('100%')).toBeVisible();
+  await viewer.getByRole('button', { name: 'Zoom in' }).click();
+  await expect(viewer.getByText('125%')).toBeVisible();
+  await viewer.getByRole('button', { name: 'Fit to width' }).click();
+  await expect(viewer.getByText('100%')).toBeVisible();
+  await viewer.getByLabel('Search this document').fill('Jordan');
+  await expect(viewer.getByText(/^1 of \d+$/)).toBeVisible();
+  await viewer.getByLabel('Search this document').fill('zzzqqq');
+  await expect(viewer.getByText('No matches')).toBeVisible();
+  await expect(viewer.getByRole('button', { name: 'Print' })).toBeVisible();
+  await viewer.close();
+  await page.close();
 });

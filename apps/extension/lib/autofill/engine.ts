@@ -587,6 +587,7 @@ export class FillSession {
         return;
       }
       const hasCodeField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && r.cls.key === 'phoneCountryCode');
+      const hasPreferredNameField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && r.cls.key === 'preferredName');
       // react-select style dropdowns expose no options up front, so a question-shaped label stands in.
       const yesNo = isYesNo(field.options) || (!field.options.length && field.kind !== 'text' && QUESTION_RE.test(field.label.trim()));
       // Salary answers follow the pay range posted in the job description when there is one.
@@ -600,6 +601,7 @@ export class FillSession {
         options: field.options,
         index: rec.cls.kind === 'profile' ? rec.cls.index : undefined,
         company: this.jobInfo.company,
+        hasPreferredNameField,
       }) : null;
       // Two URL boxes ("Website", "Other website") never get the same link: skip any already in another link box.
       if (values && key !== undefined && LINK_KEYS.has(key)) {
