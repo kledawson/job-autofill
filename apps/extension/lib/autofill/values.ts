@@ -261,7 +261,8 @@ export function valueFor(
   const job = experienceEntries(p)[opts.index ?? 0];
   switch (key) {
     case 'fullName':
-      return nonEmpty([p.firstName, p.lastName].filter(Boolean).join(' '));
+      // Same rule as the first-name box: a single name box gets the name people actually use.
+      return nonEmpty([opts.hasPreferredNameField ? p.firstName : p.preferredName || p.firstName, p.lastName].filter(Boolean).join(' '));
     case 'firstName':
       // Without a separate preferred-name box, the name people actually use goes in the first-name box.
       return nonEmpty(opts.hasPreferredNameField ? p.firstName : p.preferredName || p.firstName);

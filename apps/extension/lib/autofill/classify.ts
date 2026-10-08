@@ -283,6 +283,8 @@ export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}
   }
 
   if (field.kind === 'file') {
+    // Ashby's "Autofill from resume" box runs the site's parser, which rewrites other fields after they are filled.
+    if (field.el.closest('.ashby-application-form-autofill-uploader') || /autofill (from|with|using) (your )?(resume|cv|r\u00e9sum\u00e9)/.test(label)) return { kind: 'unknown' };
     if (/transcript/.test(label) || /transcript/i.test(field.id + field.name)) return { kind: 'profile', key: 'transcript', source: 'rule' };
     if (/cover/.test(label) || /cover/.test(field.id + field.name)) return { kind: 'profile', key: 'coverLetter', source: 'rule' };
     if (/resume|\bcv\b|résumé/.test(label) || /resume|cv/i.test(field.id + field.name)) {

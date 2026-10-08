@@ -563,6 +563,20 @@ describe('Lever', () => {
 });
 
 describe('Ashby', () => {
+  it('leaves the "Autofill from resume" box alone and uploads only to the Resume field', async () => {
+    const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    const top = doc.createElement('div');
+    top.className = 'ashby-application-form-autofill-uploader';
+    top.innerHTML = '<div><input type="file" accept=".pdf"><div>Autofill from resume</div><div>Upload your resume here to autofill key application fields.</div></div>';
+    doc.body.insertBefore(top, doc.body.firstChild);
+    const topInput = top.querySelector('input') as HTMLInputElement;
+    const fields = scanFields(doc.body);
+    const topField = fields.find((f) => f.el === topInput)!;
+    expect(classifyField(topField, ADAPTERS.ashby.keys).kind).toBe('unknown');
+    const real = fields.find((f) => f.el.id === '_systemfield_resume')!;
+    expect(classifyField(real, ADAPTERS.ashby.keys)).toMatchObject({ key: 'resume' });
+  });
+
   it('clicks Yes/No buttons, skips anti-bot puzzles, and flags unknown questions', async () => {
     const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
     for (const btn of Array.from(doc.querySelectorAll('button[data-option]'))) {
@@ -573,7 +587,7 @@ describe('Ashby', () => {
     const { d, answers } = deps();
     const summary = await new FillSession(doc, ADAPTERS.ashby, d).run();
 
-    expect((doc.getElementById('_systemfield_name') as HTMLInputElement).value).toBe('Jordan Rivera');
+    expect((doc.getElementById('_systemfield_name') as HTMLInputElement).value).toBe('Jo Rivera');
     expect((doc.getElementById('dc915b3a-linkedin') as HTMLInputElement).value).toContain('linkedin');
     const auth = doc.querySelector('[data-field-path="3080cfba-auth"] button[data-option="yes"]')!;
     expect(auth.getAttribute('aria-pressed')).toBe('true');
