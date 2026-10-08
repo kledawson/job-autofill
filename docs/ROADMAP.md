@@ -10,6 +10,10 @@
 
 - Explicit capture/confirmation of a selected page answer; missing cards remain teachable after manual entry.
 - Searchable Settings → Memories, compact cards, advanced aliases/profile links, and last-used dates.
+- Dated Memories JSON backup/restore with validated previews, duplicates skipped, explicit keep/override
+  conflict choices, multi-select/alias/scope preservation and atomic stale-safe restores.
+- Separate restore review with side-by-side answer comparisons, grouped add/skip choices, collapsed
+  identical items and an explicit added/replaced summary; the saved library remains separate.
 - Sidebar capture and Save all confirmation; Memory browsing/editing/deletion live in Settings.
 - Supported captured facts update the profile with replacement confirmation; mixed batches commit atomically.
   Education-level checks prevent GPA reuse across unrelated education entries.
@@ -29,7 +33,7 @@
 - **Save all answered questions** captures only answered review fields, confirms answers and individual
   scopes together, and saves atomically. Stale captures or conflicting stored answers stop the batch.
 
-Later extensions: mapping import/export, profile-linked selection arrays, Workday multi-select widgets, broader tested local intent/category
+Later extensions: profile-linked selection arrays, Workday multi-select widgets, broader tested local intent/category
 coverage, local embeddings if measurement justifies them, explicit replacement of non-empty page answers,
 and a stricter employer identity registry across platforms. Capture tokens deliberately expire on rerender/navigation.
 

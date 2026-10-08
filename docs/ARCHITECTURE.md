@@ -97,3 +97,24 @@ Test connection reads metadata/headers through the same Chrome OAuth path as wri
 preserve occupied cells/formulas and unrelated columns; a matching Posting URL makes retries reuse the
 existing row. Without a URL column, a lost write acknowledgement cannot always be deduplicated. No
 write occurs on autofill or connection testing.
+
+## Memories backup and restore
+
+lib/memory-backup.ts provides the browser-independent versioned parser, complete-rule comparison,
+connected conflict groups and restore-choice validation. It reuses stored-Memory validators and the
+existing scope/meaning conflict checks without inferring new meanings. lib/memory-backup-db.ts
+exports validated records and commits confirmed imports in one IndexedDB Memories transaction.
+
+components/MemoryBackup.tsx presents file download, import preview, explicit keep/override choices,
+new-item exclusions and completion/error feedback in Settings. These operations run directly in the
+trusted Settings page against extension-origin IndexedDB, like Profile import. They do not depend on
+background-message handlers or the worker build version. A SHA-256 token binds the preview to its file and
+current Memories; the database snapshot is checked again inside the transaction. Usage-only updates
+are allowed without invalidating the preview. Tokens require no service-worker in-memory state.
+Profile links remain references to the destination Profile. No Profile/document/credential export
+or remote integration is involved, and the autofill path is unchanged.
+
+Restore review temporarily hides the saved library. Conflicts appear first with side-by-side native
+radio choices and visible answers/reuse limits; answer-equivalent conflicts open matching details.
+New items have explicit add/skip states and group selection controls. Exact existing rules are collapsed
+under Already saved. Live added/replaced/kept/skipped counts explain the final confirmation action.
