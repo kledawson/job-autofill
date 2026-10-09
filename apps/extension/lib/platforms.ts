@@ -71,6 +71,12 @@ export function jobKey(raw: string): string {
     const url = new URL(raw);
     // Workday adds a step after /apply ("/apply/applyManually"); the posting is the part before it.
     const path = url.pathname.replace(/\/(apply|application)(\/[^/]*)?\/?$/, '').replace(/\/$/, '');
+    if (!detectPlatform(raw)) {
+      // Company forms frequently identify jobs by query; dropping it merges unrelated applications.
+      for (const key of [...url.searchParams.keys()]) if (/^(utm_|ref$|source$|fbclid$|gclid$)/i.test(key)) url.searchParams.delete(key);
+      url.searchParams.sort();
+      return url.hostname + path + url.search;
+    }
     const ghJob = url.searchParams.get('gh_jid') ?? url.searchParams.get('token');
     return `${url.hostname}${path}${ghJob ? `#${ghJob}` : ''}`.toLowerCase();
   } catch {

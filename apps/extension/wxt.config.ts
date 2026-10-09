@@ -32,6 +32,7 @@ export default defineConfig({
     key: EXTENSION_KEY,
     permissions: [
       'storage',
+      'alarms',
       'unlimitedStorage',
       'sidePanel',
       'notifications',

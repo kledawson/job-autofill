@@ -41,7 +41,7 @@ Then, in onboarding or Settings → Connections → Google Sheets tracking:
 Create a sheet in Google Sheets, paste its link, and choose **Connect sheet** and approve access. There is nothing
 else to configure: the sheet's headers decide what is saved.
 
-When you click **Mark as submitted** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
+When you click **Mark as submitted** or the queue's **Submitted — close tab** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
 no company or position, and the side panel shows the row number with a link. The extension reads the header row and
 fills the columns it recognizes, whatever their order: company name, position, date applied (and a "Found" column,
 which gets the same date), link, location, work model, base pay (the pay range posted on the job page, when it
@@ -70,7 +70,7 @@ self-identification are never inferred.
 | Site | How |
 | --- | --- |
 | Greenhouse, Lever, Ashby | Dedicated adapters; the content script loads automatically. |
-| Workday (`*.myworkdayjobs.com`, `*.myworkdaysite.com`, `*.myworkday.com`) | Loads automatically. Workday applications span several pages (My Information, My Experience, Application Questions, Voluntary Disclosures, Self Identify). Click **Fill this page** (or open a pasted link) once: each page is filled when it opens, and the sign-in page is left alone. On My Experience, one Work Experience and Education entry is added per profile entry, then filled. Save and Continue is always yours to click. |
+| Workday (`*.myworkdayjobs.com`, `*.myworkdaysite.com`, `*.myworkday.com`) | Loads automatically. Workday applications span several pages (My Information, My Experience, Application Questions, Voluntary Disclosures, Self Identify). Click **Fill this page** once outside a queue: each page is filled when it opens, and the sign-in page is left alone. On My Experience, one Work Experience and Education entry is added per profile entry, then filled. Save and Continue is always yours to click. In a queue, use **Fill this step** on each later page so fills stay serialized. |
 | Any other site | The generic adapter reads labels, `autocomplete`, and the page's schema.org JobPosting data. The first time you fill a page outside the sites above, Chrome asks to let the extension **read and change data on all sites** (an optional permission). The extension only reads a page when you click **Fill this page** or open a pasted link; you can remove the permission in `chrome://extensions`. |
 
 When a Gemini key is set, questions no label rule recognises are sent to Gemini **as wording and option
@@ -237,7 +237,7 @@ file download. After rebuilding, reload the extension and reopen Settings to loa
 
 Settings → Presets lets you create a preset for each type of role, such as Software Engineer or
 Hardware Engineer. Name the preset, choose a resume, and click **Save and use preset**. Select it
-in the sidebar before **Fill this page** or **Open and fill**; the resume filename is shown before
+in the sidebar before **Fill this page** or **Start queue**; the resume filename is shown before
 you start. Duplicate a preset to reuse its configuration.
 
 Each preset can use the shared resume/cover letter from Documents, its own uploaded PDF, or no
@@ -263,3 +263,30 @@ the chosen preset and resume. Default preserves existing shared-document behavio
 
 Presets and their PDFs stay local. Profile JSON and Memories backups do not include presets or
 preset documents. Delete all local data includes presets, their documents and fill snapshots.
+
+## Fill a batch of applications
+
+1. Choose an **Application preset** in the sidebar. Its resume, presentation links and prepared
+   answers are fixed for the queue; changing or deleting that preset later does not change the queue.
+2. Paste one or many full job URLs into **Job links**. Review the preview; duplicate links are removed.
+   Already tracked applications are excluded. **Review existing application** opens them without refilling.
+3. Choose **Applications per batch** (1–5, default 3), then **Start queue**. The extension fills one
+   page at a time and opens no more than the current batch's application tabs.
+4. Use **Open application** to review, complete missing fields and submit on the website yourself.
+   Memories and Save all remain available in the current-page review section.
+5. Only after confirming success on the website, click **Submitted — close tab**. It updates local
+   tracking and optionally Sheets. **Skip — close tab** closes that queue tab without marking submission.
+   The next batch begins after every current item is submitted or skipped.
+6. On a later application step, use **Fill this step**. For sign-in, missing forms or a manually closed
+   tab, use **Retry autofill** after resolving the issue. Existing page values are kept.
+
+**Pause queue** lets the current fill finish and prevents new fills. **Resume queue** continues.
+**Stop queue** stops further work and keeps opened pages for you. Batch-size changes apply to the next
+batch. Up to 100 pending links are local metadata; only 1–5 review tabs are opened. Actual memory use
+still depends on the job websites. The additional alarms permission supports timeout/recovery checks.
+No queue action clicks Submit, solves CAPTCHA, signs in, or automates LinkedIn.
+
+Progress survives service-worker shutdown. After a browser restart the queue pauses and requests
+explicit resume/retry; previous restored tabs are kept and retries create owned tabs. Website drafts
+may be lost on restart. Sheets failures are shown on the tracker and do not hold up subsequent batches.
+The latest saved Profile and Memories are used when each fill begins. Backups do not export queue state.

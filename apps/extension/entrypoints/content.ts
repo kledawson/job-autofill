@@ -39,15 +39,22 @@ export default defineContentScript({
     /** Bumped by each Fill click, so a click replaces an earlier one that is still waiting for a form. */
     let generation = 0;
 
-    async function fill(applicationId?: number) {
+    let queueRun: string | undefined;
+    async function fill(applicationId?: number, runId?: string) {
       if (filling) return;
       const run = ++generation;
+      queueRun = runId;
       showStatus({ title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' });
-      if (!watchNow && !(await waitForForm(document, adapter, 3000)) && !(await waitLonger(run))) return;
+      if (runId) {
+        if (!await waitForForm(document, adapter, 15000)) {
+          if (run === generation) await sendToBackground('queueFinished', { runId, note: 'No application form found. Open this tab, sign in or click Apply, then retry.' });
+          return;
+        }
+      } else if (!watchNow && !(await waitForForm(document, adapter, 3000)) && !(await waitLonger(run))) return;
       if (run !== generation || filling) return;
       filling = true;
       try {
-        const context = await sendToBackground('getFillContext', {});
+        const context = await sendToBackground('getFillContext', { runId });
         if (!context?.profile) throw new Error((context as unknown as { error?: string })?.error ?? 'Reload the extension and application page.');
         currentRunId = context.runId;
         currentPresetId = context.preset?.id;
@@ -62,7 +69,7 @@ export default defineContentScript({
           jobDetails: (remote) => sendToBackground('jobDetails', remote),
           mapFields: (fields) => sendToBackground('mapFields', { fields }),
           matchSavedAnswers: async (fields) => {
-            const res = await sendToBackground('matchSavedAnswers', { fields });
+            const res = await sendToBackground('matchSavedAnswers', { fields, runId: context.runId });
             if (!res.ok) throw new Error(res.error);
             return res.matches;
           },
@@ -84,10 +91,17 @@ export default defineContentScript({
         console.debug(`[Job Autofill] build ${__BUILD__}: filling started`);
         showStatus({ title: 'Filling application…', lines: ['Filling fields from your profile.', `Build ${__BUILD__.slice(5, 16).replace('T', ' ')}`], tone: 'working' });
         const summary = await s.run();
+        if (run !== generation) return;
         currentId = id;
         await report(summary);
-        s.observe();
+        if (context.queue && context.runId) {
+          const empty = !summary.filledCount && !summary.aiAnswers && !summary.missingLabels.length;
+          await sendToBackground('queueFinished', { runId: context.runId, applicationId: id, ...(empty ? { note: 'This page has no fillable application fields. Sign in or continue to the form, then retry.' } : {}) });
+        }
+        // Queue fills are serialized. Later steps require an explicit Fill this step action.
+        if (run === generation) s.observe(!context.queue);
       } catch (err) {
+        if (runId && run === generation) await sendToBackground('queueFinished', { runId, note: String((err as Error)?.message ?? 'Autofill stopped.').slice(0, 500) }).catch(() => undefined);
         console.error('[Job Autofill]', err);
         showStatus({ title: 'Autofill stopped', lines: [String((err as Error)?.message ?? err)], tone: 'done' });
       } finally {
@@ -124,7 +138,7 @@ export default defineContentScript({
     async function report(summary: FillSummary) {
       if (currentId === undefined || !session) return;
       // A Workday page with nothing to fill yet (sign-in, a page between steps): keep watching.
-      if (watchNow && !summary.filledCount && !summary.aiAnswers && !summary.missingLabels.length) {
+      if (!queueRun && watchNow && !summary.filledCount && !summary.aiAnswers && !summary.missingLabels.length) {
         showStatus({
           title: 'Watching this application',
           lines: ['Sign in or continue to the next page. Each page is filled when it opens.'],
@@ -135,7 +149,8 @@ export default defineContentScript({
       // Counts show in the side panel's tiles; fields on the page are outlined in the matching colors.
       const lines: string[] = [];
       if (summary.aiNote) lines.push(summary.aiNote);
-      if (adapter.multiStep) lines.push('Review this page, then continue. Each next page is filled when it opens.');
+      if (queueRun) lines.push('Review and submit yourself. For later steps, use Fill this step in the queue.');
+      else if (adapter.multiStep) lines.push('Review this page, then continue. Each next page is filled when it opens.');
       showStatus({ title: 'Ready for review', lines, tone: 'done' });
       const details = await session.jobDetails().catch(() => null);
       await sendToBackground('fillFinished', {
@@ -189,9 +204,21 @@ export default defineContentScript({
         })();
         return true;
       }
+      if (msg.type === 'cancelQueue') {
+        if (msg.runId === queueRun || msg.runId === currentRunId) { generation++; session?.disconnect(); }
+        sendResponse({ ok: true }); return false;
+      }
       if (msg.type === 'ping') sendResponse({ ok: true, platform, filling: filling || session?.processing, presetId: currentPresetId, presetRevision: currentPresetRevision });
       if (msg.type === 'fill') {
-        void fill(msg.applicationId);
+        if (msg.runId) void (async () => {
+          if (!await waitForForm(document, adapter, 15000)) {
+            if (isTop) await sendToBackground('queueFinished', { runId: msg.runId!, note: 'No application form found. Open this tab, sign in or click Apply, then retry.' });
+            return;
+          }
+          const pending = await sendToBackground('claimPendingFill', { commit: true });
+          if (pending.fill && pending.runId === msg.runId) await fill(msg.applicationId, msg.runId);
+        })();
+        else void fill(msg.applicationId);
         sendResponse({ ok: true });
       }
       return false;
@@ -200,9 +227,14 @@ export default defineContentScript({
     // Tabs opened from a pasted link start filling on their own, in whichever frame holds the form.
     void (async () => {
       const pending = await sendToBackground('claimPendingFill', { commit: false });
-      if (!pending.fill || (!watchNow && !(await waitForForm(document, adapter, formWait)))) return;
+      if (!pending.fill) return;
+      const found = pending.queued ? await waitForForm(document, adapter, 15000) : watchNow || await waitForForm(document, adapter, formWait);
+      if (!found) {
+        if (pending.queued && pending.runId && isTop) await sendToBackground('queueFinished', { runId: pending.runId, note: 'No application form found. Open this tab, sign in or click Apply, then retry.' });
+        return;
+      }
       const claimed = await sendToBackground('claimPendingFill', { commit: true });
-      if (claimed.fill) await fill();
+      if (claimed.fill) await fill(undefined, claimed.runId);
     })();
   },
 });

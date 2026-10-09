@@ -141,3 +141,30 @@ Prepared text responses match only authored/approved exact wordings, precede Mem
 and cannot override classified Profile, upload, consent or challenge fields. They use the existing
 writer, length checks, preservation and read-back verification. No new network call, permission,
 dependency, account or backend is introduced.
+
+## Application review queue
+
+The sidebar replaces single-link entry with a parsed list and configurable batches of 1–5
+(default 3, maximum 100 URLs). Existing tracked jobs are excluded and can be opened for review.
+Queue metadata lives in applicationQueue; one immutable document snapshot lives in queueContexts.
+IndexedDB version 5 adds both tables. lib/application-queue.ts validates records and makes
+pure batch decisions. lib/queue-worker.ts atomically claims a single opening/filling attempt,
+then performs browser side effects. Opening pages register their attempt before navigation,
+so a stopped service worker cannot silently reopen the same application. Parent/page handshake
+races share the same transaction; only one binds the tab.
+
+One preset/document snapshot is stored per queue. Each new fill combines it with the latest
+Profile and current opt-in Gemini setting; its immutable fillRuns record binds tab, job, frame
+and attempt. Current Memories are matched locally before AI. Pending URLs hold no document
+copies and do not open browser tabs. A batch advances only when every current item is explicitly
+submitted or skipped and its owned tab has closed. Submission is recorded locally before optional
+Sheets synchronization, whose failure does not block the queue. No website Submit is clicked.
+
+Pause prevents the next claim; Stop disconnects the current session and preserves open pages.
+Queue observers update review/capture metadata but do not automatically fill later steps.
+An explicit Fill this step retries through the single scheduler and preserves non-empty values.
+Missing forms, closed tabs and bounded loading/fill timeouts require Retry or Skip. Chromium
+alarms (additional alarms permission) wake durable timeout/recovery checks without keeping the
+worker alive. Worker restarts reconcile state; browser restarts pause and detach previous tab IDs,
+since those IDs must not authorize closing tabs in a new session. Session-owned markers restrict
+closure to queue-created tabs. Previous restored pages are kept; retries open new owned tabs.

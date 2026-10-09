@@ -216,3 +216,32 @@ transaction atomicity, conservative defaults, import formats or Profile referenc
   Historical records stay readable. Existing fields/uploads remain protected; using a different
   preset on a live already-filled form requests a fresh form instead of silently mixing presets.
 - Profile JSON and Memories backup formats stay unchanged and exclude presets and their PDFs.
+
+## Application queue contract
+
+- applicationQueue is an additive IndexedDB v5 table with one current schemaVersion-1 record:
+  queue token, status, batch size, current batch, timestamp, preset display metadata and validated
+  items. A separate queueContexts table stores one pinned preset/document snapshot, so progress
+  transactions do not rewrite PDFs. The snapshot excludes the Profile and credentials. Each item holds its own
+  immutable ID, canonical URL/key, batch, state, attempt UUID, optional owned tab/frame/application
+  IDs, deadline and actionable note. Maximum 100 items, batch size 1–5. Generic job-ID query
+  parameters survive normalization; tracking parameters are removed. LinkedIn is excluded.
+- Queue creation, claims and item decisions use IndexedDB write transactions. Only one item may
+  be opening/filling. All current review items must settle and close before another batch starts.
+  Batch size edits affect future assignments. A new queue requires the old one complete/stopped.
+- startQueue, getQueue, controlQueue and queueAction require trusted extension pages. Actions and
+  IDs are validated. getQueue excludes document payloads. Queue/token/item IDs prevent stale-panel
+  actions from changing another queue. queueOpening additionally requires its exact extension-owned
+  opening URL and sender tab. queueFinished requires a permitted content sender; application results
+  must match run, tab and frame. Duplicate/late completions cannot advance a replaced attempt.
+- claimPendingFill carries optional queued/runId metadata and atomically claims one frame. Queue
+  content fills are bounded; missing forms require action. fillStarted and generateAnswer require an
+  active writing attempt; later review metadata may use the owned run without starting a new fill.
+  Explicit retries bind a new context and preserve user-entered values.
+- Submitted and Skip close only queue-created/session-owned tabs. Submitted requires a ready item
+  and explicit user confirmation; the tracker update is atomic with the queue decision. Skip does
+  not mark submitted or write Sheets. Sheets sync starts independently after local persistence.
+  A double click retries closure without creating another submission. Stop preserves opened tabs.
+- A worker restart retains attempts and contexts. A new browser session pauses the queue, invalidates
+  its old run contexts and detaches persisted tab IDs; restored website pages are kept. Queue records,
+  private document snapshots and run contexts are excluded from exports and cleared by Delete all data.

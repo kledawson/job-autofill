@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Application review queue
+
+- Replace single-link entry with a multiline list, preview, duplicate removal and existing-application review.
+- Process up to 100 links in configurable batches of 1–5 tabs (default 3), one fill at a time.
+- Wait for every current application to be explicitly submitted or skipped before opening the next batch.
+- Pin preset documents and prepared answers; use current Profile and Memories for each new fill.
+- Add pause/resume/stop, manual step filling, retry and actionable missing-form/closed-tab feedback.
+- Persist attempts and tab/frame ownership, recover worker interruptions and pause after browser restarts.
+- Keep document snapshots separate from progress records; unopened links create no tabs or PDF copies.
+- Record submission locally before optional Sheets writes; skipped jobs become Abandoned, with no Sheets write.
+- Add the alarms permission for durable timeout/recovery checks; no new dependency or backend.
+- Retain manual website submission, user-edit preservation and explicit Memories capture.
+
+
 ## Unreleased — Profile-aware saving and simpler Memories
 
 - Keep capture/Save all in the sidebar; browse and manage Memories in Settings.

@@ -4,8 +4,8 @@ A local-first Chrome extension for assisted job application autofill and applica
 
 **Status:** working MVP in [`apps/extension`](apps/extension/README.md): fills Greenhouse, Lever, Ashby, Workday, and other careers-site applications from a saved profile, writes free responses with Gemini (optional), tracks applications in Google Sheets (optional), and never submits for you.
 
-Recent improvements: multi-select memories, batch saving with profile updates, simpler reuse controls,
-and a searchable **Memories** library in Settings. See the [changelog](CHANGELOG.md).
+Recent improvements: role-specific presets, batches of applications with manual review, multi-select
+Memories, batch saving with profile updates, and a searchable **Memories** library in Settings. See the [changelog](CHANGELOG.md).
 
 ## Start here
 
@@ -20,6 +20,8 @@ Codex reads the root `AGENTS.md`. Claude Code loads `CLAUDE.md`, which imports t
 Set up your profile -> open an application -> fill -> review and answer remaining questions ->
 remember reusable answers -> submit manually -> mark submitted.
 
+- Choose a role preset, paste job links, and process configurable 1–5-tab review batches with one fill at a time.
+- Pause, stop or retry the queue; explicitly confirm submission before it advances to the next batch.
 - Fill supported fields from your profile or confirmed memories, with verified writes and preserved user edits.
 - Remember single answers or multiple selections, with approved variations and company/application/site scopes.
 - Review and save several answered questions together using **Save all answered questions**.

@@ -65,7 +65,7 @@ export function parsePreset(value: unknown): ApplicationPreset {
   };
 }
 /** Only presentation links change. Applicant facts and qualifications are never overridden. */
-export function profileForPreset(profile: Profile, preset: ApplicationPreset): Profile {
+export function profileForPreset(profile: Profile, preset: Pick<ApplicationPreset, 'links'>): Profile {
   const resolved = structuredClone(profile);
   for (const key of ['portfolio', 'github', 'website'] as const) {
     if (preset.links[key] !== null) resolved[key] = preset.links[key]!;

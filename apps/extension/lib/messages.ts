@@ -19,6 +19,7 @@ export interface FillContext {
   transcript: FilePayload | null;
   hasGeminiKey: boolean;
   runId?: string;
+  queue?: { token: string; itemId: string; attempt: string };
   preset?: Pick<import('./presets').ApplicationPreset, 'id' | 'name' | 'revision' | 'emphasis' | 'responses' | 'links'>;
 }
 
@@ -89,7 +90,13 @@ export interface BackgroundMessages {
   /** Location and work model from the platform's public posting API, for apply pages that don't show them. */
   jobDetails: { req: { platform: 'lever' | 'ashby'; org: string; jobId: string }; res: JobDetails };
   /** Tabs opened from a pasted link are marked pending; `commit` consumes the mark. */
-  claimPendingFill: { req: { commit: boolean }; res: { fill: boolean } };
+  claimPendingFill: { req: { commit: boolean }; res: { fill: boolean; queued?: boolean; runId?: string } };
+  queueOpening: { req: { attempt: string }; res: Result };
+  queueFinished: { req: { runId: string; applicationId?: number; note?: string }; res: Result };
+  getQueue: { req: {}; res: Result<{ queue: (import('./application-queue').QueueState & { presetName: string; resumeName?: string }) | null }> };
+  startQueue: { req: { urls: string[]; batchSize: number; presetId?: string }; res: Result };
+  controlQueue: { req: { action: 'pause' | 'resume' | 'stop' | 'size'; batchSize?: number }; res: Result };
+  queueAction: { req: { token: string; itemId: string; action: 'open' | 'retry' | 'submitted' | 'skip' }; res: Result };
   // From extension pages
   /** Opens a job link and fills it. Links outside the known job sites need the all-sites permission first. */
   startFill: {
@@ -98,7 +105,7 @@ export interface BackgroundMessages {
   };
   fillActiveTab: { req: { presetId?: string }; res: Result };
   getRememberedMappings: { req: { questions: string[] }; res: Result<{ mappings: RememberedMapping[] }> };
-  matchSavedAnswers: { req: { fields: SavedField[] }; res: Result<{ matches: { mapping: RememberedMapping | null; suggestionId?: number; reason: string }[] }> };
+  matchSavedAnswers: { req: { fields: SavedField[]; runId?: string }; res: Result<{ matches: { mapping: RememberedMapping | null; suggestionId?: number; reason: string }[] }> };
   capturePageAnswer: { req: { applicationId: number; token: string; suggestionId?: number }; res: Result<{ capture: CapturedAnswer; suggestion?: RememberedMapping }> };
   capturePageAnswers: { req: { applicationId: number; tokens: string[] }; res: Result<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }> };
   savePageAnswers: { req: { applicationId: number; entries: { token: string; captureId: string; mapping?: MappingDraft; profile?: import('./profile-learning').ProfileConfirmation }[] }; res: Result<{ count: number; profileCount: number; note: string }> };
@@ -139,7 +146,7 @@ export function sendToBackground<K extends keyof BackgroundMessages>(
 }
 
 /** Messages handled by the content script. */
-export type ContentMessage = { type: 'fill'; applicationId?: number } | { type: 'ping' } | { type: 'readPosting' } |
+export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: string } | { type: 'cancelQueue'; runId?: string } | { type: 'ping' } | { type: 'readPosting' } |
   { type: 'captureAnswer'; token: string; question: string } |
   { type: 'captureAnswers'; fields: { token: string; label: string }[] } |
   { type: 'validateCaptures'; entries: { token: string; captureId: string }[] } |

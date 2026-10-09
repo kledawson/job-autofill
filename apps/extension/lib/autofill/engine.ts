@@ -282,7 +282,7 @@ export class FillSession {
   }
 
   /** Watches for conditional follow-up questions, user edits, and (multi-step forms) the next step. */
-  observe() {
+  observe(autofill = true) {
     // A multi-step form swaps its whole form between steps, so watch the page instead.
     const root = (this.adapter.multiStep ? this.doc.body : this.root()) as Node;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -292,7 +292,7 @@ export class FillSession {
       timer = setTimeout(async () => {
         if (this.stopped) return;
         if (this.busy) return rescan();
-        const added = await this.processNew(true);
+        const added = autofill ? await this.processNew(true) : this.collectFresh(true).length;
         if (added) this.deps.onProgress?.(this.verify());
       }, 700);
     };
@@ -497,6 +497,7 @@ export class FillSession {
         grow.disconnect();
       }
       // Some forms reset a dropdown when a later field is touched; put back any that went blank.
+      if (this.stopped) { watcher.disconnect(); return fresh.length; }
       this.traceDropdowns('before restore');
       await this.restoreDropdowns(fresh);
       await this.restoreYesNo(fresh);
@@ -543,6 +544,7 @@ export class FillSession {
 
   /** Fills one field of the top-to-bottom pass, whatever kind of answer it takes. */
   private async fillRecord(rec: FieldRecord) {
+    if (this.stopped) return;
     if (rec.saved?.target.kind === 'answers') {
       try {
         const original = rec.field;
@@ -603,6 +605,7 @@ export class FillSession {
 
   private async restoreDropdowns(records: FieldRecord[]) {
     for (let round = 0; round < 3; round++) {
+      if (this.stopped) return;
       const lost = records.filter(
         (r) => r.field.kind === 'combobox' && r.outcome === 'filled' && r.field.el.isConnected && !comboboxHasValue(r.field),
       );
@@ -619,6 +622,7 @@ export class FillSession {
   /** A site that re-renders or resets (Ashby after a resume is read) can clear a Yes/No we answered; answer it again. */
   private async restoreYesNo(records: FieldRecord[]) {
     for (let round = 0; round < 3; round++) {
+      if (this.stopped) return;
       await sleep(timing.settle);
       const lost = records.filter(
         (r) => r.field.kind === 'yesno' && r.outcome === 'filled' && r.field.el.isConnected && yesNoExposesState(r.field) && !yesNoSelected(r.field),
@@ -633,6 +637,7 @@ export class FillSession {
   }
 
   private async fillProfileField(rec: FieldRecord) {
+    if (this.stopped) return;
     if (rec.cls.kind !== 'profile' && rec.cls.kind !== 'saved_answer') return;
     const { field } = rec;
     this.activeLabel = field.label;
@@ -651,6 +656,7 @@ export class FillSession {
       const yesNo = isYesNo(field.options) || (!field.options.length && field.kind !== 'text' && QUESTION_RE.test(field.label.trim()));
       // Salary answers follow the pay range posted in the job description when there is one.
       if (key === 'salary') await this.loadDescription();
+      if (this.stopped) return;
       const values = savedAnswer !== undefined ? [savedAnswer] : key ? valueFor(key, profile, {
         description: key === 'salary' ? (this.description ?? '') : undefined,
         phoneWithCode: !hasCodeField && WITH_CODE_RE.test(field.label.toLowerCase()),
@@ -697,6 +703,7 @@ export class FillSession {
       if (key === 'skills' && field.kind === 'prompt') {
         let added = 0;
         for (const [i, skill] of profile.skills.entries()) {
+          if (this.stopped) return;
           const out = await fillPrompt(field, [skill], { allowMore: i > 0, strict: true });
           if (i === 0 && out === 'already') {
             added = -1;
@@ -717,6 +724,7 @@ export class FillSession {
           // Add each race as its own chip; stop if the list was already answered before we started.
           let added = false;
           for (const [i, a] of answers.entries()) {
+            if (this.stopped) return;
             const out = await fillPrompt(field, a, { allowMore: i > 0 });
             if (i === 0 && out === 'already') {
               rec.outcome = 'already';
@@ -852,6 +860,7 @@ export class FillSession {
       clearOutline(field.outlineTarget);
       return;
     }
+    if (this.stopped || fieldHasValue(field) || !field.el.isConnected) return;
     rec.outcome = fillText(field, res.answer);
     if (rec.outcome === 'filled') {
       rec.ai = true;

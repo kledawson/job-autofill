@@ -254,10 +254,10 @@ test('onboarding reads the resume into the profile, then collects the rest', asy
 test('a pasted Lever link opens, fills, and waits for review without submitting', async () => {
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-  await panel.getByLabel('Job link').fill(LEVER_URL);
+  await panel.getByLabel('Job links', { exact: true }).fill(LEVER_URL);
 
   const previousPages = new Set(context.pages());
-  await panel.getByRole('button', { name: 'Open and fill' }).click();
+  await panel.getByRole('button', { name: 'Start queue', exact: true }).click();
   await expect.poll(() => context.pages().some((p) => !previousPages.has(p) && p.url().includes('/apply')), { timeout: 15_000 }).toBe(true);
   const form = context.pages().find((p) => !previousPages.has(p) && p.url().includes('/apply'))!;
   await form.evaluate(() => {
@@ -307,7 +307,7 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   // Side panel shows it as ready; marking it submitted updates the record.
   await panel.bringToFront();
   await panel.setViewportSize({ width: 380, height: 760 });
-  const row = panel.getByRole('listitem').filter({ hasText: 'Administrative Business Partner' });
+  const row = panel.locator('section').filter({ has: panel.getByRole('heading', { name: 'Applications', exact: true }) }).getByRole('listitem').filter({ hasText: 'Administrative Business Partner' });
   await expect(row).toContainText('Contoso Labs');
   await expect(row).toContainText('Ready for review');
   await shot(panel, 'sidepanel');
@@ -318,10 +318,11 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   expect(apps).toBe(true);
   await expect(row).toContainText('Submitted');
 
+  await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'controlQueue', action: 'stop' }));
   // Pasting the same job again warns before filling twice.
   await panel.getByLabel('Job link').fill(`${LEVER_URL}/apply`);
-  await panel.getByRole('button', { name: 'Open and fill' }).click();
-  await expect(panel.getByText(/You already filled this job/)).toBeVisible();
+  await expect(panel.getByText('Already tracked jobs are excluded.', { exact: false })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Start queue', exact: true })).toBeDisabled();
 });
 
 test('remembered mappings are taught in the panel, persisted, reused, edited and removed', async () => {
@@ -937,9 +938,9 @@ test('upgrades the actual old IndexedDB schema without losing legacy answers or 
       tx.oncomplete = () => { resolve({ version: d.version, stores: Array.from(d.objectStoreNames), record: record.result, profile: profile.result }); d.close(); };
     }; request.onerror = () => reject(request.error);
   }));
-  expect(result).toMatchObject({ version: 40, record: { id: 7, schemaVersion: 2, target: { value: 'Referral' }, aliases: ['Approved old alias'] }, profile: { firstName: 'Migration' } });
+  expect(result).toMatchObject({ version: 50, record: { id: 7, schemaVersion: 2, target: { value: 'Referral' }, aliases: ['Approved old alias'] }, profile: { firstName: 'Migration' } });
   expect(result.record.meaning).toBeUndefined();
-  expect(result.stores).toEqual(expect.arrayContaining(['presets', 'presetFiles', 'presetState', 'fillRuns']));
+  expect(result.stores).toEqual(expect.arrayContaining(['presets', 'presetFiles', 'presetState', 'fillRuns', 'applicationQueue', 'queueContexts']));
 });
 
 test('View opens the saved PDF in a new tab titled with its file name', async () => {

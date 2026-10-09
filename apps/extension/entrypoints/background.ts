@@ -1,3 +1,4 @@
+import { installQueue, queueStart, queuePublic, queueOpening, queuePending, queueFinished, queueControl, queueAction, queueRemoved, queueOwns, queueBusy, queueTab } from '@/lib/queue-worker';
 import { selectedPresetId, buildPresetContext } from '@/lib/preset-db';
 import { presetId } from '@/lib/presets';
 import { browser, type Browser } from 'wxt/browser';
@@ -138,6 +139,7 @@ async function ownedRun(id: string, sender: Sender) {
   if (!run || run.tabId !== sender.tab?.id || jobKey(run.topUrl) !== jobKey(sender.tab?.url ?? '')) {
     throw new Error('This fill session changed. Start filling this application again.');
   }
+  if (run.context.queue) await queueOwns(id, sender);
   return run;
 }
 
@@ -277,6 +279,31 @@ async function pageContext(sender: Sender): Promise<MappingContext> {
 // ---------------------------------------------------------------------------
 
 const handlers: Handlers = {
+  async getQueue(_req, sender) { requireExtensionPage(sender); return { ok: true, queue: await queuePublic() }; },
+  async startQueue(req, sender) { requireExtensionPage(sender); if (req.presetId !== undefined) presetId(req.presetId); await queueStart(req.urls, req.batchSize, req.presetId); return { ok: true }; },
+  async controlQueue(req, sender) {
+    requireExtensionPage(sender);
+    if (!['pause', 'resume', 'stop', 'size'].includes(req.action)) throw new Error('Invalid queue action.');
+    await queueControl(req.action, req.batchSize); return { ok: true };
+  },
+  async queueAction(req, sender) {
+    requireExtensionPage(sender); presetId(req.token); presetId(req.itemId);
+    if (!['open', 'retry', 'submitted', 'skip'].includes(req.action)) throw new Error('Invalid application action.');
+    const id = await queueAction(req.token, req.itemId, req.action);
+    if (id && (req.action === 'submitted' || req.action === 'skip')) await refreshBadge();
+    if (req.action === 'submitted' && id) void syncSheet(id);
+    return { ok: true };
+  },
+  async queueOpening(req, sender) { presetId(req.attempt); await queueOpening(req.attempt, sender); return { ok: true }; },
+  async queueFinished(req, sender) {
+    await pageContext(sender); presetId(req.runId);
+    if (req.note !== undefined && (typeof req.note !== 'string' || req.note.length > 500)) throw new Error('Invalid queue status.');
+    if (req.applicationId !== undefined) {
+      const app = await db.applications.get(req.applicationId);
+      if (!app || app.runId !== req.runId || app.tabId !== sender.tab?.id || (app.frameId ?? 0) !== (sender.frameId ?? 0)) throw new Error('Invalid application result.');
+    }
+    await queueFinished(req.runId, sender, req.applicationId, req.note); return { ok: true };
+  },
   async getRememberedMappings(req, sender) {
     const { platform } = await pageContext(sender);
     const questions = parseQuestionList(req.questions);
@@ -286,6 +313,7 @@ const handlers: Handlers = {
   async matchSavedAnswers(req, sender) {
     const context = await pageContext(sender);
     const fields = parseSavedFields(req.fields);
+    if (req.runId) await ownedRun(req.runId, sender);
     const index = new SavedAnswerIndex(await getRememberedMappings(), context);
     return { ok: true, matches: fields.map(f => index.match(f)) };
   },
@@ -416,6 +444,7 @@ const handlers: Handlers = {
     if (!settings.geminiApiKey) return { ok: false, error: 'Add a Gemini API key in settings to generate answers.' };
     try {
       const context = req.runId ? (await ownedRun(req.runId, sender)).context : await buildPresetContext();
+      if (context.queue && req.runId) await queueOwns(req.runId, sender, true);
       const guidance = context.preset?.emphasis?.trim();
       const prompt = renderPrompt(settings.promptTemplate, req, context.profile) +
         (guidance ? '\n\nRole emphasis selected by the applicant:\n' + guidance + '\nUse this only to prioritize verified profile facts. Do not invent qualifications or change applicant facts.' : '');
@@ -470,6 +499,7 @@ const handlers: Handlers = {
     if (sender.id !== browser.runtime.id || !sender.url || applicationKey(sender.url) !== applicationKey(req.url)) throw new Error('Invalid application sender.');
     if (sender.tab?.id !== undefined) fillingFrames.set(sender.tab.id, Date.now());
     const run = req.runId ? await ownedRun(req.runId, sender) : undefined;
+    if (run?.context.queue && req.runId) await queueOwns(req.runId, sender, true);
     const preset = run?.context.preset;
     const key = jobKey(req.url);
     const existing = await db.applications.where('jobKey').equals(key).last();
@@ -578,8 +608,12 @@ const handlers: Handlers = {
   },
 
   async claimPendingFill({ commit }, sender) {
+    if (typeof commit !== 'boolean') throw new Error('Invalid fill claim.');
+    await pageContext(sender);
     const tabId = sender.tab?.id;
     if (tabId === undefined) return { fill: false };
+    const queued = await queuePending(tabId, sender.frameId ?? 0, commit);
+    if (queued.fill || await queueTab(tabId)) return queued;
     const pending = await pendingTabs();
     if (!pending.includes(tabId)) return { fill: false };
     if (commit) await setPendingTabs(pending.filter((id) => id !== tabId));
@@ -588,6 +622,7 @@ const handlers: Handlers = {
 
   async startFill({ url, force, presetId: selectedId }, sender) {
     requireExtensionPage(sender);
+    if (await queueBusy()) throw new Error('Wait for the queue to finish its current fill, or pause it first.');
     if (selectedId !== undefined) presetId(selectedId);
     let parsed: URL;
     try {
@@ -627,6 +662,8 @@ const handlers: Handlers = {
     if (selectedId !== undefined) presetId(selectedId);
     const tab = await activeTab();
     if (!tab?.id) return { ok: false, error: 'No active tab.' };
+    if (await queueTab(tab.id)) throw new Error('Use Fill this step in the queue to keep the selected preset.');
+    if (await queueBusy()) throw new Error('Wait for the current queue fill to finish.');
     if (tab.url !== undefined && !isWebUrl(tab.url)) return { ok: false, error: 'Open a job application page first.' };
     const profile = await getProfile();
     if (!profile.firstName || !profile.email) {
@@ -802,7 +839,9 @@ const handlers: Handlers = {
   },
 
   async deleteAllData() {
+    await queueControl('stop');
     await Promise.all([
+      db.applicationQueue.clear(), db.queueContexts.clear(),
       db.presets.clear(), db.presetFiles.clear(), db.presetState.clear(), db.fillRuns.clear(),
       db.profile.clear(),
       db.files.clear(),
@@ -820,6 +859,7 @@ const handlers: Handlers = {
 };
 
 export default defineBackground(() => {
+  installQueue();
   browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
 
   browser.runtime.onInstalled.addListener(({ reason }) => {
@@ -850,11 +890,13 @@ export default defineBackground(() => {
   // Links opened from the side panel on sites without an automatic content script get it once loaded.
   browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
     if (change.status !== 'complete' || !tab.url || detectPlatform(tab.url)) return;
-    if (!(await pendingTabs()).includes(tabId) || !(await canAccess(tab.url))) return;
+    if (!(await pendingTabs()).includes(tabId) && !await queueTab(tabId)) return;
+    if (!(await canAccess(tab.url))) return;
     await injectContentScript(tabId).catch((err) => console.warn('[Job Autofill] could not load into the opened tab', errorText(err)));
   });
 
   browser.tabs.onRemoved.addListener(async (tabId) => {
+    await queueRemoved(tabId);
     fillingFrames.delete(tabId);
     await db.fillRuns.where('tabId').equals(tabId).delete();
     await browser.storage.session.remove(pageStatusKey(tabId));
@@ -863,4 +905,8 @@ export default defineBackground(() => {
   });
 
   void refreshBadge();
+  // A worker interruption after local submission must not lose a queued Sheets write.
+  void db.applications.where('status').equals('Submitted').toArray().then(apps => {
+    for (const app of apps) if (app.id && app.sheetError === 'Sheet sync pending. Retry from the application tracker if needed.') void syncSheet(app.id);
+  });
 });

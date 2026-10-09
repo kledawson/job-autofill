@@ -6,6 +6,16 @@
 - Directory boundaries, architecture, and initial contracts.
 - Contribution workflow, issue/PR templates, and repository checks.
 
+## Implemented application queue
+
+- Multiline link preview, duplicate detection and existing-application review.
+- User-started 1–5-tab batches with one fill at a time and an explicit review/submission barrier.
+- Pinned preset/documents, per-attempt ownership, persisted recovery and pause/stop/retry controls.
+- Local confirmed submission independent of optional Sheets success.
+
+Future work: confidence-based field review colors. Parallel application filling remains deferred
+until queue reliability and performance are measured.
+
 ## Implemented application presets
 
 - Role presets with shared personal facts, independent resumes/cover letters and portfolio links.

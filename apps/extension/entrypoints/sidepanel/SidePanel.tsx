@@ -1,3 +1,4 @@
+import { ApplicationQueue } from '@/components/ApplicationQueue';
 import { PresetSelector } from '@/components/Presets';
 import { ProfileAnswer } from '@/components/ProfileAnswer';
 import { useEffect, useState } from 'react';
@@ -96,18 +97,16 @@ export default function SidePanel() {
   const { id: tabId, url: tabUrl } = useActiveTab();
   const current = applications.find((a) => a.tabId === tabId && a.status !== 'Submitted') ?? applications.find((a) => a.tabId === tabId);
   const pageStatus = usePageStatus(tabId, tabUrl);
+  const queue = useLiveQuery(() => db.applicationQueue.get('current'));
   const [presetId, setPresetId] = useState<string>();
 
-  const [link, setLink] = useState('');
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [duplicate, setDuplicate] = useState<{ filledAt: number; status: string } | null>(null);
   /** The tab and job where Fill this page was clicked. Its details show only there: another tab or application starts hidden. */
   const [shown, setShown] = useState<{ tabId: number; key: string }>();
   /** Set by Open and fill, whose new tab has no id yet: its details open once the application exists. */
   const [opened, setOpened] = useState(false);
   const here = tabId !== undefined && tabUrl ? { tabId, key: jobKey(tabUrl) } : undefined;
-  const showing = !!here && shown?.tabId === here.tabId && shown.key === here.key;
+  const showing = !!here && ((shown?.tabId === here.tabId && shown.key === here.key) || !!queue?.items.some(i => i.tabId === here.tabId && i.applicationId === current?.id));
   useEffect(() => {
     if (opened && current && here) {
       setShown(here);
@@ -126,20 +125,6 @@ export default function SidePanel() {
   }, [here?.tabId, here?.key]);
 
   const setupGaps = profile ? missingRequired(profile) : [];
-
-  async function openAndFill(force = false) {
-    setError('');
-    setDuplicate(null);
-    if (!presetId) return;
-    if (!(await ensureAccess(link.trim()))) return setError(ACCESS_DENIED);
-    setBusy(true);
-    const res = await sendToBackground('startFill', { url: link, force, presetId });
-    setBusy(false);
-    if (!res.ok) return setError(res.error);
-    if (res.duplicate) return setDuplicate(res.duplicate);
-    setOpened(true);
-    setLink('');
-  }
 
   async function fillThisPage() {
     setError('');
@@ -188,28 +173,9 @@ export default function SidePanel() {
       )}
 
       <PresetSelector onSelected={setPresetId} />
+      <ApplicationQueue presetId={presetId} />
 
-      <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <label className="block font-medium text-slate-800" htmlFor="job-link">
-          Job Link
-        </label>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (link.trim()) void openAndFill();
-          }}
-        >
-          <Input
-            id="job-link"
-            value={link}
-            onChange={(e) => setLink(e.target.value)}
-            placeholder="Application Link"
-          />
-          <Button type="submit" disabled={busy || !link.trim() || !presetId} className="shrink-0">
-            Open and fill
-          </Button>
-        </form>
+      <section id="current-page-review" aria-label="Current page review" className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <Button variant="secondary" className="w-full" disabled={!presetId} onClick={fillThisPage}>
           Fill this page
         </Button>
@@ -220,14 +186,7 @@ export default function SidePanel() {
             <PageStatusBox status={pageStatus ?? { title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' }} />
           ))}
         {error && <Notice tone="error">{error}</Notice>}
-        {duplicate && (
-          <Notice tone="warn">
-            You already filled this job on {when(duplicate.filledAt)} ({duplicate.status}).{' '}
-            <button className="font-medium underline" onClick={() => openAndFill(true)}>
-              Fill it again
-            </button>
-          </Notice>
-        )}
+
       </section>
 
       <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
