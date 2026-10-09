@@ -1,3 +1,4 @@
+import { PresetSelector } from '@/components/Presets';
 import { ProfileAnswer } from '@/components/ProfileAnswer';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
@@ -95,7 +96,7 @@ export default function SidePanel() {
   const { id: tabId, url: tabUrl } = useActiveTab();
   const current = applications.find((a) => a.tabId === tabId && a.status !== 'Submitted') ?? applications.find((a) => a.tabId === tabId);
   const pageStatus = usePageStatus(tabId, tabUrl);
-  const resume = useLiveQuery(() => db.files.get('resume'));
+  const [presetId, setPresetId] = useState<string>();
 
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
@@ -129,9 +130,10 @@ export default function SidePanel() {
   async function openAndFill(force = false) {
     setError('');
     setDuplicate(null);
+    if (!presetId) return;
     if (!(await ensureAccess(link.trim()))) return setError(ACCESS_DENIED);
     setBusy(true);
-    const res = await sendToBackground('startFill', { url: link, force });
+    const res = await sendToBackground('startFill', { url: link, force, presetId });
     setBusy(false);
     if (!res.ok) return setError(res.error);
     if (res.duplicate) return setDuplicate(res.duplicate);
@@ -141,9 +143,10 @@ export default function SidePanel() {
 
   async function fillThisPage() {
     setError('');
+    if (!presetId) return;
     if (!(await ensureAccess(tabUrl))) return setError(ACCESS_DENIED);
     if (here) setShown(here);
-    const res = await sendToBackground('fillActiveTab', {});
+    const res = await sendToBackground('fillActiveTab', { presetId });
     if (!res.ok) {
       setShown(undefined);
       setError(res.error);
@@ -177,14 +180,14 @@ export default function SidePanel() {
               </button>
             </Notice>
           )}
-          {resume === null && (
-            <Notice tone="warn">No resume uploaded, so upload fields will be left for you.</Notice>
-          )}
+
           {settings && !settings.hasGeminiKey && (
             <Notice tone="info">Add a Gemini key in Settings to get AI-written free responses.</Notice>
           )}
         </>
       )}
+
+      <PresetSelector onSelected={setPresetId} />
 
       <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <label className="block font-medium text-slate-800" htmlFor="job-link">
@@ -203,11 +206,11 @@ export default function SidePanel() {
             onChange={(e) => setLink(e.target.value)}
             placeholder="Application Link"
           />
-          <Button type="submit" disabled={busy || !link.trim()} className="shrink-0">
+          <Button type="submit" disabled={busy || !link.trim() || !presetId} className="shrink-0">
             Open and fill
           </Button>
         </form>
-        <Button variant="secondary" className="w-full" onClick={fillThisPage}>
+        <Button variant="secondary" className="w-full" disabled={!presetId} onClick={fillThisPage}>
           Fill this page
         </Button>
         {showing &&
@@ -249,7 +252,7 @@ export default function SidePanel() {
                     {a.role || 'Untitled role'}
                   </a>
                   <p className="truncate text-xs text-slate-500">
-                    {a.company} · {PLATFORM_NAMES[a.platform]} · {when(a.filledAt)}
+                    {a.company} · {a.presetName ? a.presetName + ' · ' : ''}{PLATFORM_NAMES[a.platform]} · {when(a.filledAt)}
                   </p>
                   {a.sheetError && <p className="truncate text-xs text-amber-700">Sheet not updated: {a.sheetError}</p>}
                 </div>
@@ -394,6 +397,7 @@ function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; p
         <div className="min-w-0">
           <p className="truncate font-semibold text-slate-900">{app.role || 'Application'}</p>
           <p className="truncate text-slate-500">{app.company}</p>
+          {app.presetName && <p className="mt-1 break-words text-xs text-slate-600">Preset used: {app.presetName}{app.resumeName ? ' · ' + app.resumeName : ' · no resume'}</p>}
         </div>
         <StatusPill status={app.status} />
       </div>

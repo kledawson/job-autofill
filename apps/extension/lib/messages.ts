@@ -18,9 +18,12 @@ export interface FillContext {
   coverLetter: FilePayload | null;
   transcript: FilePayload | null;
   hasGeminiKey: boolean;
+  runId?: string;
+  preset?: Pick<import('./presets').ApplicationPreset, 'id' | 'name' | 'revision' | 'emphasis' | 'responses' | 'links'>;
 }
 
 export interface AnswerRequest {
+  runId?: string;
   question: string;
   characterLimit: number;
   company: string;
@@ -51,19 +54,20 @@ export type Result<T = {}> = ({ ok: true } & T) | { ok: false; error: string };
 /** Messages handled by the background worker, with their response types. */
 export interface BackgroundMessages {
   // From the content script
-  getFillContext: { req: {}; res: FillContext };
+  getFillContext: { req: { runId?: string }; res: FillContext };
   generateAnswer: { req: AnswerRequest; res: Result<{ answer: string }> };
   /** Matches questions no rule recognised to profile keys (null when none fits). */
   mapFields: { req: { fields: FieldQuestion[] }; res: Result<{ keys: (string | null)[] }> };
   /** Whether another frame of this tab started filling recently (a form inside an embedded frame). */
   frameFilling: { req: {}; res: { active: boolean } };
   fillStarted: {
-    req: { url: string; company: string; role: string; platform: Platform };
+    req: { url: string; company: string; role: string; platform: Platform; runId?: string };
     res: { applicationId: number };
   };
   fillFinished: {
     req: {
       applicationId: number;
+      runId?: string;
       company: string;
       role: string;
       filledCount: number;
@@ -89,10 +93,10 @@ export interface BackgroundMessages {
   // From extension pages
   /** Opens a job link and fills it. Links outside the known job sites need the all-sites permission first. */
   startFill: {
-    req: { url: string; force?: boolean };
+    req: { url: string; force?: boolean; presetId?: string };
     res: Result<{ duplicate?: { filledAt: number; status: string } }>;
   };
-  fillActiveTab: { req: {}; res: Result };
+  fillActiveTab: { req: { presetId?: string }; res: Result };
   getRememberedMappings: { req: { questions: string[] }; res: Result<{ mappings: RememberedMapping[] }> };
   matchSavedAnswers: { req: { fields: SavedField[] }; res: Result<{ matches: { mapping: RememberedMapping | null; suggestionId?: number; reason: string }[] }> };
   capturePageAnswer: { req: { applicationId: number; token: string; suggestionId?: number }; res: Result<{ capture: CapturedAnswer; suggestion?: RememberedMapping }> };

@@ -232,3 +232,34 @@ the preview, refresh the preview and review the choices again. All selected chan
 
 Backup/restore runs in the Settings page, so an older running background worker cannot prevent the
 file download. After rebuilding, reload the extension and reopen Settings to load the updated controls.
+
+## Application presets
+
+Settings → Presets lets you create a preset for each type of role, such as Software Engineer or
+Hardware Engineer. Name the preset, choose a resume, and click **Save and use preset**. Select it
+in the sidebar before **Fill this page** or **Open and fill**; the resume filename is shown before
+you start. Duplicate a preset to reuse its configuration.
+
+Each preset can use the shared resume/cover letter from Documents, its own uploaded PDF, or no
+document. Uploads are limited to 10 MB and are saved only when the preset is saved. Optional
+portfolio, GitHub and website choices inherit Profile links unless explicitly changed.
+
+**Prepared responses** are authored text answers used before Gemini. They apply to the selected
+preset only. Matching uses the original question and explicitly entered alternate wordings;
+unfamiliar wording is not guessed. They do not replace recognized Profile facts, dropdowns,
+consent or challenge controls. Personal Memories remain shared. Keep company-specific answers
+in scoped Memories rather than an unrestricted prepared response.
+
+**AI writing focus** tells Gemini which existing experience to emphasize. It is sent only when
+the existing optional Gemini integration generates an answer. It adds no skills, credentials or
+eligibility facts. Your identity, education, work history, skills and authorization remain shared
+from Profile; transcripts remain shared from Documents.
+
+A fill keeps a local snapshot of its preset, Profile and documents, including AI context and
+later conditional questions. Switching/editing/deleting presets does not change an ongoing fill.
+To apply a different preset to a form already filled, reload or open a fresh form first; review
+the site's behavior because existing answers and uploads are preserved. Application cards record
+the chosen preset and resume. Default preserves existing shared-document behavior.
+
+Presets and their PDFs stay local. Profile JSON and Memories backups do not include presets or
+preset documents. Delete all local data includes presets, their documents and fill snapshots.

@@ -118,3 +118,26 @@ Restore review temporarily hides the saved library. Conflicts appear first with 
 radio choices and visible answers/reuse limits; answer-equivalent conflicts open matching details.
 New items have explicit add/skip states and group selection controls. Exact existing rules are collapsed
 under Already saved. Live added/replaced/kept/skipped counts explain the final confirmation action.
+
+## Application presets
+
+lib/presets.ts validates versioned role presets and resolves only presentation links over the
+shared Profile. lib/preset-db.ts stores presets and immutable PDF documents transactionally.
+Settings provides a guided create/edit view, duplication, confirmed deletion and explicit
+Save and use feedback. The sidebar selects a preset and shows its resume filename.
+
+IndexedDB version 4 adds presets, presetFiles, presetState and fillRuns without changing existing
+tables. Default inherits shared documents and links. Initialization runs on explicit operations;
+live queries only read storage. Revision checks reject stale edits, and document garbage collection
+retains files referenced by another preset.
+
+New links first open a lightweight extension-owned loading screen. Before navigating to the job
+application or filling an existing tab, background binds an immutable run context to that tab
+and job identity. AI reads this persisted context, never the newly selected global preset.
+Frame/tab ownership and run IDs reject cross-tab or stale requests/results. Fill snapshots survive
+worker shutdown and are removed when their tab closes or another explicit fill replaces them.
+Recognized canonical link fields use explicit preset links before shared fixed-answer Memories.
+Prepared text responses match only authored/approved exact wordings, precede Memories and AI,
+and cannot override classified Profile, upload, consent or challenge fields. They use the existing
+writer, length checks, preservation and read-back verification. No new network call, permission,
+dependency, account or backend is introduced.

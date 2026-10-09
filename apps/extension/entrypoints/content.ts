@@ -31,6 +31,9 @@ export default defineContentScript({
     // Workday: start watching right away and fill whatever page is showing, then each page after it.
     const watchNow = !!adapter.watchWholeFlow && isTop;
     let session: FillSession | null = null;
+    let currentRunId: string | undefined;
+    let currentPresetId: string | undefined;
+    let currentPresetRevision: number | undefined;
     /** True while fields are being filled; a Fill click then is ignored. */
     let filling = false;
     /** Bumped by each Fill click, so a click replaces an earlier one that is still waiting for a form. */
@@ -45,10 +48,15 @@ export default defineContentScript({
       filling = true;
       try {
         const context = await sendToBackground('getFillContext', {});
+        if (!context?.profile) throw new Error((context as unknown as { error?: string })?.error ?? 'Reload the extension and application page.');
+        currentRunId = context.runId;
+        currentPresetId = context.preset?.id;
+        currentPresetRevision = context.preset?.revision;
+        currentId = undefined;
         session?.disconnect();
         const s = new FillSession(document, adapter, {
           context,
-          answer: (req) => sendToBackground('generateAnswer', req),
+          answer: (req) => sendToBackground('generateAnswer', { ...req, runId: context.runId }),
           jobDescription: async (info) =>
             info.remote ? sendToBackground('jobDescription', info.remote) : ((await adapter.fetchDescription?.(document)) ?? ''),
           jobDetails: (remote) => sendToBackground('jobDetails', remote),
@@ -69,6 +77,7 @@ export default defineContentScript({
               company: s.info.company,
               role: s.info.role,
               platform,
+              runId: context.runId,
             })
           ).applicationId;
 
@@ -131,6 +140,7 @@ export default defineContentScript({
       const details = await session.jobDetails().catch(() => null);
       await sendToBackground('fillFinished', {
         applicationId: currentId,
+        runId: currentRunId,
         company: session.info.company,
         role: session.info.role,
         filledCount: summary.filledCount,
@@ -179,7 +189,7 @@ export default defineContentScript({
         })();
         return true;
       }
-      if (msg.type === 'ping') sendResponse({ ok: true, platform });
+      if (msg.type === 'ping') sendResponse({ ok: true, platform, filling: filling || session?.processing, presetId: currentPresetId, presetRevision: currentPresetRevision });
       if (msg.type === 'fill') {
         void fill(msg.applicationId);
         sendResponse({ ok: true });

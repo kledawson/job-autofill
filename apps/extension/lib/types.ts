@@ -186,6 +186,11 @@ export type ApplicationStatus = 'Filling' | 'Ready for review' | 'Submitted' | '
 export type Platform = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'other';
 
 export interface Application {
+  presetId?: string;
+  presetName?: string;
+  presetRevision?: number;
+  resumeName?: string;
+  runId?: string;
   id?: number;
   url: string;
   /** Normalized job identity, see jobKey() */

@@ -482,7 +482,7 @@ export function DataSection({ onImported }: { onImported: () => void }) {
   }
 
   async function deleteAll() {
-    if (!await confirmDelete('Delete all local data?', 'Your profile, documents, Memories, history and settings will be deleted from this browser. Your Google Sheet is kept.', 'Delete all data')) return;
+    if (!await confirmDelete('Delete all local data?', 'Your profile, documents, presets, Memories, history and settings will be deleted from this browser. Your Google Sheet is kept.', 'Delete all data')) return;
     try { await sendToBackground('deleteAllData', {}); setMessage({ tone: 'success', text: 'All local data deleted.' }); onImported(); }
     catch { setMessage({ tone: 'error', text: 'Could not delete all local data. Try again.' }); }
   }
