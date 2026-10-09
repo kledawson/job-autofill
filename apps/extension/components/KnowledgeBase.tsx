@@ -10,6 +10,7 @@ import type { Profile } from '@/lib/types';
 import { applicationKey, companyKey, scopeLabel, parseMappingDraft, REMEMBERABLE_PROFILE_FIELDS,
   targetText, type AnswerSelection, type CapturedAnswer, type MappingContext, type MappingDraft, type MappingScope, type RememberableProfileKey, type RememberedMapping } from '@/lib/remembered-mappings';
 import { ReuseScope } from './ReuseScope';
+import { MemoryBackupControls } from './MemoryBackup';
 import { confirmDelete } from './confirm-delete';
 import { useLiveQuery } from './hooks';
 import { Button, Field, Input, Notice, Select, Textarea } from './ui';
@@ -216,6 +217,8 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
   const root = useRef<HTMLElement>(null);
   const [editing, setEditing] = useState<RememberedMapping | 'new' | null>(null);
   const [removing, setRemoving] = useState<number>();
+  const [transferActive, setTransferActive] = useState(false);
+  const [reviewingRestore, setReviewingRestore] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [search, setSearch] = useState('');
@@ -230,7 +233,7 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
   const filtered = useMemo(() => browseMemories(available, search, filter, sort), [available, search, filter, sort]);
   // Another open extension window can change/delete a record. Keep the draft reachable until Cancel.
   const visible = editing && editing !== 'new' && !filtered.some(m => m.id === editing.id) ? [...filtered, editing] : filtered;
-  const locked = !!editing || removing !== undefined;
+  const locked = !!editing || removing !== undefined || transferActive;
   function focusAction(id?: number) {
     requestAnimationFrame(() => {
       const action = id === undefined ? null : root.current?.querySelector<HTMLElement>(`[data-memory-id="${id}"] [data-memory-edit]`);
@@ -261,9 +264,12 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
   return <section ref={root} aria-label={context ? 'Page memories' : 'Memory library'} className={`min-w-0 space-y-4 rounded-xl border border-slate-200 bg-white shadow-sm ${context ? 'p-4' : 'p-5'}`}>
     <div className="flex flex-wrap items-start justify-between gap-2">
       <div className="min-w-0 flex-1"><h2 className={context ? 'font-semibold text-slate-900' : 'text-base font-semibold text-slate-900'}>{context ? 'Memories for This Page' : 'Memories'}</h2>
-        <p className={context ? 'mt-1 text-xs text-slate-600' : 'mt-0.5 text-sm text-slate-500'}>{context ? 'Edit or delete a remembered answer here. Changes apply to future fills.' : 'Answers you confirmed for future applications. Search, edit or delete them here.'}</p></div>
-      {!context && <Button variant="secondary" disabled={locked} onClick={() => beginEdit('new')}>Add memory</Button>}
+        <p className={context ? 'mt-1 text-xs text-slate-600' : 'mt-0.5 text-sm text-slate-500'}>{context ? 'Edit or delete a remembered answer here. Changes apply to future fills.' : reviewingRestore ? 'Review the backup below. Confirm your choices or cancel to return to your saved Memories.' : 'Answers you confirmed for future applications. Search, edit or delete them here.'}</p></div>
+      {!context && !reviewingRestore && <Button variant="secondary" disabled={locked} onClick={() => beginEdit('new')}>Add memory</Button>}
     </div>
+    {!context && <MemoryBackupControls disabled={!!editing || removing !== undefined} count={mappings?.length ?? 0} onActiveChange={setTransferActive} onReviewChange={setReviewingRestore} />}
+    <div hidden={reviewingRestore} className="space-y-4">
+    {!context && <div><h3 className="font-semibold text-slate-900">Your saved Memories</h3><p className="mt-1 text-sm text-slate-500">These answers are saved in this browser and reused on matching application questions.</p></div>}
     {context && <div className="flex flex-wrap gap-2" role="group" aria-label="Memories to show">
       <Button variant={!all ? 'primary' : 'secondary'} aria-pressed={!all} disabled={locked} onClick={() => { setAll(false); }}>This page ({pageRecords.length})</Button>
       <Button variant={all ? 'primary' : 'secondary'} aria-pressed={all} disabled={locked} onClick={() => { setAll(true); }}>All memories ({mappings?.length ?? 0})</Button>
@@ -284,12 +290,13 @@ export function MemoryLibrary({ context, questions = [] }: { context?: MappingCo
       {editing !== 'new' && editing?.id === m.id ? editor(editing) : <>
         <p className="font-semibold text-slate-900 break-words">{m.question}</p>
         <div className="mt-2 rounded-lg bg-slate-50 p-2"><p className="text-xs font-medium text-slate-500">{m.target.kind === 'profile' ? 'Linked profile detail' : m.target.kind === 'answers' ? `${m.target.selections.length} remembered selections` : 'Remembered answer'}</p><p className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap break-words text-slate-800">{targetText(m.target)}</p></div>
-        <p className="mt-2 break-words text-xs font-medium text-indigo-700">{scopeLabel(m.scope)}</p>
+        <p className="mt-2 break-words text-xs font-medium text-indigo-700">Reuse for: {scopeLabel(m.scope)}</p>
         <p className="mt-1 text-xs text-slate-500">{m.meaning ? 'Recognized variations' : 'Approved wording'} · {m.lastUsed ? `Last used ${new Date(m.lastUsed).toLocaleDateString()}` : 'Not applied yet'}</p>
         {!!m.aliases.length && <details className="mt-2 text-xs text-slate-600"><summary className="cursor-pointer">Approved variations ({m.aliases.length})</summary><ul className="mt-2 space-y-1">{m.aliases.map(q => <li key={q} className="break-words">{q}</li>)}</ul></details>}
         <div className="mt-3 flex gap-2"><Button data-memory-edit variant="secondary" disabled={locked} onClick={() => beginEdit(m)}>Edit</Button><Button variant="secondary" disabled={locked} onClick={async () => { if (await confirmDelete('Delete this memory?', m.question + ' — It will no longer autofill. Your current page answer will stay.', 'Delete memory')) await remove(m); else { setFeedback('Deletion canceled. Your memory was kept.'); focusAction(m.id); } }}>Delete</Button></div>
       </>}
     </li>)}</ul>
+    </div>
     {error && <div role="alert"><Notice tone="error">{error}</Notice></div>}
     {feedback && <div className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-sm rounded-lg bg-white shadow-lg"><Notice tone="success"><div className="flex items-start gap-2"><p role="status" aria-live="polite" className="flex-1">{feedback}</p><button aria-label="Dismiss memory notification" className="rounded px-1 font-semibold focus-visible:ring-2 focus-visible:ring-indigo-500" onClick={() => setFeedback('')}>×</button></div></Notice></div>}
   </section>;

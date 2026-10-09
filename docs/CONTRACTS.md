@@ -156,3 +156,33 @@ A confirmed profile update can relink the matching fixed-answer Memory to the pr
 shows this change; its ID, approved wording, scope and usage history stay intact. Concurrent edits reject
 the save. Unrelated Memories are not migrated. GPA options use exact numeric scores or a single
 compatible range; overlapping ranges and different scores remain manual.
+
+## Memories backup contract
+
+- Envelope: { format: "job-autofill-memories", version: 1, createdAt, memories }; createdAt is a
+  nonnegative representable epoch timestamp. Maximum 5 MB UTF-8 and 1,000 input records.
+- Each Memory retains its supported record version (1–3), timestamps, question, approved aliases,
+  meaning, scope and target. IDs are excluded on export and regenerated on import. Unexpected
+  properties are discarded; invalid known fields reject the entire file. No meanings are inferred.
+- exportMemoryBackup, previewMemoryRestore and restoreMemoryBackup are called directly from the
+  trusted Settings page, accessing only extension-origin IndexedDB. No page-content bridge or new
+  worker-message handler is exposed. Export refuses unreadable stored records; restore validates all fields.
+- Preview identifies new items, complete approved-rule duplicates, and same-scope overlapping rules.
+  Identical input rules are deduplicated. Different overlapping rules within the file are rejected.
+  Current records linked by several incoming rules form one conflict choice.
+- Confirmation includes the preview token and exactly one keep or backup choice per nonduplicate
+  group. New items default to backup; conflicts default to keep. An override replaces the complete
+  rule/group, including aliases and targets. No unrelated records or Profile values change.
+- The token hashes file contents plus an ID-sorted current-record snapshot excluding lastUsed.
+  Edits/additions/deletions require a fresh preview. Revalidation inside the write transaction closes
+  concurrent-edit races. All selected writes/deletions succeed together or roll back.
+- New rules preserve original update/usage dates; replacements get the current update time and retain
+  the latest usage date. Result counts report added/replaced/removed/duplicate/kept/skipped records.
+- Profile-linked targets resolve from the current destination Profile; backups contain no Profile
+  snapshot, documents, credentials, Sheets settings or application tracker records.
+
+Restore UI separates stored data from pending choices. Different versions show current and incoming
+answers plus matching-rule differences; new items can be excluded individually or together. The
+summary counts actual records added and removed, including grouped overlaps. Identical stored rules
+and repeated entries inside a file are described separately. Layout changes do not alter matching,
+transaction atomicity, conservative defaults, import formats or Profile references.

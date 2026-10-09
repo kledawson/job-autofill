@@ -203,3 +203,32 @@ npm run test:e2e  # builds, then drives the real extension in Chromium (hermetic
 ## Planned improvements
 
 An offline Sheets write queue and multiple profiles remain future work.
+
+## Backup and restore Memories
+
+In **Settings → Memories**, select **Backup Memories** to download a dated JSON file containing all
+Memories, including items hidden by search or filters. The file preserves approved question variations,
+answer labels, multi-select choices, Profile links, reuse limits and usage dates. It excludes your
+Profile values, documents, application history and connection credentials. Back up the Profile
+separately in **Settings → Data**. Treat the backup as personal data because it contains your answers.
+
+To restore, select **Restore Memories** and choose that file. The review separates **Different versions**, **New Memories**, and **Already saved**. Compare saved
+and backup answers side by side. Conflicts default to **Keep my saved answer**; choose **Use the backup
+answer** only where you want a replacement. New items are selected by default; uncheck them or choose
+**Skip all new** to exclude them. Identical items need no action. Review the added/replaced counts,
+then select **Apply these choices**. With no changes selected, use **Finish without changes**.
+**Cancel restore** changes nothing. The saved library is hidden during review so pending choices cannot
+be confused with answers already saved.
+Overlapping rules that share existing Memories are grouped under one choice so keeping a Memory
+cannot remove it through another override. This merges selected items; unrelated existing items stay saved.
+
+Profile links use the destination browser’s current Profile; they do not copy old Profile values.
+Local record IDs are regenerated. Legacy exact-wording rules remain exact-wording rules; restoring
+does not approve new variations or broaden reuse limits. Reimporting identical rules creates no duplicates.
+
+Files must use backup format version 1, contain at most 1,000 Memories and fit within 5 MB. Malformed
+or internally conflicting backups are rejected before saving. If another window edits Memories after
+the preview, refresh the preview and review the choices again. All selected changes commit together.
+
+Backup/restore runs in the Settings page, so an older running background worker cannot prevent the
+file download. After rebuilding, reload the extension and reopen Settings to load the updated controls.
