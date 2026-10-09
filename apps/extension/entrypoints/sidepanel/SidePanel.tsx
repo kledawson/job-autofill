@@ -7,9 +7,10 @@ import { missingRequired } from '@/components/ProfileSections';
 import { Button, cx, Input, Notice } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
-import { ALL_SITES, detectPlatform, PLATFORM_NAMES } from '@/lib/platforms';
+import { ALL_SITES, detectPlatform, jobKey, PLATFORM_NAMES } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
 import { draftForCapture, MappingEditor } from '@/components/KnowledgeBase';
+import { confirmDelete } from '@/components/confirm-delete';
 import { BatchRemember } from '@/components/BatchRemember';
 import type { CapturedAnswer, MappingDraft, ReviewField } from '@/lib/remembered-mappings';
 
@@ -101,6 +102,28 @@ export default function SidePanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [duplicate, setDuplicate] = useState<{ filledAt: number; status: string } | null>(null);
+  /** The tab and job where Fill this page was clicked. Its details show only there: another tab or application starts hidden. */
+  const [shown, setShown] = useState<{ tabId: number; key: string }>();
+  /** Set by Open and fill, whose new tab has no id yet: its details open once the application exists. */
+  const [opened, setOpened] = useState(false);
+  const here = tabId !== undefined && tabUrl ? { tabId, key: jobKey(tabUrl) } : undefined;
+  const showing = !!here && shown?.tabId === here.tabId && shown.key === here.key;
+  useEffect(() => {
+    if (opened && current && here) {
+      setShown(here);
+      setOpened(false);
+    }
+  }, [opened, current, here?.tabId, here?.key]);
+  // A fill started by anything other than this panel's button (a message, shortcut or another panel) reports status while it runs.
+  useEffect(() => {
+    if (!here) return;
+    const key = pageStatusKey(here.tabId);
+    const onChanged = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area === 'session' && changes[key]?.newValue) setShown(here);
+    };
+    browser.storage.onChanged.addListener(onChanged);
+    return () => browser.storage.onChanged.removeListener(onChanged);
+  }, [here?.tabId, here?.key]);
 
   const setupGaps = profile ? missingRequired(profile) : [];
 
@@ -114,6 +137,7 @@ export default function SidePanel() {
     setBusy(false);
     if (!res.ok) return setError(res.error);
     if (res.duplicate) return setDuplicate(res.duplicate);
+    setOpened(true);
     setLink('');
   }
 
@@ -121,8 +145,12 @@ export default function SidePanel() {
     setError('');
     if (!presetId) return;
     if (!(await ensureAccess(tabUrl))) return setError(ACCESS_DENIED);
+    if (here) setShown(here);
     const res = await sendToBackground('fillActiveTab', { presetId });
-    if (!res.ok) setError(res.error);
+    if (!res.ok) {
+      setShown(undefined);
+      setError(res.error);
+    }
   }
 
   return (
@@ -163,7 +191,7 @@ export default function SidePanel() {
 
       <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <label className="block font-medium text-slate-800" htmlFor="job-link">
-          Job link
+          Job Link
         </label>
         <form
           className="flex gap-2"
@@ -176,7 +204,7 @@ export default function SidePanel() {
             id="job-link"
             value={link}
             onChange={(e) => setLink(e.target.value)}
-            placeholder="Paste any job application link"
+            placeholder="Application Link"
           />
           <Button type="submit" disabled={busy || !link.trim() || !presetId} className="shrink-0">
             Open and fill
@@ -185,6 +213,12 @@ export default function SidePanel() {
         <Button variant="secondary" className="w-full" disabled={!presetId} onClick={fillThisPage}>
           Fill this page
         </Button>
+        {showing &&
+          (current ? (
+            <CurrentApplication key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} />
+          ) : (
+            <PageStatusBox status={pageStatus ?? { title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' }} />
+          ))}
         {error && <Notice tone="error">{error}</Notice>}
         {duplicate && (
           <Notice tone="warn">
@@ -196,16 +230,7 @@ export default function SidePanel() {
         )}
       </section>
 
-      {current ? (
-        <CurrentApplication key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} />
-      ) : (
-        pageStatus && (
-          <section className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
-            <p className="text-xs font-medium uppercase tracking-wide text-indigo-700">This tab</p>
-            <PageStatusBox status={pageStatus} />
-          </section>
-        )
-      )}
+      <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
 
       <section className="flex-1">
         <div className="mb-2 flex items-center justify-between">
@@ -229,14 +254,92 @@ export default function SidePanel() {
                   <p className="truncate text-xs text-slate-500">
                     {a.company} · {a.presetName ? a.presetName + ' · ' : ''}{PLATFORM_NAMES[a.platform]} · {when(a.filledAt)}
                   </p>
+                  {a.sheetError && <p className="truncate text-xs text-amber-700">Sheet not updated: {a.sheetError}</p>}
                 </div>
                 <StatusPill status={a.status} />
+                <button
+                  type="button"
+                  className="shrink-0 rounded-md px-1.5 py-1 text-slate-400 hover:bg-red-50 hover:text-red-700 focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  aria-label={`Delete ${a.role || 'application'} at ${a.company} from this list`}
+                  title="Delete from this list"
+                  onClick={async () => {
+                    if (!(await confirmDelete('Delete this application?', `${a.role || 'Untitled role'} at ${a.company} will be removed from this list. Your Google Sheet is not changed.`, 'Delete'))) return;
+                    const res = await sendToBackground('deleteApplication', { applicationId: a.id! });
+                    if (!res.ok) setError(res.error);
+                  }}
+                >
+                  ✕
+                </button>
               </li>
             ))}
           </ul>
         )}
       </section>
     </div>
+  );
+}
+
+/** For postings with no form to fill (e.g. a one-click apply): log the link as submitted and add it to the sheet. */
+function TrackOnly({ tabUrl, sheetUrl }: { tabUrl?: string; sheetUrl?: string }) {
+  const [link, setLink] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState<{ note: string; sheetRow?: number; sheetError?: string } | null>(null);
+
+  async function submit() {
+    setError('');
+    setDone(null);
+    // Reading the open posting needs site access; tracking still works if it is declined. Must be the first await in the click.
+    await ensureAccess(link.trim()).catch(() => false);
+    setBusy(true);
+    const res = await sendToBackground('trackApplication', { url: link });
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    setDone({ note: res.note, sheetRow: res.sheetRow, sheetError: res.sheetError });
+    setLink('');
+  }
+
+  const usable = tabUrl && /^https?:\/\//i.test(tabUrl) ? tabUrl : '';
+  return (
+    <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h2 className="font-medium text-slate-800">Track Without Autofill</h2>
+      <p className="text-xs text-slate-500">For postings with just an Apply button. Log the link as submitted and add it to your sheet.</p>
+      <form
+        className="space-y-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (link.trim()) void submit();
+        }}
+      >
+        <div className="flex gap-2">
+          <Input aria-label="Application Link" value={link} onChange={(e) => setLink(e.target.value)} placeholder="Application Link" />
+          {usable && !link && (
+            <Button type="button" variant="secondary" className="shrink-0" onClick={() => setLink(usable)}>
+              This tab
+            </Button>
+          )}
+        </div>
+        <Button type="submit" className="w-full" disabled={busy || !link.trim()}>
+          Mark as submitted
+        </Button>
+      </form>
+      {error && <Notice tone="error">{error}</Notice>}
+      {done && (
+        <>
+          <Notice tone="info">Marked as submitted. {done.note}</Notice>
+          {done.sheetRow && sheetUrl ? (
+            <Notice tone="success">
+              Added to your sheet (row {done.sheetRow}).{' '}
+              <a className="underline" href={`${sheetUrl}#range=A${done.sheetRow}`} target="_blank" rel="noreferrer">
+                Open sheet
+              </a>
+            </Notice>
+          ) : done.sheetError ? (
+            <Notice tone="warn">Sheet not updated: {done.sheetError}</Notice>
+          ) : null}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -289,10 +392,9 @@ function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; p
     finally { setCapturing(undefined); }
   }
   return (
-    <section className="space-y-3 rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
+    <div className="space-y-3 border-t border-slate-100 pt-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-wide text-indigo-700">This tab</p>
           <p className="truncate font-semibold text-slate-900">{app.role || 'Application'}</p>
           <p className="truncate text-slate-500">{app.company}</p>
           {app.presetName && <p className="mt-1 break-words text-xs text-slate-600">Preset used: {app.presetName}{app.resumeName ? ' · ' + app.resumeName : ' · no resume'}</p>}
@@ -392,7 +494,7 @@ function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; p
         </>
       )}
       {error && <Notice tone="error">{error}</Notice>}
-    </section>
+    </div>
   );
 }
 

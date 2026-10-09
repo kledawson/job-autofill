@@ -247,3 +247,37 @@ test('opening a pasted link pins the requested preset before loading and cleans 
   await form.close();
   await expect.poll(async () => (await readRows('fillRuns')).length).toBe(0);
 });
+
+test('tracking without autofill still reads the posting and deletes its record without filling the form', async () => {
+  const baseline = await readRows('profile');
+  const url = URL.replace('preset-proof', 'tracking-proof');
+  const form = await context.newPage();
+  await form.goto(url);
+  await form.evaluate(() => {
+    document.title = 'Contoso - Fictional Hardware Engineer';
+    const description = document.createElement('div');
+    description.dataset.qa = 'job-description';
+    description.textContent = 'A fictional engineering role.';
+    document.body.prepend(description);
+  });
+  const sidebar = await context.newPage();
+  await sidebar.goto('chrome-extension://' + extensionId + '/sidepanel.html');
+  const tracking = sidebar.locator('section').filter({ has: sidebar.getByRole('heading', { name: 'Track Without Autofill', exact: true }) });
+  await tracking.getByLabel('Application Link', { exact: true }).fill(url);
+  await tracking.getByRole('button', { name: 'Mark as submitted', exact: true }).click();
+  await expect(tracking).toContainText('Marked as submitted.');
+  const application = (await readRows('applications')).find(a => a.url === url);
+  expect(application).toMatchObject({ company: 'Contoso', role: 'Fictional Hardware Engineer', status: 'Submitted', filledCount: 0 });
+  expect(application.presetId).toBeUndefined();
+  expect(application.runId).toBeUndefined();
+  await expect(form.locator('#first')).toHaveValue('');
+  await expect(form.locator('#email')).toHaveValue('');
+  expect(await form.locator('#resume').evaluate((input: HTMLInputElement) => input.files?.length)).toBe(0);
+  const row = sidebar.getByRole('listitem').filter({ has: sidebar.getByRole('link', { name: 'Fictional Hardware Engineer', exact: true }) });
+  await row.getByRole('button', { name: 'Delete Fictional Hardware Engineer at Contoso from this list', exact: true }).click();
+  await sidebar.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  expect((await readRows('applications')).some(a => a.url === url)).toBe(false);
+  expect(await readRows('profile')).toEqual(baseline);
+  await sidebar.close(); await form.close();
+});

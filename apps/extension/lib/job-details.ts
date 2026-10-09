@@ -13,10 +13,17 @@ export interface JobDetails {
 
 const COUNTRY_RE = /^(united states( of america)?|usa|u\.s\.a?\.?|us|canada|united kingdom|uk)$/i;
 
-/** "San Francisco, CA, United States" → "San Francisco, CA". Anything unusual is kept as written. */
+/**
+ * "San Francisco, CA, United States" → "San Francisco, CA"; office names such as "US Campbell HQ" → "Campbell" and
+ * "US-CA-San Jose" → "San Jose, CA". Anything unusual is kept as written.
+ */
 export function formatLocation(raw: string): string {
-  const text = raw.replace(/\s+/g, ' ').trim();
+  let text = raw.replace(/\s+/g, ' ').trim();
   if (!text || text.length > 80) return '';
+  const countryFirst = /^(?:usa?|united states)\s*-\s*([A-Z]{2})\s*-\s*([^,-]+)$/i.exec(text);
+  if (countryFirst) return `${countryFirst[2]!.trim()}, ${countryFirst[1]!.toUpperCase()}`;
+  // Office names: a leading country code and a trailing "HQ" / "Office" say nothing about the city.
+  if (!text.includes(',')) text = text.replace(/^(?:usa?|u\.s\.a?\.?)\s+(?=\w)/i, '').replace(/\s+(?:hq|headquarters|office|campus)$/i, '');
   const parts = text.split(',').map((p) => p.trim()).filter(Boolean);
   if (parts.length > 2 && COUNTRY_RE.test(parts[parts.length - 1]!)) parts.pop();
   return parts.join(', ');
@@ -110,10 +117,10 @@ const WORKPLACE_SELECTORS = '.posting-categories .workplaceTypes, [data-automati
 const textOf = (doc: Document, selector: string) =>
   (doc.querySelector<HTMLElement>(selector)?.textContent ?? '').replace(/\s+/g, ' ').trim();
 
-/** Reads location and work model from a posting page; either may come back blank. */
-export function readJobDetails(doc: Document, description: string, role: string): JobDetails {
+/** Reads location and work model from a posting page; either may come back blank. `knownLocation` (from the adapter) wins. */
+export function readJobDetails(doc: Document, description: string, role: string, knownLocation = ''): JobDetails {
   const job = findJobPosting(doc);
-  let location = job ? structuredLocation(job) : '';
+  let location = knownLocation || (job ? structuredLocation(job) : '');
   if (!location) location = formatLocation(textOf(doc, LOCATION_SELECTORS));
   let workMode: WorkModel | '' = job?.jobLocationType === 'TELECOMMUTE' ? 'Remote' : '';
   workMode ||= normalizeWorkMode(textOf(doc, WORKPLACE_SELECTORS));

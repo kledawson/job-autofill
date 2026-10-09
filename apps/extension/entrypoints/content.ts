@@ -3,6 +3,7 @@ import { ADAPTERS } from '@/lib/autofill/adapters';
 import { FillSession, waitForForm, type FillSummary } from '@/lib/autofill/engine';
 import { sendToBackground, type ContentMessage, type PageStatus } from '@/lib/messages';
 import { ATS_MATCHES, platformFor } from '@/lib/platforms';
+import { readJobDetails } from '@/lib/job-details';
 
 /** How long a multi-step application (Workday) is watched for its form while the person signs in or clicks Apply. */
 const MULTI_STEP_WAIT = 30 * 60_000;
@@ -167,6 +168,24 @@ export default defineContentScript({
             else if (msg.type === 'finishRemembering') { session.finishRemembering(msg.entries); sendResponse({ ok: true }); }
             else sendResponse({ ok: true, note: await session.applyAnswer(msg.token, msg.captureId, msg.mapping) });
           } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not read this field.' }); }
+        })();
+        return true;
+      }
+      if (msg.type === 'readPosting') {
+        // Reads the posting's details without touching the form, for tracking an application that has nothing to fill.
+        void (async () => {
+          try {
+            const info = adapter.jobInfo(document);
+            const description = info.description || ((await adapter.fetchDescription?.(document).catch(() => '')) ?? '');
+            let details = readJobDetails(document, description, info.role, info.location);
+            if (info.remote && !(details.location && details.workMode && details.pay)) {
+              const remote = await sendToBackground('jobDetails', info.remote).catch(() => null);
+              details = { location: details.location || remote?.location || '', workMode: details.workMode || remote?.workMode || '', pay: details.pay || remote?.pay || '' };
+            }
+            sendResponse({ ok: true, company: info.company, role: info.role, ...details });
+          } catch {
+            sendResponse({ ok: false });
+          }
         })();
         return true;
       }

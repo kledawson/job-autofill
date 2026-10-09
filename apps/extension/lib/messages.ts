@@ -107,6 +107,10 @@ export interface BackgroundMessages {
   saveRememberedMapping: { req: { mapping: MappingDraft; id?: number }; res: Result<{ id: number }> };
   removeRememberedMapping: { req: { id: number }; res: Result };
   markSubmitted: { req: { applicationId: number }; res: Result };
+  /** Records an application that has nothing to autofill (e.g. a one-click apply) as submitted and adds it to the sheet. */
+  /** Removes the application from the extension's list only; the Google Sheet is never touched. */
+  deleteApplication: { req: { applicationId: number }; res: Result };
+  trackApplication: { req: { url: string }; res: Result<{ applicationId: number; note: string; sheetRow?: number; sheetError?: string }> };
   setGeminiKey: { req: { apiKey: string }; res: {} };
   testGemini: { req: { apiKey?: string; model?: string }; res: Result };
   /** Reads the uploaded resume with Gemini. Returns validated draft fields; the caller merges them. */
@@ -135,7 +139,7 @@ export function sendToBackground<K extends keyof BackgroundMessages>(
 }
 
 /** Messages handled by the content script. */
-export type ContentMessage = { type: 'fill'; applicationId?: number } | { type: 'ping' } |
+export type ContentMessage = { type: 'fill'; applicationId?: number } | { type: 'ping' } | { type: 'readPosting' } |
   { type: 'captureAnswer'; token: string; question: string } |
   { type: 'captureAnswers'; fields: { token: string; label: string }[] } |
   { type: 'validateCaptures'; entries: { token: string; captureId: string }[] } |

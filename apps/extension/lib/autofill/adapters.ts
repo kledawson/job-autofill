@@ -1,13 +1,15 @@
 import type { Platform, Profile } from '../types';
 import type { AdapterKeys } from './classify';
 import { addEntries } from './entries';
-import { findJobPosting } from '../job-details';
+import { findJobPosting, formatLocation } from '../job-details';
 
 export interface JobInfo {
   company: string;
   role: string;
   /** Description text found on the page, if any. */
   description: string;
+  /** "City, ST" when the platform states it more reliably than the page (Workday's URL); blank otherwise. */
+  location?: string;
   /** For platforms whose form page lacks the description: identifiers to fetch it by. */
   remote?: { platform: 'lever' | 'ashby'; org: string; jobId: string };
 }
@@ -206,6 +208,49 @@ function shortHeading(doc: Document): string {
   return h1.length > 0 && h1.length < 120 ? h1 : '';
 }
 
+/** "Software Engineer at Acme | Handshake" or "Engineer - Acme - Handshake" → role and company; blanks when the title doesn't say. */
+export function splitTitle(title: string): { role: string; company: string } {
+  const parts = title.split(/\s+[|–—]\s+|\s+-\s+/).map((p) => p.trim()).filter((p) => p && !/^(handshake|jobs?|careers?|apply|application)$/i.test(p));
+  const first = parts[0] ?? '';
+  const at = /^(.+?)\s+at\s+(.+)$/i.exec(first);
+  if (at) return { role: at[1]!.trim(), company: at[2]!.trim() };
+  // "Careers at Airbnb", "Jobs at Acme": the employer is what follows.
+  const company = (parts[1] ?? '').replace(/^(?:careers?|jobs?|work|working)\s+(?:at|with|for)\s+/i, '');
+  return { role: first, company };
+}
+
+const PLACE = /^[A-Z][\p{L} .'-]+(, [A-Z][\p{L} .'-]+){1,2}$/u;
+
+/** A short line such as "London, United Kingdom" or "Austin, TX" among the first lines after the job title; blank if none. */
+export function placeAfterTitle(doc: Document): string {
+  const h1 = Array.from(doc.querySelectorAll('h1')).find((h) => (h.textContent ?? '').trim().length > 2);
+  if (!h1) return '';
+  const lines = Array.from(doc.body.querySelectorAll('*'))
+    .filter((el) => !el.children.length && !!(h1.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && !h1.contains(el))
+    .map((el) => (el.textContent ?? '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  for (const t of lines.slice(0, 15)) if (t.length < 60 && !/\d/.test(t) && PLACE.test(t)) return t;
+  return '';
+}
+
+/** Handshake job pages: the title reads "Role | Company | Handshake" and the posting sits in [data-hook="job-details-page"]. */
+function handshakeInfo(doc: Document): JobInfo | null {
+  if (!/(^|\.)joinhandshake\.com$/.test(doc.location.hostname)) return null;
+  const root = doc.querySelector<HTMLElement>('[data-hook="job-details-page"]');
+  const fromTitle = splitTitle(doc.title);
+  const role = (root && text(root, 'h1')) || fromTitle.role;
+  const description = root ? (root.innerText ?? root.textContent ?? '').trim().slice(0, 8000) : '';
+  // Short leaf text such as "Austin, TX" or "Remote" near the top of the posting.
+  const place = root
+    ? Array.from(root.querySelectorAll('span, div, p, li'))
+        .filter((el) => !el.children.length)
+        .map((el) => (el.textContent ?? '').replace(/\s+/g, ' ').trim())
+        .slice(0, 80)
+        .find((t) => t.length < 60 && (/^[A-Z][\w .'-]+, [A-Z]{2}\b/.test(t) || /^[A-Z][\w .'-]+, [A-Z][a-z]+( [A-Z][a-z]+)*$/.test(t)))
+    : '';
+  return { role, company: fromTitle.company, description, location: place || undefined };
+}
+
 /** Any careers site or form without a dedicated adapter: everything comes from labels and page metadata. */
 const other: Adapter = {
   platform: 'other',
@@ -226,15 +271,22 @@ const other: Adapter = {
     return best && bestCount >= 3 ? best : doc.body;
   },
   jobInfo(doc) {
+    const handshake = handshakeInfo(doc);
+    if (handshake) return handshake;
     const data = jobPostingData(doc);
     const title = doc.title.split(/\s+[|–—-]\s+/)[0]?.trim() ?? '';
     const description =
       data?.description ||
       longText(doc, '[itemprop="description"], [class*="job-description" i], [class*="jobDescription" i], [id*="job-description" i], [id*="jobDescription" i]').slice(0, 8000);
+    const fromTitle = splitTitle(meta(doc, 'og:title') || doc.title);
+    const siteName = meta(doc, 'og:site_name');
+    // A site name like "Handshake" names the job board, not the employer, so a company in the title wins.
+    const company = data?.company || fromTitle.company || siteName || companyFromHost(doc.location.hostname);
     return {
-      role: data?.title || shortHeading(doc) || meta(doc, 'og:title') || title,
-      company: data?.company || meta(doc, 'og:site_name') || companyFromHost(doc.location.hostname),
+      role: data?.title || shortHeading(doc) || fromTitle.role || meta(doc, 'og:title') || title,
+      company,
       description,
+      location: placeAfterTitle(doc) || undefined,
     };
   },
   prepare: addEntries,
@@ -256,6 +308,17 @@ function workdayPosting(doc: Document): { tenant: string; site: string; jobPath:
   const end = parts.indexOf('apply');
   const jobPath = parts.slice(job + 1, end > job ? end : undefined).join('/');
   return jobPath ? { tenant, site, jobPath } : null;
+}
+
+/** Workday's location slug: "Campbell,-CA", "Santa-Clara-CA" or "US-CA-San-Jose" → "City, ST"; blank for anything else. */
+export function workdayLocation(slug: string): string {
+  let text = decodeURIComponent(slug);
+  const countryFirst = /^usa?-([A-Z]{2})-(.+)$/i.exec(text);
+  if (countryFirst) return formatLocation(`${countryFirst[2]!.replace(/-/g, ' ')}, ${countryFirst[1]!.toUpperCase()}`);
+  text = text.replace(/-/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text.includes(',')) text = text.replace(/ ([A-Z]{2})$/, ', $1');
+  if (/multiple|locations|various/i.test(text)) return '';
+  return formatLocation(text);
 }
 
 const workday: Adapter = {
@@ -304,7 +367,9 @@ const workday: Adapter = {
     const posting = workdayPosting(doc);
     const fromPath = (posting?.jobPath.split('/').pop() ?? '').replace(/_[A-Z]*[-_]?\d[\w-]*$/, '').replace(/-/g, ' ').trim();
     const tenant = posting?.tenant ?? '';
+    const segments = posting?.jobPath.split('/') ?? [];
     return {
+      location: segments.length > 1 ? workdayLocation(segments[0]!) : '',
       role: text(doc, '[data-automation-id="jobPostingHeader"]') || fromPath || shortHeading(doc),
       company: meta(doc, 'og:site_name') || (tenant ? tenant.charAt(0).toUpperCase() + tenant.slice(1) : ''),
       description: longText(doc, '[data-automation-id="jobPostingDescription"]'),

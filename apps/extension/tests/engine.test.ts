@@ -86,6 +86,19 @@ describe('capture and semantic reuse', () => {
     await setup(choice, [mapping]).run();
     expect((document.querySelector('select') as HTMLSelectElement).value).toBe('BS');
   });
+  it('captures a dropdown whose accessible name becomes only its answer', async () => {
+    const q = 'Has an immediate family member ever been employed by Contoso?';
+    const session = setup(`<div><p>${q}*</p><button id="fam" aria-haspopup="listbox" aria-required="true">Select One</button></div>`);
+    const review = (await session.run()).reviewFields!.find(f => f.label === q)!;
+    const button = document.getElementById('fam')!;
+    // Workday-style: once answered, the button is named by its selected value rather than the question.
+    button.innerHTML = '<span id="fam-value">No</span><span hidden>Select One</span>';
+    button.setAttribute('aria-labelledby', 'fam-value');
+    expect(scanFields(document).find(f => f.el === button)!.label).toBe('No');
+    const capture = session.captureAnswer(review.token, review.label);
+    expect(capture.label).toBe(q);
+    expect(capture.value).toBe('No');
+  });
   it('retains manually answered questions and captures only the selected answer', async () => {
     const session = setup(choice + '<label for="other">Unrelated question*</label><input id="other" required>');
     const result = await session.run();
@@ -550,6 +563,20 @@ describe('Lever', () => {
 });
 
 describe('Ashby', () => {
+  it('leaves the "Autofill from resume" box alone and uploads only to the Resume field', async () => {
+    const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    const top = doc.createElement('div');
+    top.className = 'ashby-application-form-autofill-uploader';
+    top.innerHTML = '<div><input type="file" accept=".pdf"><div>Autofill from resume</div><div>Upload your resume here to autofill key application fields.</div></div>';
+    doc.body.insertBefore(top, doc.body.firstChild);
+    const topInput = top.querySelector('input') as HTMLInputElement;
+    const fields = scanFields(doc.body);
+    const topField = fields.find((f) => f.el === topInput)!;
+    expect(classifyField(topField, ADAPTERS.ashby.keys).kind).toBe('unknown');
+    const real = fields.find((f) => f.el.id === '_systemfield_resume')!;
+    expect(classifyField(real, ADAPTERS.ashby.keys)).toMatchObject({ key: 'resume' });
+  });
+
   it('clicks Yes/No buttons, skips anti-bot puzzles, and flags unknown questions', async () => {
     const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
     for (const btn of Array.from(doc.querySelectorAll('button[data-option]'))) {
@@ -560,7 +587,7 @@ describe('Ashby', () => {
     const { d, answers } = deps();
     const summary = await new FillSession(doc, ADAPTERS.ashby, d).run();
 
-    expect((doc.getElementById('_systemfield_name') as HTMLInputElement).value).toBe('Jordan Rivera');
+    expect((doc.getElementById('_systemfield_name') as HTMLInputElement).value).toBe('Jo Rivera');
     expect((doc.getElementById('dc915b3a-linkedin') as HTMLInputElement).value).toContain('linkedin');
     const auth = doc.querySelector('[data-field-path="3080cfba-auth"] button[data-option="yes"]')!;
     expect(auth.getAttribute('aria-pressed')).toBe('true');
@@ -581,6 +608,30 @@ describe('Ashby', () => {
       ]),
     );
     expect(submits).toBe(0);
+  });
+
+  it('answers a Yes/No again when the page clears it, and flags one the page will not keep', async () => {
+    const doc = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    const buttons = Array.from(doc.querySelectorAll('[data-field-path="3080cfba-auth"] button[data-option]'));
+    // Like Ashby: clicking the pressed option clears it. The page also resets the answer once, as a resume parse would.
+    let resets = 0;
+    for (const btn of buttons) {
+      btn.addEventListener('click', () => {
+        const wasPressed = btn.getAttribute('aria-pressed') === 'true';
+        btn.parentElement!.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === btn && !wasPressed)));
+        if (resets++ === 0) setTimeout(() => buttons.forEach((b) => b.setAttribute('aria-pressed', 'false')), 0);
+      });
+    }
+    const { d } = deps();
+    const summary = await new FillSession(doc, ADAPTERS.ashby, d).run();
+    expect(doc.querySelector('[data-field-path="3080cfba-auth"] button[data-option="yes"]')!.getAttribute('aria-pressed')).toBe('true');
+    expect(summary.missingLabels).not.toContain('Are you legally authorized to work in the United States?');
+
+    // A page that ignores the click entirely is reported as unanswered, not as filled.
+    const stuck = loadFixture('ashby.html', 'https://jobs.ashbyhq.com/example/abc-123/application');
+    const { d: d2 } = deps();
+    const result = await new FillSession(stuck, ADAPTERS.ashby, d2).run();
+    expect(result.missingLabels.some((l) => l.startsWith('Are you legally authorized'))).toBe(true);
   });
 
   it('always agrees to "Acknowledge, confirm, and agree" as a dropdown or a checkbox', async () => {

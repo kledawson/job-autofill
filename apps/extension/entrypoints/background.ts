@@ -169,6 +169,63 @@ async function canAccess(url: string): Promise<boolean> {
   }
 }
 
+type PostingRead = { company: string; role: string; location: string; workMode: string; pay: string };
+
+/** Asks the content script in `tabId` to read the posting, loading it first if needed. */
+async function readTab(tabId: number): Promise<PostingRead | null> {
+  try {
+    // The main page specifically: a pinged iframe (an embedded application form) says nothing about it.
+    await browser.tabs.sendMessage(tabId, { type: 'ping' } satisfies ContentMessage, { frameId: 0 });
+  } catch {
+    await injectContentScript(tabId);
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  // The posting itself is on the main page; an embedded application form (an iframe) only fills in what it lacks.
+  const ask = (frameId?: number) =>
+    browser.tabs.sendMessage(tabId, { type: 'readPosting' } satisfies ContentMessage, frameId === undefined ? undefined : { frameId }).catch(() => undefined) as Promise<(PostingRead & { ok: boolean }) | undefined>;
+  const top = await ask(0);
+  const inner = !top?.ok || !top.role || !top.company || !top.location ? await ask() : undefined;
+  const reads = [top, inner].filter((r): r is PostingRead & { ok: boolean } => !!r?.ok);
+  if (!reads.length) return null;
+  const pick = (key: keyof PostingRead) => reads.map((r) => r[key]).find(Boolean) ?? '';
+  return { company: pick('company'), role: pick('role'), location: pick('location'), workMode: pick('workMode'), pay: pick('pay') };
+}
+
+/**
+ * Posting details for this job: read from a tab already showing it, or from the link opened in a background
+ * tab (closed afterwards). Single-page sites render late, so the read repeats until a title appears.
+ */
+async function readOpenPosting(key: string, url: string): Promise<{ read?: PostingRead; why?: string }> {
+  let opened: number | undefined;
+  try {
+    const tabs = (await browser.tabs.query({})).filter((t) => t.id !== undefined && isWebUrl(t.url) && jobKey(t.url!) === key);
+    let tab = tabs.find((t) => t.active) ?? tabs[0];
+    if (!tab?.id) {
+      if (!(await canAccess(url))) return { why: 'allow Job Autofill to read this site, or open the job in a tab first' };
+      tab = await browser.tabs.create({ url, active: false });
+      opened = tab.id;
+      for (let i = 0; i < 30 && tab.status !== 'complete'; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        tab = await browser.tabs.get(tab.id!);
+      }
+    } else if (!(await canAccess(tab.url!))) {
+      return { why: 'Job Autofill does not have permission to read this site' };
+    }
+    let best: PostingRead | null = null;
+    for (let i = 0; i < (opened === undefined ? 1 : 8); i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1000));
+      const read = await readTab(tab.id!).catch(() => null);
+      if (read) best = read;
+      if (best?.role && best.company) break;
+    }
+    return best ? { read: best } : { why: 'the page could not be read' };
+  } catch (err) {
+    return { why: `the page could not be read (${errorText(err)})` };
+  } finally {
+    if (opened !== undefined) await browser.tabs.remove(opened).catch(() => undefined);
+  }
+}
+
 const NEEDS_ACCESS = 'Job Autofill needs permission to read this site. Click Fill this page again and choose Allow.';
 
 /** Loads the content script into every frame of a tab it is not running in yet. It ignores repeat loads. */
@@ -608,6 +665,63 @@ const handlers: Handlers = {
     }
     await syncSheet(applicationId);
     return { ok: true };
+  },
+
+  async deleteApplication({ applicationId }, sender) {
+    if (sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL('/'))) return { ok: false, error: 'Only the side panel can delete applications.' };
+    await db.applications.delete(applicationId);
+    await refreshBadge();
+    return { ok: true };
+  },
+
+  async trackApplication({ url }) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url.trim());
+      if (!/^https?:$/.test(parsed.protocol)) throw new Error();
+    } catch {
+      return { ok: false, error: 'That does not look like a link. Paste the full job URL.' };
+    }
+    const key = jobKey(parsed.href);
+    const existing = await db.applications.where('jobKey').equals(key).last();
+    const { read, why } = await readOpenPosting(key, parsed.href);
+    const details = {
+      company: read?.company || existing?.company || parsed.hostname.replace(/^www\./, ''),
+      role: read?.role || existing?.role || '',
+      location: (read?.location && formatLocation(read.location)) || existing?.location,
+      workMode: WORK_MODELS.find((m) => m === read?.workMode) ?? existing?.workMode,
+      basePay: (read?.pay && read.pay.length <= 60 && read.pay) || existing?.basePay,
+    };
+    let id = existing?.id;
+    if (id === undefined) {
+      id = (await db.applications.add({
+        ...details,
+        url: parsed.href,
+        jobKey: key,
+        platform: platformFor(parsed.href),
+        status: 'Submitted',
+        filledAt: Date.now(),
+        submittedAt: Date.now(),
+        aiAnswers: 0,
+        filledCount: 0,
+        missingCount: 0,
+        missingLabels: [],
+      })) as number;
+      await refreshBadge();
+    } else if (existing!.status !== 'Submitted') {
+      await db.applications.update(id, { ...details, status: 'Submitted', submittedAt: Date.now() });
+      await refreshBadge();
+    } else {
+      // Re-marking re-syncs the sheet, which fills any blank cells in the existing row.
+      await db.applications.update(id, { ...details, sheetRow: undefined });
+    }
+    await syncSheet(id);
+    const got = [read?.company && 'company', read?.role && 'position', read?.location && 'location', read?.workMode && 'work model', read?.pay && 'pay'].filter(Boolean);
+    const note = read
+      ? got.length ? `Read from the page: ${got.join(', ')}.` : 'The page was read but it did not show company, position, location or pay.'
+      : `Page details were not read: ${why}.`;
+    const saved = await db.applications.get(id);
+    return { ok: true, applicationId: id, note, sheetRow: saved?.sheetRow, sheetError: saved?.sheetError };
   },
 
   async setGeminiKey({ apiKey }) {

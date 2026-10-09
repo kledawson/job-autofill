@@ -62,6 +62,14 @@ describe('current company and location', () => {
     p.state = 'CA';
     expect(valueFor('location', p)?.[0]).toBe('San Jose, CA');
   });
+
+  it('also offers the state by name for lists of states', () => {
+    const p = sampleProfile();
+    p.city = 'San Jose';
+    p.state = 'CA';
+    p.country = 'United States';
+    expect(valueFor('location', p)).toEqual(expect.arrayContaining(['CA', 'California']));
+  });
 });
 
 describe('current position', () => {
