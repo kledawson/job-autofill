@@ -1,3 +1,4 @@
+import { boundedTask } from '@/lib/bounded-task';
 import { browser } from 'wxt/browser';
 import { ADAPTERS } from '@/lib/autofill/adapters';
 import { FillSession, waitForForm, type FillSummary } from '@/lib/autofill/engine';
@@ -40,13 +41,24 @@ export default defineContentScript({
     let generation = 0;
 
     let queueRun: string | undefined;
+    let aborter: AbortController | undefined;
+    let task: Promise<void> | undefined;
+    async function startTask(applicationId?: number, runId?: string) {
+      if (filling) return;
+      const next = fill(applicationId, runId).catch(() => undefined);
+      task = next;
+      await next;
+      if (task === next) task = undefined;
+    }
     async function fill(applicationId?: number, runId?: string) {
       if (filling) return;
       const run = ++generation;
+      const controller = new AbortController(); aborter = controller;
+      const remote = <T,>(promise: Promise<T>, ms?: number) => boundedTask(promise, controller.signal, ms);
       queueRun = runId;
       showStatus({ title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' });
       if (runId) {
-        if (!await waitForForm(document, adapter, 15000)) {
+        if (!await remote(waitForForm(document, adapter, 30000), 35000)) {
           if (run === generation) await sendToBackground('queueFinished', { runId, note: 'No application form found. Open this tab, sign in or click Apply, then retry.' });
           return;
         }
@@ -54,7 +66,8 @@ export default defineContentScript({
       if (run !== generation || filling) return;
       filling = true;
       try {
-        const context = await sendToBackground('getFillContext', { runId });
+        const context = await remote(sendToBackground('getFillContext', { runId }));
+        if (run !== generation) return;
         if (!context?.profile) throw new Error((context as unknown as { error?: string })?.error ?? 'Reload the extension and application page.');
         currentRunId = context.runId;
         currentPresetId = context.preset?.id;
@@ -63,17 +76,21 @@ export default defineContentScript({
         session?.disconnect();
         const s = new FillSession(document, adapter, {
           context,
-          answer: (req) => sendToBackground('generateAnswer', { ...req, runId: context.runId }),
+          answer: async (req) => {
+            try { return await remote(sendToBackground('generateAnswer', { ...req, runId: context.runId })); }
+            catch (err) { return { ok: false, error: err instanceof Error ? err.message : 'AI response unavailable.' }; }
+          },
+          onPhase: phase => { if (run === generation) showStatus({ title: 'Filling application…', lines: [phase], tone: 'working' }); },
           jobDescription: async (info) =>
-            info.remote ? sendToBackground('jobDescription', info.remote) : ((await adapter.fetchDescription?.(document)) ?? ''),
-          jobDetails: (remote) => sendToBackground('jobDetails', remote),
-          mapFields: (fields) => sendToBackground('mapFields', { fields }),
+            info.remote ? remote(sendToBackground('jobDescription', info.remote), 10000) : (await remote(adapter.fetchDescription?.(document) ?? Promise.resolve(''), 10000)) ?? '',
+          jobDetails: (target) => remote(sendToBackground('jobDetails', target), 10000),
+          mapFields: (fields) => remote(sendToBackground('mapFields', { fields })),
           matchSavedAnswers: async (fields) => {
-            const res = await sendToBackground('matchSavedAnswers', { fields, runId: context.runId });
+            const res = await remote(sendToBackground('matchSavedAnswers', { fields, runId: context.runId }), 10000);
             if (!res.ok) throw new Error(res.error);
             return res.matches;
           },
-          onProgress: (summary) => report(summary),
+          onProgress: (summary) => { if (run === generation) void report(summary); },
         });
         session = s;
         const id =
@@ -98,9 +115,10 @@ export default defineContentScript({
           const empty = !summary.filledCount && !summary.aiAnswers && !summary.missingLabels.length;
           await sendToBackground('queueFinished', { runId: context.runId, applicationId: id, ...(empty ? { note: 'This page has no fillable application fields. Sign in or continue to the form, then retry.' } : {}) });
         }
-        // Queue fills are serialized. Later steps require an explicit Fill this step action.
+        // Tabs fill independently; later steps still require an explicit action.
         if (run === generation) s.observe(!context.queue);
       } catch (err) {
+        if (run !== generation) return;
         if (runId && run === generation) await sendToBackground('queueFinished', { runId, note: String((err as Error)?.message ?? 'Autofill stopped.').slice(0, 500) }).catch(() => undefined);
         console.error('[Job Autofill]', err);
         showStatus({ title: 'Autofill stopped', lines: [String((err as Error)?.message ?? err)], tone: 'done' });
@@ -137,6 +155,7 @@ export default defineContentScript({
     let currentId: number | undefined;
     async function report(summary: FillSummary) {
       if (currentId === undefined || !session) return;
+      const owner = session, ownerId = currentId, ownerRun = currentRunId, ownerGeneration = generation;
       // A Workday page with nothing to fill yet (sign-in, a page between steps): keep watching.
       if (!queueRun && watchNow && !summary.filledCount && !summary.aiAnswers && !summary.missingLabels.length) {
         showStatus({
@@ -152,10 +171,11 @@ export default defineContentScript({
       if (queueRun) lines.push('Review and submit yourself. For later steps, use Fill this step in the queue.');
       else if (adapter.multiStep) lines.push('Review this page, then continue. Each next page is filled when it opens.');
       showStatus({ title: 'Ready for review', lines, tone: 'done' });
-      const details = await session.jobDetails().catch(() => null);
+      const details = await owner.jobDetails().catch(() => null);
+      if (owner !== session || ownerRun !== currentRunId || ownerGeneration !== generation) return;
       await sendToBackground('fillFinished', {
-        applicationId: currentId,
-        runId: currentRunId,
+        applicationId: ownerId,
+        runId: ownerRun,
         company: session.info.company,
         role: session.info.role,
         filledCount: summary.filledCount,
@@ -205,20 +225,28 @@ export default defineContentScript({
         return true;
       }
       if (msg.type === 'cancelQueue') {
-        if (msg.runId === queueRun || msg.runId === currentRunId) { generation++; session?.disconnect(); }
-        sendResponse({ ok: true }); return false;
+        void (async () => {
+          if (msg.runId === queueRun || msg.runId === currentRunId) {
+            generation++; session?.disconnect(); aborter?.abort();
+            // Wait for the old widget writer to stop before a retry can touch this form.
+            if (msg.wait) await task;
+            filling = false;
+          }
+          sendResponse({ ok: true });
+        })();
+        return true;
       }
-      if (msg.type === 'ping') sendResponse({ ok: true, platform, filling: filling || session?.processing, presetId: currentPresetId, presetRevision: currentPresetRevision });
+      if (msg.type === 'ping') sendResponse({ ok: true, platform, build: __BUILD__, filling: filling || session?.processing, presetId: currentPresetId, presetRevision: currentPresetRevision });
       if (msg.type === 'fill') {
         if (msg.runId) void (async () => {
-          if (!await waitForForm(document, adapter, 15000)) {
+          if (!await waitForForm(document, adapter, 30000)) {
             if (isTop) await sendToBackground('queueFinished', { runId: msg.runId!, note: 'No application form found. Open this tab, sign in or click Apply, then retry.' });
             return;
           }
           const pending = await sendToBackground('claimPendingFill', { commit: true });
-          if (pending.fill && pending.runId === msg.runId) await fill(msg.applicationId, msg.runId);
+          if (pending.fill && pending.runId === msg.runId) await startTask(msg.applicationId, msg.runId);
         })();
-        else void fill(msg.applicationId);
+        else void startTask(msg.applicationId);
         sendResponse({ ok: true });
       }
       return false;
@@ -228,13 +256,13 @@ export default defineContentScript({
     void (async () => {
       const pending = await sendToBackground('claimPendingFill', { commit: false });
       if (!pending.fill) return;
-      const found = pending.queued ? await waitForForm(document, adapter, 15000) : watchNow || await waitForForm(document, adapter, formWait);
+      const found = pending.queued ? await waitForForm(document, adapter, 30000) : watchNow || await waitForForm(document, adapter, formWait);
       if (!found) {
         if (pending.queued && pending.runId && isTop) await sendToBackground('queueFinished', { runId: pending.runId, note: 'No application form found. Open this tab, sign in or click Apply, then retry.' });
         return;
       }
       const claimed = await sendToBackground('claimPendingFill', { commit: true });
-      if (claimed.fill) await fill(undefined, claimed.runId);
+      if (claimed.fill) await startTask(undefined, claimed.runId);
     })();
   },
 });

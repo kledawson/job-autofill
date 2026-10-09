@@ -49,6 +49,7 @@ import { sameSelections } from '../selection-matching';
 
 export interface EngineDeps {
   context: FillContext;
+  onPhase?(phase: string): void;
   answer(req: AnswerRequest): Promise<Result<{ answer: string }>>;
   jobDescription(info: JobInfo): Promise<string>;
   /** Location and work model for postings whose page doesn't show them. Optional. */
@@ -445,12 +446,11 @@ export class FillSession {
       if (!fresh.length) return 0;
       await this.applyRememberedMappings(fresh);
 
-      // Questions no rule recognised are matched (from their wording) before filling starts, so the pass
-      // below can go strictly top to bottom.
-      await this.mapUnknown(fresh);
+      // Optional network matching is deferred until all locally known facts are filled.
+      this.deps.onPhase?.('Filling profile and Memories');
 
       const watcher = this.watchForCleared();
-      // Walk the form top to bottom, uploads and AI-written answers included, never going back up. A question
+      // Walk locally known fields in document order, deferring optional AI. A question
       // revealed by an answer (race after Hispanic/Latino) is slotted in right after the field that revealed it.
       let added = false;
       const grow = new MutationObserver((mutations) => {
@@ -461,12 +461,17 @@ export class FillSession {
       grow.observe(this.root() as Node, { childList: true, subtree: true });
       const queue = [...fresh].sort(byDocumentOrder);
       const deferredResponses: FieldRecord[] = [];
+      const deferredMappings: FieldRecord[] = [];
       try {
         for (let i = 0; i < queue.length; i++) {
           // A disconnected session (a newer Fill, or the page moved on) stops mid-pass.
           if (this.stopped) break;
           const rec = queue[i]!;
           // Fill profile and remembered facts across the form before calling AI for essays.
+          if (rec.cls.kind === 'unknown' && rec.cls.askAi && !rec.saved && this.deps.context.hasGeminiKey) {
+            deferredMappings.push(rec);
+            continue;
+          }
           if (rec.cls.kind === 'free_response') {
             deferredResponses.push(rec);
             continue;
@@ -480,7 +485,7 @@ export class FillSession {
           const more = await this.waitForFresh(reveals ? timing.reveal : timing.settle);
           if (!more.length) continue;
           await this.applyRememberedMappings(more);
-          await this.mapUnknown(more);
+          // Unfamiliar fields join the deferred matching pass; known facts remain immediate.
           fresh.push(...more);
           // Fields that appeared above the current one (a page re-render) are not gone back for.
           // (When the page changed under the current field, everything new is below it.)
@@ -489,6 +494,15 @@ export class FillSession {
           queue.length = i + 1;
           queue.push(...rest);
         }
+        if (deferredMappings.length && !this.stopped) {
+          this.deps.onPhase?.('Matching unfamiliar questions');
+          await this.mapUnknown(deferredMappings);
+          for (const rec of deferredMappings) {
+            if (this.stopped) break;
+            await this.fillRecord(rec);
+          }
+        }
+        if (deferredResponses.length && !this.stopped) this.deps.onPhase?.('Writing free responses');
         for (const rec of deferredResponses) {
           if (this.stopped) break;
           await this.fillRecord(rec);
@@ -498,6 +512,7 @@ export class FillSession {
       }
       // Some forms reset a dropdown when a later field is touched; put back any that went blank.
       if (this.stopped) { watcher.disconnect(); return fresh.length; }
+      this.deps.onPhase?.('Checking filled fields');
       this.traceDropdowns('before restore');
       await this.restoreDropdowns(fresh);
       await this.restoreYesNo(fresh);

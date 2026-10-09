@@ -70,7 +70,7 @@ self-identification are never inferred.
 | Site | How |
 | --- | --- |
 | Greenhouse, Lever, Ashby | Dedicated adapters; the content script loads automatically. |
-| Workday (`*.myworkdayjobs.com`, `*.myworkdaysite.com`, `*.myworkday.com`) | Loads automatically. Workday applications span several pages (My Information, My Experience, Application Questions, Voluntary Disclosures, Self Identify). Click **Fill this page** once outside a queue: each page is filled when it opens, and the sign-in page is left alone. On My Experience, one Work Experience and Education entry is added per profile entry, then filled. Save and Continue is always yours to click. In a queue, use **Fill this step** on each later page so fills stay serialized. |
+| Workday (`*.myworkdayjobs.com`, `*.myworkdaysite.com`, `*.myworkday.com`) | Loads automatically. Workday applications span several pages (My Information, My Experience, Application Questions, Voluntary Disclosures, Self Identify). Click **Fill this page** once outside a queue: each page is filled when it opens, and the sign-in page is left alone. On My Experience, one Work Experience and Education entry is added per profile entry, then filled. Save and Continue is always yours to click. In a queue, use **Fill this step** on each later page while keeping the queue preset. |
 | Any other site | The generic adapter reads labels, `autocomplete`, and the page's schema.org JobPosting data. The first time you fill a page outside the sites above, Chrome asks to let the extension **read and change data on all sites** (an optional permission). The extension only reads a page when you click **Fill this page** or open a pasted link; you can remove the permission in `chrome://extensions`. |
 
 When a Gemini key is set, questions no label rule recognises are sent to Gemini **as wording and option
@@ -270,9 +270,8 @@ preset documents. Delete all local data includes presets, their documents and fi
    answers are fixed for the queue; changing or deleting that preset later does not change the queue.
 2. Paste one or many full job URLs into **Job links**. Review the preview; duplicate links are removed.
    Already tracked applications are excluded. **Review existing application** opens them without refilling.
-3. Choose **Applications per batch** (1–5, default 3), then **Start queue**. The extension fills one
-   page at a time and opens no more than the current batch's application tabs.
-4. Use **Open application** to review, complete missing fields and submit on the website yourself.
+3. Choose **Applications per batch** (1–5, default 3), then **Start queue**. The extension fills all current-batch pages independently in the background and opens no more than the current batch's application tabs.
+4. Use **Review** to review, complete missing fields and submit on the website yourself.
    Memories and Save all remain available in the current-page review section.
 5. Only after confirming success on the website, click **Submitted — close tab**. It updates local
    tracking and optionally Sheets. **Skip — close tab** closes that queue tab without marking submission.
@@ -280,7 +279,7 @@ preset documents. Delete all local data includes presets, their documents and fi
 6. On a later application step, use **Fill this step**. For sign-in, missing forms or a manually closed
    tab, use **Retry autofill** after resolving the issue. Existing page values are kept.
 
-**Pause queue** lets the current fill finish and prevents new fills. **Resume queue** continues.
+**Pause queue** lets active fills finish and prevents new fills. **Resume queue** continues.
 **Stop queue** stops further work and keeps opened pages for you. Batch-size changes apply to the next
 batch. Up to 100 pending links are local metadata; only 1–5 review tabs are opened. Actual memory use
 still depends on the job websites. The additional alarms permission supports timeout/recovery checks.
@@ -290,3 +289,15 @@ Progress survives service-worker shutdown. After a browser restart the queue pau
 explicit resume/retry; previous restored tabs are kept and retries create owned tabs. Website drafts
 may be lost on restart. Sheets failures are shown on the tracker and do not hold up subsequent batches.
 The latest saved Profile and Memories are used when each fill begins. Backups do not export queue state.
+
+Sidebar sections remember your layout. Fill and Queue start open; Review & remember, Presets and Applications start closed, with Applications last by default. **Settings → Sidebar** has checkboxes for Queue, Review & remember, Setup & connections, Track without autofill, Presets and Applications. Setup and Track start hidden. Fill always stays available. Hiding a category preserves its drafts and data; running queues continue.
+
+Drag a dotted handle to reorder sections, or click it for Move up/down buttons; keyboard Up/Down arrows work on a focused handle. **Reset order** restores the default order without closing sections or losing drafts.
+
+Profile and integrations stay in Settings; the optional Setup & connections category offers quick links and status. Unfinished onboarding offers **Continue setup** within Fill. Your pasted link draft and batch size survive reopening the panel.
+
+Fill shows a compact application summary; **Review & remember** holds missing questions, single-answer capture and Save all confirmation. Its question list scrolls within the section. Queue cards show **Review** and **Submitted** first; **More** contains Fill this step/Restart, Skip and document/link details. **Submitted** records your confirmation and closes the owned tab; it never submits on the website.
+
+During an active fill, **Restart autofill** cancels the previous attempt before retrying and preserves non-empty answers. AI responses have bounded waits; a slow answer does not block other applications.
+
+Stopped/completed queue notices have a small × button. Dismissal is remembered for that queue; it does not delete tracked applications or close their tabs.

@@ -1,12 +1,16 @@
+import { useSidebarVisibility } from '@/components/SidebarPreferences';
+import { readSidebarVisibility, SIDEBAR_VISIBILITY_KEY, type SidebarId } from '@/lib/sidebar-layout';
+import { SidebarLayout } from '@/components/SidebarLayout';
+import { SidebarSection } from '@/components/SidebarSection';
 import { ApplicationQueue } from '@/components/ApplicationQueue';
 import { PresetSelector } from '@/components/Presets';
 import { ProfileAnswer } from '@/components/ProfileAnswer';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
 import { useLiveQuery, usePublicSettings } from '@/components/hooks';
-import { missingRequired } from '@/components/ProfileSections';
 import { Button, cx, Input, Notice } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
+import { missingRequired } from '@/components/ProfileSections';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
 import { ALL_SITES, detectPlatform, jobKey, PLATFORM_NAMES } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
@@ -92,6 +96,7 @@ const when = (ms: number) =>
 
 export default function SidePanel() {
   const { settings } = usePublicSettings();
+  const visibility = useSidebarVisibility();
   const profile = useLiveQuery(() => getProfile());
   const applications = useLiveQuery(() => db.applications.orderBy('filledAt').reverse().limit(50).toArray()) ?? [];
   const { id: tabId, url: tabUrl } = useActiveTab();
@@ -99,6 +104,8 @@ export default function SidePanel() {
   const pageStatus = usePageStatus(tabId, tabUrl);
   const queue = useLiveQuery(() => db.applicationQueue.get('current'));
   const [presetId, setPresetId] = useState<string>();
+  const preset = useLiveQuery(() => presetId ? db.presets.get(presetId) : Promise.resolve(undefined), [presetId]);
+  const queueItem = queue && ['running', 'paused'].includes(queue.status) ? queue.items.find(i => i.tabId === tabId && !['submitted', 'skipped'].includes(i.state)) : undefined;
 
   const [error, setError] = useState('');
   /** The tab and job where Fill this page was clicked. Its details show only there: another tab or application starts hidden. */
@@ -124,14 +131,23 @@ export default function SidePanel() {
     return () => browser.storage.onChanged.removeListener(onChanged);
   }, [here?.tabId, here?.key]);
 
-  const setupGaps = profile ? missingRequired(profile) : [];
+  async function revealSection(id: SidebarId) {
+    const stored = await browser.storage.local.get(SIDEBAR_VISIBILITY_KEY);
+    const next = readSidebarVisibility(stored[SIDEBAR_VISIBILITY_KEY]);
+    if (!next[id]) await browser.storage.local.set({ [SIDEBAR_VISIBILITY_KEY]: { version: 1, categories: { ...next, [id]: true } } });
+    const toggle = document.getElementById('sidebar-' + id + '-toggle');
+    if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+    requestAnimationFrame(() => { toggle?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); toggle?.focus({ preventScroll: true }); });
+  }
 
   async function fillThisPage() {
     setError('');
     if (!presetId) return;
     if (!(await ensureAccess(tabUrl))) return setError(ACCESS_DENIED);
     if (here) setShown(here);
-    const res = await sendToBackground('fillActiveTab', { presetId });
+    const res = queueItem && queue
+      ? await sendToBackground('queueAction', { token: queue.token, itemId: queueItem.id, action: 'retry' })
+      : await sendToBackground('fillActiveTab', { presetId });
     if (!res.ok) {
       setShown(undefined);
       setError(res.error);
@@ -139,7 +155,7 @@ export default function SidePanel() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col gap-4 p-4 text-sm">
+    <div className="flex min-h-screen flex-col gap-2 p-3 text-sm">
       <header className="flex items-center gap-2">
         <img src="/icon/32.png" alt="" className="size-6" />
         <h1 className="flex-1 text-base font-semibold">Job Autofill</h1>
@@ -148,40 +164,22 @@ export default function SidePanel() {
         </Button>
       </header>
 
-      {settings && !settings.onboardingComplete ? (
-        <Notice tone="info">
-          Finish setup to start filling applications.{' '}
-          <button className="font-medium underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>
-            Continue setup
-          </button>
-        </Notice>
-      ) : (
-        <>
-          {setupGaps.length > 0 && (
-            <Notice tone="warn">
-              Your profile is missing {setupGaps.join(', ')}.{' '}
-              <button className="font-medium underline" onClick={() => browser.runtime.openOptionsPage()}>
-                Edit profile
-              </button>
-            </Notice>
-          )}
-
-          {settings && !settings.hasGeminiKey && (
-            <Notice tone="info">Add a Gemini key in Settings to get AI-written free responses.</Notice>
-          )}
-        </>
-      )}
-
-      <PresetSelector onSelected={setPresetId} />
-      <ApplicationQueue presetId={presetId} />
-
-      <section id="current-page-review" aria-label="Current page review" className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <SidebarLayout>
+      <SidebarSection id="fill" title="Fill this page" defaultOpen>
+      <section id="current-page-review" aria-label="Current page review" className="space-y-2">
+        {settings && !settings.onboardingComplete && <p className="text-xs text-slate-600">New here? <button className="font-medium text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button> to add your profile.</p>}
+        <div className="flex items-center justify-between gap-2 text-xs text-slate-500"><span className="truncate">Preset: {queueItem ? queue?.presetName + ' · locked' : preset?.name || 'Default'}</span>
+          <button className="shrink-0 text-indigo-700 underline" onClick={() => {
+            if (visibility.presets) void revealSection('presets');
+            else void browser.tabs.create({ url: browser.runtime.getURL('/options.html#presets' as never) });
+          }}>Change preset</button></div>
         <Button variant="secondary" className="w-full" disabled={!presetId} onClick={fillThisPage}>
-          Fill this page
+          {queueItem && ['opening', 'filling'].includes(queueItem.state) ? 'Restart autofill' : 'Fill this page'}
         </Button>
         {showing &&
           (current ? (
-            <CurrentApplication key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} />
+            <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl}
+              queueEntry={queueItem && queue ? { token: queue.token, itemId: queueItem.id, ready: queueItem.state === 'review' } : undefined} onReview={() => void revealSection('review')} />
           ) : (
             <PageStatusBox status={pageStatus ?? { title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' }} />
           ))}
@@ -189,11 +187,30 @@ export default function SidePanel() {
 
       </section>
 
-      <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
+      </SidebarSection>
+      <SidebarSection id="queue" title="Application queue" defaultOpen summary={queue && !['stopped','complete'].includes(queue.status) ? 'Batch ' + (queue.batch || 1) : undefined}>
+        <ApplicationQueue presetId={presetId} activeTabId={tabId} />
+      </SidebarSection>
+      <SidebarSection id="review" title="Review & remember" summary={showing && current ? (current.reviewFields?.filter(field => field.answered).length || 0) + ' ready to save · ' + current.missingCount + ' need you' : undefined}>
+        {showing && current ? <ApplicationReview key={current.id} app={current} /> : <p className="text-xs text-slate-500">Fill an application to review missing questions and remember answers here.</p>}
+      </SidebarSection>
+      <SidebarSection id="setup" title="Setup & connections">
+        <div className="space-y-2 text-xs text-slate-600">
+          <p>{settings?.onboardingComplete ? profile && missingRequired(profile).length ? missingRequired(profile).length + ' required profile fields missing.' : 'Your profile is ready.' : 'Finish setup to add your profile.'}</p>
+          {!settings?.onboardingComplete && <button className="text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button>}
+          <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#profile' as never)} target="_blank" rel="noreferrer">Edit profile</a>
+          <p>AI responses: {settings?.hasGeminiKey ? 'Connected' : 'Not connected'}</p>
+          <p>Google Sheets: {settings?.sheetUrl ? 'Connected' : 'Not connected'}</p>
+          <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#connections' as never)} target="_blank" rel="noreferrer">Manage connections</a>
+        </div>
+      </SidebarSection>
+      <SidebarSection id="track" title="Track without autofill">
+        <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
+      </SidebarSection>
 
-      <section className="flex-1">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="font-semibold text-slate-800">Applications</h2>
+      <SidebarSection id="history" title="Applications" summary={String(applications.length)}>
+      <section>
+        <div className="mb-2 flex items-center justify-end">
           {settings?.sheetUrl && (
             <a className="text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
               Open sheet
@@ -234,6 +251,11 @@ export default function SidePanel() {
           </ul>
         )}
       </section>
+      </SidebarSection>
+      <SidebarSection id="presets" title="Application preset" summary={preset?.name || 'Default'}>
+        <PresetSelector onSelected={setPresetId} />
+      </SidebarSection>
+      </SidebarLayout>
     </div>
   );
 }
@@ -260,8 +282,7 @@ function TrackOnly({ tabUrl, sheetUrl }: { tabUrl?: string; sheetUrl?: string })
 
   const usable = tabUrl && /^https?:\/\//i.test(tabUrl) ? tabUrl : '';
   return (
-    <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h2 className="font-medium text-slate-800">Track Without Autofill</h2>
+    <section className="space-y-2">
       <p className="text-xs text-slate-500">For postings with just an Apply button. Log the link as submitted and add it to your sheet.</p>
       <form
         className="space-y-2"
@@ -319,110 +340,36 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
   );
 }
 
-function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string }) {
-  const [showMissing, setShowMissing] = useState(true);
+function ApplicationSummary({ app, pageStatus, sheetUrl, queueEntry, onReview }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueEntry?: { token: string; itemId: string; ready: boolean }; onReview(): void }) {
   const [error, setError] = useState('');
-  const [teaching, setTeaching] = useState<{ capture: CapturedAnswer; initial: MappingDraft; id?: number }>();
-  const [remembered, setRemembered] = useState('');
-  const [capturing, setCapturing] = useState<string>();
-  const [batch, setBatch] = useState<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }>();
-  const context = { platform: app.platform, company: app.company, url: app.url };
-  async function remember(field: ReviewField, suggestion = false) {
-    setCapturing(field.token); setError(''); setRemembered('');
-    try {
-      const res = await sendToBackground('capturePageAnswer', { applicationId: app.id!, token: field.token,
-        ...(suggestion ? { suggestionId: field.suggestionId } : {}) });
-      if (!res.ok) throw new Error(res.error);
-      setTeaching({ capture: res.capture, id: res.suggestion?.id, initial: res.suggestion ?
-        { ...res.suggestion, aliases: [...new Set([...res.suggestion.aliases, res.capture.label])] } :
-        draftForCapture(res.capture, context) });
-    } catch (err) { setError(err instanceof Error ? err.message : 'Could not capture this answer.'); }
-    finally { setCapturing(undefined); }
-  }
-  const reviewFields = app.reviewFields ?? [];
-  const answered = reviewFields.filter(f => f.answered);
-  async function rememberAll() {
-    setCapturing('all'); setError(''); setRemembered('');
-    try {
-      const result = await sendToBackground('capturePageAnswers', { applicationId: app.id!, tokens: answered.slice(0, 100).map(f => f.token) });
-      if (!result.ok) throw new Error(result.error);
-      setBatch({ captures: result.captures, skipped: result.skipped });
-    } catch (err) { setError(err instanceof Error ? err.message : 'Could not read the answered questions.'); }
-    finally { setCapturing(undefined); }
-  }
   return (
-    <div className="space-y-3 border-t border-slate-100 pt-3">
+    <div className="space-y-2 border-t border-slate-100 pt-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate font-semibold text-slate-900">{app.role || 'Application'}</p>
           <p className="truncate text-slate-500">{app.company}</p>
-          {app.presetName && <p className="mt-1 break-words text-xs text-slate-600">Preset used: {app.presetName}{app.resumeName ? ' · ' + app.resumeName : ' · no resume'}</p>}
+
         </div>
         <StatusPill status={app.status} />
       </div>
 
-      {app.status !== 'Filling' && (
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <Stat value={app.filledCount} label="Profile / memories" color="text-green-700" />
-          <Stat value={app.aiAnswers} label="AI-written" color="text-blue-700" />
-          <Stat value={app.missingCount} label="Need you" color={app.missingCount ? 'text-red-700' : 'text-slate-400'} />
-        </div>
-      )}
-
+      {app.status !== 'Filling' && <p className="flex flex-wrap gap-x-3 text-xs"><span className="text-green-700">{app.filledCount} filled</span><span className="text-blue-700">{app.aiAnswers} AI-written</span><span className={app.missingCount ? 'text-red-700' : 'text-slate-500'}>{app.missingCount} need you</span></p>}
       {/* The pill already names the status, so a matching title is left out. */}
-      {pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
+      {pageStatus?.tone === 'working' && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
+      {pageStatus?.tone === 'done' && <details className="text-xs text-slate-500"><summary className="cursor-pointer">Fill details</summary><PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />{app.resumeName && <p className="mt-1">Resume: {app.resumeName}</p>}</details>}
 
-      {!teaching && !batch && (app.missingLabels.length > 0 || reviewFields.length > 0) && (
-        <div>
-          <Button className="mb-3 w-full" variant={answered.length ? 'primary' : 'secondary'} disabled={!answered.length || !!capturing || app.status === 'Filling'} onClick={() => void rememberAll()}>{capturing === 'all' ? 'Reading answered questions…' : `Save all answered questions (${Math.min(answered.length, 100)})`}</Button>
-          <p className="mb-2 text-xs text-slate-500">Answer the missing questions on the page, then save them together. You can review and exclude answers first.{answered.length > 100 ? ' Save up to 100 questions per batch.' : ''}</p>
-          <button className="text-xs font-medium text-slate-600 underline" onClick={() => setShowMissing((s) => !s)}>
-            {showMissing ? 'Hide' : 'Show'} questions to review
-          </button>
-          {showMissing && (
-            <ul aria-label="Questions to review" className="mt-2 space-y-2">
-              {reviewFields.map(field => <li key={field.token} className={cx('rounded-lg border p-3 text-xs text-slate-700', field.answered ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-white')}>
-                <p className="font-medium break-words">{field.label}</p>
-                <p className="mt-1 text-slate-600">{field.answered ? field.selectionMode === 'multiple' ? `${field.selectedCount ?? 0} answers selected — ready to save for next time.` : 'Answer entered — ready to save for next time.' : field.suggestionId ? 'A similar saved question is available. Confirm it before reuse.' : 'Answer on the page, then remember it here.'}</p>
-                {field.reason && <p className="mt-1 text-slate-600">{field.reason}</p>}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Button className="px-2 py-1 text-xs" variant={field.answered ? 'primary' : 'secondary'} disabled={!!capturing || app.status === 'Filling'} onClick={() => void remember(field)}>{capturing === field.token ? 'Reading field…' : field.selectionMode === 'multiple' ? field.answered ? 'Save these answers' : 'Remember answers' : field.answered ? 'Save this answer' : 'Remember answer'}</Button>
-                  {field.suggestionId && !field.answered && <Button className="px-2 py-1 text-xs" variant="secondary" disabled={!!capturing} onClick={() => void remember(field, true)}>Review suggestion</Button>}
-                </div>
-              </li>)}
-              {app.missingLabels.filter((_, i) => !app.missingQuestions?.[i] || !reviewFields.some(f => f.label === app.missingQuestions?.[i])).map((label, i) => <li key={`manual-${i}`} className="rounded-lg bg-slate-50 p-3 text-xs text-slate-700">{label}<p className="mt-1 text-slate-500">{app.reviewFields ? 'Complete this field on the page.' : 'Click Fill this page to refresh these results and enable answer capture.'}</p></li>)}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {batch && <BatchRemember applicationId={app.id!} context={context} {...batch} onCancel={() => setBatch(undefined)} onSaved={(note, count) => { setBatch(undefined); setRemembered(note); }} />}
-      {teaching && (
-        <div className="space-y-3 border-t border-slate-200 pt-3">
-          {teaching.capture.profileUpdate ? <ProfileAnswer capture={teaching.capture} applicationId={app.id!} onCancel={() => setTeaching(undefined)} onSaved={note => { setTeaching(undefined); setRemembered(note); }} /> : <MappingEditor key={teaching.capture.captureId} id={teaching.id} capture={teaching.capture} context={context} initial={teaching.initial}
-            onCancel={() => setTeaching(undefined)} onSaved={async mappingId => {
-              const res = await sendToBackground('applySavedAnswer', { applicationId: app.id!, token: teaching.capture.token, captureId: teaching.capture.captureId, mappingId });
-              setTeaching(undefined);
-              if (!res.ok) { setError(`Answer saved, but could not apply: ${res.error}`); return; }
-              setRemembered(res.note);
-            }} />}
-        </div>
-      )}
-      {remembered && <div role="status"><Notice tone="success">{remembered}</Notice></div>}
-
-      <a className="text-xs text-indigo-700 underline" href={browser.runtime.getURL('/options.html#memories' as never)} target="_blank" rel="noreferrer">Manage Memories in Settings</a>
-
-      {app.status === 'Ready for review' && (
+      {(app.missingCount > 0 || !!app.reviewFields?.length) && <button className="text-xs font-medium text-indigo-700 underline" onClick={onReview}>Review & remember ({app.reviewFields?.length || app.missingCount})</button>}
+      {app.status === 'Ready for review' && (!queueEntry || queueEntry.ready) && (
         <>
           <p className="text-xs text-slate-500">Review every field, submit on the page yourself, then mark it here.</p>
           <Button
             className="w-full"
             onClick={async () => {
-              const res = await sendToBackground('markSubmitted', { applicationId: app.id! });
+              const res = queueEntry ? await sendToBackground('queueAction', { ...queueEntry, action: 'submitted' }) : await sendToBackground('markSubmitted', { applicationId: app.id! });
               if (!res.ok) setError(res.error);
             }}
           >
-            Mark as submitted
+            {queueEntry ? 'Submitted — close tab' : 'Mark as submitted'}
           </Button>
         </>
       )}
@@ -457,11 +404,81 @@ function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; p
   );
 }
 
-function Stat({ value, label, color }: { value: number; label: string; color: string }) {
+function ApplicationReview({ app }: { app: Application }) {
+  const [showMissing, setShowMissing] = useState(true);
+  const [error, setError] = useState('');
+  const [teaching, setTeaching] = useState<{ capture: CapturedAnswer; initial: MappingDraft; id?: number }>();
+  const [remembered, setRemembered] = useState('');
+  const [capturing, setCapturing] = useState<string>();
+  const [batch, setBatch] = useState<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }>();
+  const context = { platform: app.platform, company: app.company, url: app.url };
+  async function remember(field: ReviewField, suggestion = false) {
+    setCapturing(field.token); setError(''); setRemembered('');
+    try {
+      const res = await sendToBackground('capturePageAnswer', { applicationId: app.id!, token: field.token,
+        ...(suggestion ? { suggestionId: field.suggestionId } : {}) });
+      if (!res.ok) throw new Error(res.error);
+      setTeaching({ capture: res.capture, id: res.suggestion?.id, initial: res.suggestion ?
+        { ...res.suggestion, aliases: [...new Set([...res.suggestion.aliases, res.capture.label])] } :
+        draftForCapture(res.capture, context) });
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not capture this answer.'); }
+    finally { setCapturing(undefined); }
+  }
+  const reviewFields = app.reviewFields ?? [];
+  const answered = reviewFields.filter(f => f.answered);
+  async function rememberAll() {
+    setCapturing('all'); setError(''); setRemembered('');
+    try {
+      const result = await sendToBackground('capturePageAnswers', { applicationId: app.id!, tokens: answered.slice(0, 100).map(f => f.token) });
+      if (!result.ok) throw new Error(result.error);
+      setBatch({ captures: result.captures, skipped: result.skipped });
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not read the answered questions.'); }
+    finally { setCapturing(undefined); }
+  }
   return (
-    <div className="rounded-lg bg-slate-50 py-2">
-      <div className={cx('text-lg font-semibold', color)}>{value}</div>
-      <div className="text-xs text-slate-500">{label}</div>
+    <div className="space-y-2">
+      <p className="truncate text-xs text-slate-500" title={app.role}>{app.role} · {app.company}</p>
+      {!teaching && !batch && (app.missingLabels.length > 0 || reviewFields.length > 0) && (
+        <div>
+          <Button className="mb-3 w-full" variant={answered.length ? 'primary' : 'secondary'} disabled={!answered.length || !!capturing || app.status === 'Filling'} onClick={() => void rememberAll()}>{capturing === 'all' ? 'Reading answered questions…' : `Save all answered questions (${Math.min(answered.length, 100)})`}</Button>
+          <p className="mb-2 text-xs text-slate-500">Answer on the page, then save here for next time. You will confirm captured answers before saving.{answered.length > 100 ? ' Save up to 100 questions per batch.' : ''}</p>
+          <button className="text-xs font-medium text-slate-600 underline" onClick={() => setShowMissing((s) => !s)}>
+            {showMissing ? 'Hide' : 'Show'} questions to review
+          </button>
+          {showMissing && (
+            <ul aria-label="Questions to review" className="mt-2 max-h-80 space-y-2 overflow-y-auto overscroll-contain pr-1">
+              {reviewFields.map(field => <li key={field.token} className={cx('rounded-lg border p-2 text-xs text-slate-700', field.answered ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-white')}>
+                <p className="font-medium break-words">{field.label}</p>
+                <p className="mt-1 text-slate-600">{field.answered ? field.selectionMode === 'multiple' ? `${field.selectedCount ?? 0} answers selected — ready to save for next time.` : 'Answer entered — ready to save for next time.' : field.suggestionId ? 'A similar saved question is available. Confirm it before reuse.' : 'Answer on the page, then remember it here.'}</p>
+                {field.reason && <p className="mt-1 text-slate-600">{field.reason}</p>}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button className="px-2 py-1 text-xs" variant={field.answered ? 'primary' : 'secondary'} disabled={!!capturing || app.status === 'Filling'} onClick={() => void remember(field)}>{capturing === field.token ? 'Reading field…' : field.selectionMode === 'multiple' ? field.answered ? 'Save these answers' : 'Remember answers' : field.answered ? 'Save this answer' : 'Remember answer'}</Button>
+                  {field.suggestionId && !field.answered && <Button className="px-2 py-1 text-xs" variant="secondary" disabled={!!capturing} onClick={() => void remember(field, true)}>Review suggestion</Button>}
+                </div>
+              </li>)}
+              {app.missingLabels.filter((_, i) => !app.missingQuestions?.[i] || !reviewFields.some(f => f.label === app.missingQuestions?.[i])).map((label, i) => <li key={`manual-${i}`} className="rounded-lg bg-slate-50 p-3 text-xs text-slate-700">{label}<p className="mt-1 text-slate-500">{app.reviewFields ? 'Complete this field on the page.' : 'Click Fill this page to refresh these results and enable answer capture.'}</p></li>)}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {batch && <BatchRemember applicationId={app.id!} context={context} {...batch} onCancel={() => setBatch(undefined)} onSaved={(note, count) => { setBatch(undefined); setRemembered(note); }} />}
+      {teaching && (
+        <div className="space-y-3 border-t border-slate-200 pt-3">
+          {teaching.capture.profileUpdate ? <ProfileAnswer capture={teaching.capture} applicationId={app.id!} onCancel={() => setTeaching(undefined)} onSaved={note => { setTeaching(undefined); setRemembered(note); }} /> : <MappingEditor key={teaching.capture.captureId} id={teaching.id} capture={teaching.capture} context={context} initial={teaching.initial}
+            onCancel={() => setTeaching(undefined)} onSaved={async mappingId => {
+              const res = await sendToBackground('applySavedAnswer', { applicationId: app.id!, token: teaching.capture.token, captureId: teaching.capture.captureId, mappingId });
+              setTeaching(undefined);
+              if (!res.ok) { setError(`Answer saved, but could not apply: ${res.error}`); return; }
+              setRemembered(res.note);
+            }} />}
+        </div>
+      )}
+      {remembered && <div role="status"><Notice tone="success">{remembered}</Notice></div>}
+
+      <a className="text-xs text-indigo-700 underline" href={browser.runtime.getURL('/options.html#memories' as never)} target="_blank" rel="noreferrer">Manage Memories in Settings</a>
+
+      {error && <Notice tone="error">{error}</Notice>}
     </div>
   );
 }

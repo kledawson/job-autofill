@@ -2,8 +2,16 @@
 
 ## Unreleased — Application review queue
 
+- Fill all current-batch tabs independently; slow AI or a missing form no longer holds the rest.
+- Fill known Profile and Memories fields before optional AI matching; bound network waits and ignore cancelled results.
+- Restart an active fill from the queue or top Fill action while preserving existing page answers.
+- Compact sidebar sections remember open/closed choices and drag order. Fill and Queue come first by default, Applications last. Settings → Sidebar controls optional categories; Setup and Track start hidden. Link drafts survive panel reopening.
+- Separate missing-question review and confirmed Memory capture into Review & remember, with a bounded scrolling question list. Fill keeps a short application summary.
+- Queue cards prioritize Review and Submitted, keep failure Retry visible, and place refill/skip/details under More.
+- Dismiss stopped/completed queue notices with a small ×; remember dismissal across sidebar reopening without changing queue progress.
+
 - Replace single-link entry with a multiline list, preview, duplicate removal and existing-application review.
-- Process up to 100 links in configurable batches of 1–5 tabs (default 3), one fill at a time.
+- Process up to 100 links in configurable batches of 1–5 tabs (default 3), independent background fills.
 - Wait for every current application to be explicitly submitted or skipped before opening the next batch.
 - Pin preset documents and prepared answers; use current Profile and Memories for each new fill.
 - Add pause/resume/stop, manual step filling, retry and actionable missing-form/closed-tab feedback.

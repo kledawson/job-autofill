@@ -20,7 +20,7 @@ Codex reads the root `AGENTS.md`. Claude Code loads `CLAUDE.md`, which imports t
 Set up your profile -> open an application -> fill -> review and answer remaining questions ->
 remember reusable answers -> submit manually -> mark submitted.
 
-- Choose a role preset, paste job links, and process configurable 1–5-tab review batches with one fill at a time.
+- Choose a role preset, paste job links, and process configurable 1–5-tab review batches with independent background fills.
 - Pause, stop or retry the queue; explicitly confirm submission before it advances to the next batch.
 - Fill supported fields from your profile or confirmed memories, with verified writes and preserved user edits.
 - Remember single answers or multiple selections, with approved variations and company/application/site scopes.

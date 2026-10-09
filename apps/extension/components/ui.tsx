@@ -137,14 +137,20 @@ export function Grid({ children, cols = 2 }: { children: ReactNode; cols?: 1 | 2
   return <div className={cx('grid grid-cols-1 gap-4', c)}>{children}</div>;
 }
 
-export function Notice({ tone = 'info', children }: { tone?: 'info' | 'warn' | 'error' | 'success'; children: ReactNode }) {
+export function Notice({ tone = 'info', children, onDismiss, dismissLabel = 'Dismiss notification' }: { tone?: 'info' | 'warn' | 'error' | 'success'; children: ReactNode; onDismiss?: () => void; dismissLabel?: string }) {
   const styles = {
     info: 'border-indigo-200 bg-indigo-50 text-indigo-900',
     warn: 'border-amber-200 bg-amber-50 text-amber-900',
     error: 'border-red-200 bg-red-50 text-red-800',
     success: 'border-green-200 bg-green-50 text-green-800',
   }[tone];
-  return <div className={cx('rounded-lg border px-3 py-2 text-sm', styles)}>{children}</div>;
+  return <div className={cx('relative rounded-lg border px-3 py-2 text-sm', styles, onDismiss && 'pr-9')}>
+    {children}
+    {onDismiss && <button type="button" aria-label={dismissLabel} title={dismissLabel} onClick={onDismiss}
+      className="absolute right-1 top-1 rounded p-1 text-current opacity-70 hover:bg-black/5 hover:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-current">
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="m4 4 8 8m0-8-8 8" /></svg>
+    </button>}
+  </div>;
 }
 
 export { cx };

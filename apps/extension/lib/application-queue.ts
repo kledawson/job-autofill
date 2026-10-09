@@ -19,7 +19,8 @@ export const queueSchema = { parse(value: unknown): QueueState {
       !['running', 'paused', 'stopped', 'complete'].includes(q.status) ||
       !integer(q.batch) || !integer(q.createdAt) || !Array.isArray(q.items) || q.items.length < 1 || q.items.length > 100) throw new Error('Invalid stored queue. Stop it and create a new queue.');
   batchSize(q.batchSize);
-  if (q.items.filter(inFlight).length > 1) throw new Error('Invalid queue: two simultaneous fills.');
+  if (q.items.filter(i => i.batch === q.batch && i.batch > 0).length > 5) throw new Error('Invalid queue: batch exceeds five tabs.');
+  const attempts = new Set<string>(), tabs = new Set<number>();
   const ids = new Set<string>();
   for (const i of q.items) {
     if (!i || !uuid(i.id) || ids.has(i.id) || !integer(i.batch) || i.batch > q.batch ||
@@ -32,6 +33,11 @@ export const queueSchema = { parse(value: unknown): QueueState {
     if (i.state === 'filling' && (i.tabId === undefined || i.frameId === undefined)) throw new Error('Invalid queue frame ownership.');
     if (i.state === 'review' && !i.applicationId) throw new Error('Invalid queue review result.');
     if (queueKey(queueUrl(i.url)) !== i.key) throw new Error('Invalid stored application link.');
+    if (inFlight(i) && i.batch !== q.batch) throw new Error('Active attempt outside current batch.');
+    if (i.attempt && attempts.has(i.attempt)) throw new Error('Duplicate queue attempt.');
+    if (i.tabId !== undefined && tabs.has(i.tabId)) throw new Error('Duplicate queue tab.');
+    if (i.attempt) attempts.add(i.attempt);
+    if (i.tabId !== undefined) tabs.add(i.tabId);
     ids.add(i.id);
   }
   return q;
@@ -69,7 +75,7 @@ export function parseQueueLinks(input: string) {
   return { urls, duplicates, rejected, noLinks: !!input.trim() && !tokens.length };
 }
 export function nextQueueItem(q: QueueState): QueueItem | undefined {
-  if (q.status !== 'running' || q.items.some(inFlight)) return;
+  if (q.status !== 'running') return;
   const current = q.items.filter(i => i.batch === q.batch && i.batch > 0);
   if (current.some(i => i.state === 'queued')) return current.find(i => i.state === 'queued');
   if (current.some(i => !settled(i) || i.tabId !== undefined)) return;

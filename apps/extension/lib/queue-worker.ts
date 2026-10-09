@@ -83,13 +83,15 @@ export async function queueStart(urls: string[], size: number, presetId?: string
   await queuePump();
 }
 function openingUrl(attempt: string) { return browser.runtime.getURL('/opening.html') + '#queue=' + attempt; }
-async function cancel(item: QueueItem) {
-  if (item.tabId !== undefined) await browser.tabs.sendMessage(item.tabId, { type: 'cancelQueue', runId: item.attempt } satisfies ContentMessage).catch(() => undefined);
+async function cancel(item: QueueItem, wait = false) {
+  if (item.tabId !== undefined) await browser.tabs.sendMessage(item.tabId, { type: 'cancelQueue', runId: item.attempt, wait } satisfies ContentMessage).catch(() => undefined);
+  if (item.tabId !== undefined) await browser.tabs.update(item.tabId, { autoDiscardable: true }).catch(() => undefined);
   if (item.attempt) await db.fillRuns.delete(item.attempt);
 }
-export async function queuePump() {
+async function launchNext(requestedId?: string) {
   const claim = await mutate(q => {
-    const item = nextQueueItem(q);
+    const requested = requestedId ? q.items.find(i => i.id === requestedId && i.state === 'queued' && i.batch > 0 && i.batch === q.batch) : undefined;
+    const item = requested && ['running', 'paused'].includes(q.status) ? requested : requestedId ? undefined : nextQueueItem(q);
     if (!item) return;
     item.state = 'opening'; item.attempt = crypto.randomUUID(); item.frameId = undefined;
     item.deadline = Date.now() + 60000; item.note = undefined;
@@ -106,6 +108,9 @@ export async function queuePump() {
       if (!await ownsTab(claim.item, claim.token)) throw new Error('This tab belongs to an earlier browser session. Retry after reopening the queue.');
       const tab = await browser.tabs.get(claim.item.tabId);
       if (!tab.url || queueKey(tab.url) !== queueKey(toApplicationUrl(claim.item.url))) throw new Error('This tab navigated away. Open the application again before retrying.');
+      const ping = await browser.tabs.sendMessage(claim.item.tabId, { type: 'ping' } satisfies ContentMessage).catch(() => undefined);
+      if (ping?.build !== __BUILD__) throw new Error('This page is using older extension code. Copy unsaved answers, refresh the application page, then retry.');
+      await browser.tabs.update(claim.item.tabId, { autoDiscardable: false });
       await prepare(claim.token, claim.item, snapshot);
       await browser.tabs.sendMessage(claim.item.tabId, { type: 'fill', runId: claim.item.attempt } satisfies ContentMessage);
     } else {
@@ -115,6 +120,11 @@ export async function queuePump() {
       await queueOpening(claim.item.attempt!, { id: browser.runtime.id, url: openingUrl(claim.item.attempt!), tab });
     }
   } catch (err) { await fail(claim.item.attempt!, errorText(err)); }
+}
+/** Claims are atomic; each bounded batch has independent tab/frame/run ownership. */
+export async function queuePump() {
+  // launchNext claims before browser I/O. Concurrent pump calls cannot claim the same item.
+  await Promise.all(Array.from({ length: 5 }, () => launchNext()));
 }
 async function prepare(token: string, item: QueueItem, snapshot: QueueSnapshot) {
   if (item.tabId === undefined || !item.attempt) throw new Error('Missing application tab.');
@@ -141,7 +151,7 @@ export async function queueOpening(attempt: string, sender: Sender) {
   if (!claimed) return;
   await browser.storage.session.set({ [ownershipKey(claimed.item.tabId!)]: claimed.token + ':' + claimed.item.id });
   await prepare(claimed.token, claimed.item, await queueSnapshot(claimed.token));
-  await browser.tabs.update(claimed.item.tabId!, { url: toApplicationUrl(claimed.item.url) });
+  await browser.tabs.update(claimed.item.tabId!, { url: toApplicationUrl(claimed.item.url), autoDiscardable: false });
 }
 export async function queuePending(tabId: number, frameId: number, commit: boolean) {
   return (await mutate(q => {
@@ -159,15 +169,23 @@ export async function queueOwns(runId: string, sender: Sender, writing = false) 
   if (q?.status === 'stopped' || !['filling', 'review'].includes(item.state) || (item.frameId !== undefined && item.frameId !== (sender.frameId ?? 0)) ||
       (writing && item.state !== 'filling')) throw new Error('This queue fill has finished or was cancelled.');
 }
+export async function queueStarted(runId: string, sender: Sender, applicationId: number) {
+  await mutate(q => {
+    const i = q.items.find(i => i.attempt === runId && i.tabId === sender.tab?.id && i.state === 'filling' && i.frameId === (sender.frameId ?? 0));
+    if (i && q.status !== 'stopped') i.applicationId = applicationId;
+  });
+}
 export async function queueFinished(runId: string, sender: Sender, applicationId?: number, note?: string) {
   const item = await mutate(q => {
     const i = q.items.find(i => i.attempt === runId && i.tabId === sender.tab?.id);
     if (!i || !inFlight(i) || q.status === 'stopped') return;
     if (i.frameId !== undefined && i.frameId !== (sender.frameId ?? 0)) return;
+    if (note && i.state === 'filling' && i.frameId === undefined) return;
     i.state = note ? 'needs-action' : 'review'; i.note = note; i.applicationId = applicationId;
     i.deadline = undefined;
     return structuredClone(i);
   });
+  if (item?.tabId !== undefined) await browser.tabs.update(item.tabId, { autoDiscardable: true }).catch(() => undefined);
   if (note && item) await cancel(item);
   await queuePump();
 }
@@ -205,15 +223,34 @@ export async function queueAction(token: string, itemId: string, action: 'open' 
     const tab = await browser.tabs.update(current.tabId, { active: true });
     if (tab?.windowId !== undefined) await browser.windows.update(tab.windowId, { focused: true }); return;
   }
+  if (action === 'retry') {
+    const old = await mutate(state => {
+      if (state.token !== token) throw new Error('This queue changed.');
+      const i = state.items.find(i => i.id === itemId)!;
+      if (settled(i) || i.batch === 0 || !['running', 'paused'].includes(state.status)) throw new Error('This application cannot be refilled.');
+      const previous = structuredClone(i);
+      i.state = 'needs-action'; i.deadline = undefined; i.note = 'Stopping the previous attempt…';
+      return previous;
+    });
+    if (!old) return;
+    await cancel(old, true);
+    await mutate(state => {
+      const i = state.items.find(i => i.id === itemId);
+      if (state.token !== token || !i || i.attempt !== old.attempt || settled(i) || state.status === 'stopped') return;
+      i.state = 'queued'; i.note = undefined; i.attempt = undefined; i.frameId = undefined;
+      // An explicit retry also works while the queue is paused, without resuming other jobs.
+    });
+    const paused = (await queuePublic())?.status === 'paused';
+    if (paused) await launchNext(itemId);
+    else await queuePump();
+    return;
+  }
   const item = await mutate(async state => {
     if (state.token !== token) throw new Error('This queue changed.');
     const i = state.items.find(i => i.id === itemId)!;
     if (action === 'skip' && inFlight(i)) throw new Error('Wait for this fill to finish, or stop the queue to keep its tabs.');
     if (settled(i)) return structuredClone(i); // Double clicks retry closure, never submit twice.
-    if (action === 'retry') {
-      if (inFlight(i) || i.batch === 0 || !['running', 'paused'].includes(state.status)) throw new Error('Resume the queue and wait for the current fill before retrying.');
-      i.state = 'queued'; i.note = undefined;
-    } else {
+    {
       if (action === 'submitted' && (i.state !== 'review' || !i.applicationId)) throw new Error('Wait for autofill, then verify successful submission on the website.');
       if (action === 'submitted') {
         const app = await db.applications.get(i.applicationId!);
@@ -230,7 +267,7 @@ export async function queueAction(token: string, itemId: string, action: 'open' 
   });
   if (!item) return;
   await cancel(item);
-  if (action !== 'retry' && item.tabId !== undefined) {
+  if (item.tabId !== undefined) {
     // Only IDs created and bound by this queue are ever closed.
     const tab = await browser.tabs.get(item.tabId).catch(() => undefined);
     if (tab) {

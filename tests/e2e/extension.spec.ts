@@ -307,7 +307,8 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   // Side panel shows it as ready; marking it submitted updates the record.
   await panel.bringToFront();
   await panel.setViewportSize({ width: 380, height: 760 });
-  const row = panel.locator('section').filter({ has: panel.getByRole('heading', { name: 'Applications', exact: true }) }).getByRole('listitem').filter({ hasText: 'Administrative Business Partner' });
+  await panel.getByRole('button', { name: 'Toggle Applications', exact: true }).click();
+  const row = panel.locator('#sidebar-history-body').getByRole('listitem').filter({ hasText: 'Administrative Business Partner' });
   await expect(row).toContainText('Contoso Labs');
   await expect(row).toContainText('Ready for review');
   await shot(panel, 'sidepanel');
@@ -338,6 +339,7 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
   await form.bringToFront();
   expect(await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }))).toMatchObject({ ok: true });
   await expect(form.locator('#learn-source')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await panel.getByRole('button', { name: /^Review & remember \(/ }).click();
   const missing = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Application discovery channel' });
   await expect(missing.getByRole('button', { name: 'Remember answer', exact: true })).toHaveClass(/bg-white/);
   await form.locator('#learn-source').selectOption('Company website');

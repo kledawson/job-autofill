@@ -148,10 +148,12 @@ The sidebar replaces single-link entry with a parsed list and configurable batch
 (default 3, maximum 100 URLs). Existing tracked jobs are excluded and can be opened for review.
 Queue metadata lives in applicationQueue; one immutable document snapshot lives in queueContexts.
 IndexedDB version 5 adds both tables. lib/application-queue.ts validates records and makes
-pure batch decisions. lib/queue-worker.ts atomically claims a single opening/filling attempt,
+pure batch decisions. lib/queue-worker.ts atomically claims independent opening/filling attempts within the current batch (maximum five),
 then performs browser side effects. Opening pages register their attempt before navigation,
 so a stopped service worker cannot silently reopen the same application. Parent/page handshake
 races share the same transaction; only one binds the tab.
+
+All current-batch tabs start filling independently in the background; one slow page or AI response does not hold other tabs. Known Profile and Memories fields fill before optional AI question matching and essays. Network messages are bounded and cancelled local waits ignore late results; optional Gemini requests have 45-second abort deadlines. Explicit restart invalidates the old attempt, waits for its writer to stop, and keeps manually entered values.
 
 One preset/document snapshot is stored per queue. Each new fill combines it with the latest
 Profile and current opt-in Gemini setting; its immutable fillRuns record binds tab, job, frame
@@ -160,11 +162,21 @@ copies and do not open browser tabs. A batch advances only when every current it
 submitted or skipped and its owned tab has closed. Submission is recorded locally before optional
 Sheets synchronization, whose failure does not block the queue. No website Submit is clicked.
 
-Pause prevents the next claim; Stop disconnects the current session and preserves open pages.
+Pause prevents the next claim; Stop disconnects all active sessions and preserves open pages.
 Queue observers update review/capture metadata but do not automatically fill later steps.
-An explicit Fill this step retries through the single scheduler and preserves non-empty values.
+An explicit Fill this step retries through the bounded scheduler and preserves non-empty values.
 Missing forms, closed tabs and bounded loading/fill timeouts require Retry or Skip. Chromium
 alarms (additional alarms permission) wake durable timeout/recovery checks without keeping the
 worker alive. Worker restarts reconcile state; browser restarts pause and detach previous tab IDs,
 since those IDs must not authorize closing tabs in a new session. Session-owned markers restrict
 closure to queue-created tabs. Previous restored pages are kept; retries open new owned tabs.
+
+Queue-owned tabs are temporarily protected from automatic Chrome discarding while filling, then restored to normal memory management on review/cancellation. Existing pages report their build during Retry; stale content scripts request a page refresh instead of silently ignoring a new fill.
+
+## Sidebar layout and review
+
+SidebarSection stores validated open/closed booleans per section in extension local storage. SidebarLayout reorders keyed mounted children using native drag handles, keyboard arrows or move buttons, preserving live forms and drafts. A validated versioned local preference retains order across panels; removed IDs are ignored and newly added sections inserted before their next default neighbor. Applications is last by default; Reset order affects order only.
+
+SidebarPreferences stores versioned, allowlisted category visibility. Hidden sections remain mounted to preserve drafts and selected presets; hiding the queue does not cancel it. Fill is always visible as the recovery action. Setup and Track are hidden by default, but can be enabled in Settings → Sidebar.
+
+Fill holds a compact application summary; ApplicationReview holds the confirmed capture/Save all flow in a separate collapsed section with a bounded question-list scroll area. QueueCard promotes Review/Submitted, exposes failure retry, and keeps secondary actions/details under More. Setup configuration stays in Settings with a minimal unfinished-onboarding prompt in Fill. Queue link drafts use session storage. Public-settings subscriptions ignore unrelated queue/layout status changes.

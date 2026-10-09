@@ -1,4 +1,4 @@
-import { installQueue, queueStart, queuePublic, queueOpening, queuePending, queueFinished, queueControl, queueAction, queueRemoved, queueOwns, queueBusy, queueTab } from '@/lib/queue-worker';
+import { installQueue, queueStart, queuePublic, queueOpening, queuePending, queueFinished, queueStarted, queueControl, queueAction, queueRemoved, queueOwns, queueBusy, queueTab } from '@/lib/queue-worker';
 import { selectedPresetId, buildPresetContext } from '@/lib/preset-db';
 import { presetId } from '@/lib/presets';
 import { browser, type Browser } from 'wxt/browser';
@@ -448,7 +448,7 @@ const handlers: Handlers = {
       const guidance = context.preset?.emphasis?.trim();
       const prompt = renderPrompt(settings.promptTemplate, req, context.profile) +
         (guidance ? '\n\nRole emphasis selected by the applicant:\n' + guidance + '\nUse this only to prioritize verified profile facts. Do not invent qualifications or change applicant facts.' : '');
-      const text = await generateText(settings.geminiApiKey, settings.geminiModel, prompt);
+      const text = await generateText(settings.geminiApiKey, settings.geminiModel, prompt, AbortSignal.timeout(45000));
       if (req.runId) await ownedRun(req.runId, sender);
       return { ok: true, answer: clampToLimit(text, req.characterLimit) };
     } catch (err) {
@@ -471,7 +471,7 @@ const handlers: Handlers = {
     if (!ask.length) return { ok: true, keys };
     try {
       const subset = ask.map((i) => fields[i]!);
-      const raw = await generatePromptJson(settings.geminiApiKey, settings.geminiModel, mappingPrompt(subset), mappingSchema());
+      const raw = await generatePromptJson(settings.geminiApiKey, settings.geminiModel, mappingPrompt(subset), mappingSchema(), AbortSignal.timeout(45000));
       const mapped = parseMappings(raw, subset.length);
       for (const [j, i] of ask.entries()) {
         keys[i] = mapped[j] ?? null;
@@ -506,6 +506,7 @@ const handlers: Handlers = {
     const patch = { presetId: preset?.id, presetName: preset?.name, presetRevision: preset?.revision, resumeName: run?.context.resume?.name, runId: run?.id, company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [], memoryQuestions: [] };
     if (existing?.id && existing.status !== 'Submitted') {
       await db.applications.update(existing.id, { ...patch, status: 'Filling' });
+      if (run?.context.queue && req.runId) await queueStarted(req.runId, sender, existing.id);
       return { applicationId: existing.id };
     }
     const id = await db.applications.add({
@@ -519,6 +520,7 @@ const handlers: Handlers = {
       missingCount: 0,
       missingLabels: [],
     });
+    if (run?.context.queue && req.runId) await queueStarted(req.runId, sender, id as number);
     return { applicationId: id as number };
   },
 

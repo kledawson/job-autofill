@@ -90,8 +90,8 @@ function generate(apiKey: string, model: string, parts: Part[], generationConfig
   });
 }
 
-export function generateText(apiKey: string, model: string, prompt: string): Promise<string> {
-  return generate(apiKey, model, [{ text: prompt }], { temperature: 0.7 });
+export function generateText(apiKey: string, model: string, prompt: string, signal?: AbortSignal): Promise<string> {
+  return generate(apiKey, model, [{ text: prompt }], { temperature: 0.7 }, signal);
 }
 
 /**

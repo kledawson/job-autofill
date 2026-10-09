@@ -146,7 +146,7 @@ export function sendToBackground<K extends keyof BackgroundMessages>(
 }
 
 /** Messages handled by the content script. */
-export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: string } | { type: 'cancelQueue'; runId?: string } | { type: 'ping' } | { type: 'readPosting' } |
+export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: string } | { type: 'cancelQueue'; runId?: string; wait?: boolean } | { type: 'ping' } | { type: 'readPosting' } |
   { type: 'captureAnswer'; token: string; question: string } |
   { type: 'captureAnswers'; fields: { token: string; label: string }[] } |
   { type: 'validateCaptures'; entries: { token: string; captureId: string }[] } |

@@ -16,7 +16,7 @@ export function PresetSelector({ onSelected }: { onSelected?: (id: string | unde
   });
   const [error, setError] = useState(''), [saving, setSaving] = useState(false);
   useEffect(() => { if (data) onSelected?.(data.selected); }, [data?.selected]);
-  return <section className="space-y-2 rounded-xl border border-indigo-200 bg-white p-4 shadow-sm" aria-label="Application preset">
+  return <section className="space-y-2" aria-label="Application preset">
     <div className="flex items-center justify-between gap-2">
       <label htmlFor="application-preset" className="font-semibold text-slate-800">Application preset</label>
       <button className="text-xs font-medium text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/options.html#presets' as never) })}>Manage presets</button>

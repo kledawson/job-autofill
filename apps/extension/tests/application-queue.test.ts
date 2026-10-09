@@ -32,11 +32,13 @@ describe('application queue', () => {
     expect(parseQueueLinks('not a link').noLinks).toBe(true);
     expect(() => parseQueueLinks(Array.from({ length: 101 }, (_, i) => 'https://example.com/' + i).join('\n'))).toThrow(/100/);
   });
-  it('claims only configured batch and never a second in-flight fill', () => {
+  it('claims independent fills only within the configured batch', () => {
     const state = q(), first = nextQueueItem(state)!;
     expect(state.items.filter(i => i.batch === 1)).toHaveLength(3);
-    first.state = 'opening'; expect(nextQueueItem(state)).toBeUndefined();
-    first.state = 'review'; expect(nextQueueItem(state)?.batch).toBe(1);
+    first.state = 'opening'; expect(nextQueueItem(state)).toBe(state.items[1]);
+    state.items[1]!.state = 'opening'; state.items[2]!.state = 'filling';
+    expect(nextQueueItem(state)).toBeUndefined();
+    first.state = 'review'; expect(nextQueueItem(state)).toBeUndefined();
   });
   it('waits for all review items and their tabs before next batch', () => {
     const state = q(); nextQueueItem(state); state.items.slice(0,3).forEach(i=>{i.state='review'});
@@ -58,19 +60,23 @@ describe('application queue', () => {
   it('finishes after all items are resolved', () => {
     const state=q();state.items.forEach(i=>{i.state='skipped'});expect(nextQueueItem(state)).toBeUndefined();expect(state.status).toBe('complete');
   });
-  it('rejects malformed storage and multiple active attempts', () => {
+  it('rejects malformed storage and duplicated attempt/tab ownership', () => {
     const state=q();expect(queueSchema.parse(state)).toBe(state);
     expect(()=>queueSchema.parse({...state,schemaVersion:2})).toThrow();
     expect(()=>queueSchema.parse({...state,items:[{...state.items[0],url:'javascript:alert(1)'}]})).toThrow();
     state.items[0]!.state='opening';expect(()=>queueSchema.parse(state)).toThrow(/active/);
-    state.items[1]!.state='filling';expect(()=>queueSchema.parse(state)).toThrow(/simultaneous/);
+    state.batch=1;
+    state.items.slice(0,3).forEach((i,index)=>Object.assign(i,{state:'filling',batch:1,attempt:crypto.randomUUID(),deadline:Date.now()+1000,frameId:0,tabId:index+1}));
+    expect(queueSchema.parse(state)).toBe(state);
+    state.items[1]!.attempt=state.items[0]!.attempt;expect(()=>queueSchema.parse(state)).toThrow(/Duplicate queue attempt/);
+    state.items[1]!.attempt=crypto.randomUUID();state.items[1]!.tabId=state.items[0]!.tabId;expect(()=>queueSchema.parse(state)).toThrow(/Duplicate queue tab/);
   });
   it('bounds sizes strictly', () => {
     for(const v of [0,6,1.5,'3',null])expect(()=>batchSize(v)).toThrow();expect(batchSize(3)).toBe(3);
   });
 });
 
-describe('serialized queue review sessions', () => {
+describe('isolated queue review sessions', () => {
   beforeEach(() => {
     vi.restoreAllMocks();timing.settle=1;
     document.body.innerHTML='<form><label for="essay">Why this team?</label><textarea id="essay" required></textarea></form>';
@@ -101,4 +107,15 @@ describe('serialized queue review sessions', () => {
     expect((document.querySelector('#later') as HTMLInputElement).value).toBe('');
     expect(answer).toHaveBeenCalledTimes(1);s.disconnect();
   });
+});
+
+it('fills canonical facts before waiting for AI question matching', async () => {
+  document.body.innerHTML='<form><label for="name">First name</label><input id="name" autocomplete="given-name"><label for="custom">Which fictional tool do you prefer?</label><input id="custom" required></form>';
+  let resolve!: (v: {ok:true;keys:null[]}) => void;
+  const mapping=vi.fn(()=>new Promise<{ok:true;keys:null[]}>(r=>{resolve=r}));
+  const profile=sampleProfile(); profile.preferredName='';
+  const session=new FillSession(document,ADAPTERS.other,{context:{profile,resume:null,coverLetter:null,transcript:null,hasGeminiKey:true},answer:async()=>({ok:false,error:'No essay'}),mapFields:mapping,jobDescription:async()=>''});
+  const run=session.run();await vi.waitFor(()=>expect(mapping).toHaveBeenCalled());
+  expect((document.querySelector('#name') as HTMLInputElement).value).toBe(profile.firstName);
+  resolve({ok:true,keys:[null]});await run;session.disconnect();
 });

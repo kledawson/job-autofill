@@ -9,12 +9,14 @@
 ## Implemented application queue
 
 - Multiline link preview, duplicate detection and existing-application review.
-- User-started 1–5-tab batches with one fill at a time and an explicit review/submission barrier.
+- User-started 1–5-tab batches with independent background fills and an explicit review/submission barrier.
 - Pinned preset/documents, per-attempt ownership, persisted recovery and pause/stop/retry controls.
 - Local confirmed submission independent of optional Sheets success.
 
-Future work: confidence-based field review colors. Parallel application filling remains deferred
-until queue reliability and performance are measured.
+- Compact persistent sidebar sections: Fill and Queue initially open; Review & remember, presets and history initially closed. Settings checkboxes hide/show optional categories; Setup and Track initially hidden. Compact Fill summary and Queue primary actions; Memory capture has its own bounded review list. Drag/keyboard reorder persists; Applications appears last by default. Link drafts survive panel reopening.
+- Restart stalled attempts without replacing manual answers; basic fields do not wait on optional AI.
+
+Future work: confidence-based field review colors.
 
 ## Implemented application presets
 

@@ -226,8 +226,8 @@ transaction atomicity, conservative defaults, import formats or Profile referenc
   immutable ID, canonical URL/key, batch, state, attempt UUID, optional owned tab/frame/application
   IDs, deadline and actionable note. Maximum 100 items, batch size 1–5. Generic job-ID query
   parameters survive normalization; tracking parameters are removed. LinkedIn is excluded.
-- Queue creation, claims and item decisions use IndexedDB write transactions. Only one item may
-  be opening/filling. All current review items must settle and close before another batch starts.
+- Queue creation, claims and item decisions use IndexedDB write transactions. Up to five items in the current batch may
+  be opening/filling; attempt IDs and tab IDs are unique. All current review items must settle and close before another batch starts.
   Batch size edits affect future assignments. A new queue requires the old one complete/stopped.
 - startQueue, getQueue, controlQueue and queueAction require trusted extension pages. Actions and
   IDs are validated. getQueue excludes document payloads. Queue/token/item IDs prevent stale-panel
@@ -237,7 +237,7 @@ transaction atomicity, conservative defaults, import formats or Profile referenc
 - claimPendingFill carries optional queued/runId metadata and atomically claims one frame. Queue
   content fills are bounded; missing forms require action. fillStarted and generateAnswer require an
   active writing attempt; later review metadata may use the owned run without starting a new fill.
-  Explicit retries bind a new context and preserve user-entered values.
+  Explicit retries bind a new context and preserve user-entered values. They also restart an active attempt after cancelling and awaiting its content writer; a paused queue permits an explicit single-item retry without resuming other jobs. cancelQueue adds an optional wait acknowledgement.
 - Submitted and Skip close only queue-created/session-owned tabs. Submitted requires a ready item
   and explicit user confirmation; the tracker update is atomic with the queue decision. Skip does
   not mark submitted or write Sheets. Sheets sync starts independently after local persistence.
@@ -245,3 +245,13 @@ transaction atomicity, conservative defaults, import formats or Profile referenc
 - A worker restart retains attempts and contexts. A new browser session pauses the queue, invalidates
   its old run contexts and detaches persisted tab IDs; restored website pages are kept. Queue records,
   private document snapshots and run contexts are excluded from exports and cleared by Delete all data.
+
+Queue fillStarted binds the validated application ID to its owned filling item so the panel can identify in-progress jobs. Content ping includes a build identifier; retry refuses stale content code with an actionable refresh message.
+
+## Sidebar preferences
+
+Sidebar layout booleans and session-only queue drafts are UI preferences and contain no captured applicant answers. sidebarOrder stores {version: 1, order: section IDs} in local storage; malformed or unsupported values fall back to defaults. IDs are allowlisted, deduplicated and completed with missing sections inserted before their next default neighbor. Reordering/reset does not alter collapse choices, active fills or drafts.
+
+sidebarVisibility stores {version: 1, categories: allowlisted ID-to-boolean preferences}; malformed, missing or unsupported fields use conservative UI defaults. Fill cannot be hidden. Setup and Track default hidden. Trusted UI pages persist these preferences directly; no new worker message or page-content data is involved. Hiding preserves mounted children and does not stop a queue or change preset selection. Memory capture remains explicit within Review & remember and uses unchanged capture/confirmation contracts.
+
+The dismissible stopped/completed queue notice uses dismissedQueueNotice in local storage: {version: 1, token, status}. Only a validated queue token and terminal status are accepted. Dismissal is specific to that queue/status and survives reopening; it never changes queue progress, application records, or opened tabs. New queues show their own terminal notice.
