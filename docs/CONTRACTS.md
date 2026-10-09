@@ -186,3 +186,33 @@ answers plus matching-rule differences; new items can be excluded individually o
 summary counts actual records added and removed, including grouped overlaps. Identical stored rules
 and repeated entries inside a file are described separately. Layout changes do not alter matching,
 transaction atomicity, conservative defaults, import formats or Profile references.
+
+## Application preset contract
+
+- ApplicationPreset has schemaVersion 1, immutable ID, positive revision, timestamp, name,
+  resume/coverLetter document choices, portfolio/GitHub/website overrides, AI emphasis and prepared
+  responses. A document choice is profile, none or an immutable PDF ID. Null links inherit the
+  Profile; blank overrides skip a link. Only http(s) URLs without credentials are accepted.
+- Limits: 30 presets, 80-character names, 4,000-character emphasis, 20 responses, 700-character
+  questions, 10,000-character answers, 10 approved wordings per response and 10 MB per PDF.
+  Repeated/overlapping approved response wordings are rejected. Names are unique ignoring case.
+- Save compares the expected revision inside a write transaction spanning presets and presetFiles.
+  PDFs staged in the UI are persisted only with a successful save. Duplication references immutable
+  documents; deleting/updating one preset never deletes a file another preset uses. Default remains
+  available. Selection is stored separately and falls back to Default after selected-preset deletion.
+- Shared Profile facts and personal Memories are not duplicated or rewritten. Preset resolution
+  overrides only approved presentation links. Prepared responses apply to text/textarea questions
+  classified as unknown/free-response, before optional AI. Known Profile fields remain canonical.
+  Alternate wordings are explicit user approvals; similarity alone never authorizes reuse.
+- FillContext adds optional preset metadata and a runId. startFill/fillActiveTab accept a validated
+  optional presetId from a trusted extension page. The background snapshots resolved Profile,
+  document payloads and preset responses before fill. A run belongs to one tab and stable job
+  identity, across permitted frames. generateAnswer/fillStarted/fillFinished bind to this run.
+  Caller-controlled run IDs cannot access another tab's context; replaced runs reject late results.
+- Runtime worker restarts preserve the run context in trusted extension-origin IndexedDB. Closed
+  tabs and explicit new fills remove old runs. Snapshots contain private applicant data, are excluded
+  from logs/exports and are cleared by Delete all data. No credentials are included in a snapshot.
+- Application records add optional preset ID/name/revision, selected resume filename and runId.
+  Historical records stay readable. Existing fields/uploads remain protected; using a different
+  preset on a live already-filled form requests a fresh form instead of silently mixing presets.
+- Profile JSON and Memories backup formats stay unchanged and exclude presets and their PDFs.

@@ -1,3 +1,4 @@
+import { preparedResponse } from '../presets';
 import type { AnswerRequest, FieldQuestion, FillContext, Result } from '../messages';
 import { AI_MAPPABLE_KEYS } from '../field-map';
 import { payloadToFile } from '../messages';
@@ -97,6 +98,7 @@ function byDocumentOrder(a: FieldRecord, b: FieldRecord): number {
 const LINK_KEYS = new Set<string>(['linkedin', 'github', 'portfolio', 'website']);
 
 export class FillSession {
+  get processing() { return this.busy; }
   private records = new Map<HTMLElement, FieldRecord>();
   private jobInfo: JobInfo;
   private description: string | null = null;
@@ -344,7 +346,17 @@ export class FillSession {
   }
 
   private async applyRememberedMappings(records: FieldRecord[]) {
-    const eligible = records.filter(canRemember);
+    // Prepared responses never override canonical facts, files, consent or challenge controls.
+    const presetRecords = new Set<FieldRecord>();
+    for (const rec of records) {
+      if (!['text', 'textarea'].includes(rec.field.kind) || !['free_response', 'unknown'].includes(rec.cls.kind)) continue;
+      const answer = preparedResponse(this.deps.context.preset?.responses ?? [], rec.field.label);
+      if (answer !== undefined) { rec.cls = { kind: 'saved_answer', answer }; presetRecords.add(rec); }
+    }
+    const eligible = records.filter(r => !presetRecords.has(r) && canRemember(r) &&
+      !(r.cls.kind === 'profile' && ['portfolio', 'github', 'website'].includes(r.cls.key) &&
+        this.deps.context.preset?.links?.[r.cls.key as 'portfolio' | 'github' | 'website'] !== undefined &&
+        this.deps.context.preset.links[r.cls.key as 'portfolio' | 'github' | 'website'] !== null));
     if (!eligible.length || (!this.deps.rememberedMappings && !this.deps.matchSavedAnswers)) return;
     try {
       if (this.deps.matchSavedAnswers) {

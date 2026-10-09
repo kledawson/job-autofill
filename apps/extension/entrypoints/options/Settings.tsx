@@ -14,10 +14,12 @@ import {
 import { DataSection, DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
 import { Button, SELECT_ARROW, cx } from '@/components/ui';
 import { mergeResumeDraft } from '@/lib/resume';
+import { PresetsSection } from '@/components/Presets';
 import { KnowledgeSection } from '@/components/KnowledgeBase';
 
 const NAV = [
   ['profile', 'Profile'],
+  ['presets', 'Presets'],
   ['memories', 'Memories'],
   ['documents', 'Documents'],
   ['connections', 'Connections'],
@@ -36,16 +38,26 @@ export default function Settings() {
   const { profile, update, save, replace, dirty, savedAt, reload, saveError } = useProfile();
   const { settings } = usePublicSettings();
   const [version, setVersion] = useState(0);
+  const [presetDirty, setPresetDirty] = useState(false);
 
   useEffect(() => {
     history.replaceState(null, '', `#${tab}`);
   }, [tab]);
   useEffect(() => {
-    const change = () => setTab(tabFromHash());
+    const change = () => {
+      const next = tabFromHash();
+      if (presetDirty && tab === 'presets' && next !== tab && !window.confirm('Discard your unsaved preset changes?')) {
+        history.replaceState(null, '', '#presets'); return;
+      }
+      setTab(next);
+    };
     window.addEventListener('hashchange', change);
     return () => window.removeEventListener('hashchange', change);
-  }, []);
-  function chooseTab(next: Tab) { setTab(next); window.scrollTo({ top: 0, behavior: 'instant' }); }
+  }, [tab, presetDirty]);
+  function chooseTab(next: Tab) {
+    if (presetDirty && tab === 'presets' && next !== tab && !window.confirm('Discard your unsaved preset changes?')) return;
+    setTab(next); window.scrollTo({ top: 0, behavior: 'instant' });
+  }
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -129,6 +141,7 @@ export default function Settings() {
           </>
         )}
         {tab === 'prompt' && settings && <PromptSection settings={settings} />}
+        {tab === 'presets' && <PresetsSection onDirtyChange={setPresetDirty} />}
         {tab === 'memories' && <KnowledgeSection />}
         {tab === 'data' && (
           <DataSection

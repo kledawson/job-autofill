@@ -1,3 +1,5 @@
+import { selectedPresetId, buildPresetContext } from '@/lib/preset-db';
+import { presetId } from '@/lib/presets';
 import { browser, type Browser } from 'wxt/browser';
 import { db, getProfile, getRememberedMappings, saveRememberedMapping, saveConfirmedAnswers } from '@/lib/db';
 import { generateJson, generatePromptJson, generateText, testKey } from '@/lib/gemini';
@@ -116,6 +118,28 @@ async function notifyReady(app: Application) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+async function preparePresetRun(tabId: number, topUrl: string, selectedId?: string) {
+  const context = await buildPresetContext(selectedId);
+  if (!context.profile.firstName || !context.profile.email) throw new Error('Finish your profile first (at least your name and email).');
+  const runId = crypto.randomUUID();
+  context.runId = runId;
+  await db.transaction('rw', db.fillRuns, async () => {
+    await db.fillRuns.where('tabId').equals(tabId).delete();
+    await db.fillRuns.where('createdAt').below(Date.now() - 24 * 60 * 60_000).delete();
+    await db.fillRuns.add({ id: runId, tabId, topUrl, createdAt: Date.now(), context });
+  });
+  return context;
+}
+async function ownedRun(id: string, sender: Sender) {
+  presetId(id);
+  await pageContext(sender);
+  const run = await db.fillRuns.get(id);
+  if (!run || run.tabId !== sender.tab?.id || jobKey(run.topUrl) !== jobKey(sender.tab?.url ?? '')) {
+    throw new Error('This fill session changed. Start filling this application again.');
+  }
+  return run;
+}
 
 async function filePayload(kind: StoredFile['kind']): Promise<FilePayload | null> {
   const f = await db.files.get(kind);
@@ -317,24 +341,29 @@ const handlers: Handlers = {
     return { ok: true };
   },
 
-  async getFillContext() {
-    const [profile, resume, coverLetter, transcript, settings] = await Promise.all([
-      getProfile(),
-      filePayload('resume'),
-      filePayload('coverLetter'),
-      filePayload('transcript'),
-      getSettings(),
-    ]);
-    return { profile, resume, coverLetter, transcript, hasGeminiKey: !!settings.geminiApiKey };
+  async getFillContext(req, sender) {
+    if (sender.tab?.id !== undefined && !sender.url?.startsWith(browser.runtime.getURL('/'))) {
+      await pageContext(sender);
+      const run = req.runId ? await ownedRun(req.runId, sender) :
+        (await db.fillRuns.where('tabId').equals(sender.tab.id).toArray()).find(r => jobKey(r.topUrl) === jobKey(sender.tab!.url ?? ''));
+      if (run) return run.context;
+      return preparePresetRun(sender.tab.id, sender.tab.url ?? sender.url!);
+    }
+    requireExtensionPage(sender);
+    return buildPresetContext();
   },
 
-  async generateAnswer(req) {
+  async generateAnswer(req, sender) {
+    if (!req.runId) requireExtensionPage(sender);
     const settings = await getSettings();
     if (!settings.geminiApiKey) return { ok: false, error: 'Add a Gemini API key in settings to generate answers.' };
     try {
-      const profile = await getProfile();
-      const prompt = renderPrompt(settings.promptTemplate, req, profile);
+      const context = req.runId ? (await ownedRun(req.runId, sender)).context : await buildPresetContext();
+      const guidance = context.preset?.emphasis?.trim();
+      const prompt = renderPrompt(settings.promptTemplate, req, context.profile) +
+        (guidance ? '\n\nRole emphasis selected by the applicant:\n' + guidance + '\nUse this only to prioritize verified profile facts. Do not invent qualifications or change applicant facts.' : '');
       const text = await generateText(settings.geminiApiKey, settings.geminiModel, prompt);
+      if (req.runId) await ownedRun(req.runId, sender);
       return { ok: true, answer: clampToLimit(text, req.characterLimit) };
     } catch (err) {
       return { ok: false, error: errorText(err) };
@@ -383,9 +412,11 @@ const handlers: Handlers = {
   async fillStarted(req, sender) {
     if (sender.id !== browser.runtime.id || !sender.url || applicationKey(sender.url) !== applicationKey(req.url)) throw new Error('Invalid application sender.');
     if (sender.tab?.id !== undefined) fillingFrames.set(sender.tab.id, Date.now());
+    const run = req.runId ? await ownedRun(req.runId, sender) : undefined;
+    const preset = run?.context.preset;
     const key = jobKey(req.url);
     const existing = await db.applications.where('jobKey').equals(key).last();
-    const patch = { company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [], memoryQuestions: [] };
+    const patch = { presetId: preset?.id, presetName: preset?.name, presetRevision: preset?.revision, resumeName: run?.context.resume?.name, runId: run?.id, company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [], memoryQuestions: [] };
     if (existing?.id && existing.status !== 'Submitted') {
       await db.applications.update(existing.id, { ...patch, status: 'Filling' });
       return { applicationId: existing.id };
@@ -406,7 +437,8 @@ const handlers: Handlers = {
 
   async fillFinished(req, sender) {
     const app = await db.applications.get(req.applicationId);
-    if (!app?.id || sender.id !== browser.runtime.id || app.tabId !== sender.tab?.id || (app.frameId ?? 0) !== (sender.frameId ?? 0)) return {};
+    if (!app?.id || sender.id !== browser.runtime.id || app.tabId !== sender.tab?.id || (app.frameId ?? 0) !== (sender.frameId ?? 0) || (app.runId && req.runId !== app.runId)) return {};
+    if (req.runId) await ownedRun(req.runId, sender);
     const memoryQuestions = req.memoryQuestions === undefined ? undefined : parseQuestionList(req.memoryQuestions);
     if (req.missingQuestions !== undefined && (!Array.isArray(req.missingQuestions) ||
       req.missingQuestions.length !== req.missingLabels.length || req.missingQuestions.length > 200 ||
@@ -497,7 +529,9 @@ const handlers: Handlers = {
     return { fill: true };
   },
 
-  async startFill({ url, force }) {
+  async startFill({ url, force, presetId: selectedId }, sender) {
+    requireExtensionPage(sender);
+    if (selectedId !== undefined) presetId(selectedId);
     let parsed: URL;
     try {
       parsed = new URL(url.trim());
@@ -516,12 +550,24 @@ const handlers: Handlers = {
       const previous = await db.applications.where('jobKey').equals(jobKey(parsed.href)).last();
       if (previous) return { ok: true, duplicate: { filledAt: previous.filledAt, status: previous.status } };
     }
-    const tab = await browser.tabs.create({ url: toApplicationUrl(parsed.href), active: true });
-    if (tab.id !== undefined) await setPendingTabs([...(await pendingTabs()), tab.id]);
+    const destination = toApplicationUrl(parsed.href);
+    const tab = await browser.tabs.create({ url: browser.runtime.getURL('/opening.html'), active: true });
+    if (tab.id === undefined) throw new Error('Could not open the application tab.');
+    try {
+      await preparePresetRun(tab.id, destination, selectedId);
+      await setPendingTabs([...(await pendingTabs()), tab.id]);
+      await browser.tabs.update(tab.id, { url: destination });
+    } catch (err) {
+      await db.fillRuns.where('tabId').equals(tab.id).delete();
+      await browser.tabs.remove(tab.id).catch(() => undefined);
+      throw err;
+    }
     return { ok: true };
   },
 
-  async fillActiveTab() {
+  async fillActiveTab({ presetId: selectedId }, sender) {
+    requireExtensionPage(sender);
+    if (selectedId !== undefined) presetId(selectedId);
     const tab = await activeTab();
     if (!tab?.id) return { ok: false, error: 'No active tab.' };
     if (tab.url !== undefined && !isWebUrl(tab.url)) return { ok: false, error: 'Open a job application page first.' };
@@ -530,7 +576,13 @@ const handlers: Handlers = {
       return { ok: false, error: 'Finish your profile first (at least your name and email).' };
     }
     try {
-      await sendToTab(tab.id, { type: 'ping' });
+      const state = await sendToTab(tab.id, { type: 'ping' }) as { filling?: boolean; presetId?: string; presetRevision?: number };
+      if (state?.filling) return { ok: false, error: 'This page is still filling. Wait for it to finish before changing the preset.' };
+      const selection = selectedId ?? await selectedPresetId();
+      const selected = await db.presets.get(selection);
+      if (state?.presetId && (state.presetId !== selection || (selected && state.presetRevision !== selected.revision))) {
+        return { ok: false, error: 'This form was filled with another preset or an earlier version. Reload or open a fresh application form before using the new preset. Existing answers and uploaded documents have been kept.' };
+      }
     } catch {
       // Pages outside the known job sites (and tabs opened before install) have no content script yet.
       if (!tab.url || !(await canAccess(tab.url))) return { ok: false, error: NEEDS_ACCESS };
@@ -541,6 +593,7 @@ const handlers: Handlers = {
       }
       await new Promise((r) => setTimeout(r, 300));
     }
+    await preparePresetRun(tab.id, tab.url!, selectedId);
     await sendToTab(tab.id, { type: 'fill' });
     return { ok: true };
   },
@@ -636,6 +689,7 @@ const handlers: Handlers = {
 
   async deleteAllData() {
     await Promise.all([
+      db.presets.clear(), db.presetFiles.clear(), db.presetState.clear(), db.fillRuns.clear(),
       db.profile.clear(),
       db.files.clear(),
       db.savedAnswers.clear(),
@@ -688,6 +742,7 @@ export default defineBackground(() => {
 
   browser.tabs.onRemoved.addListener(async (tabId) => {
     fillingFrames.delete(tabId);
+    await db.fillRuns.where('tabId').equals(tabId).delete();
     await browser.storage.session.remove(pageStatusKey(tabId));
     const pending = await pendingTabs();
     if (pending.includes(tabId)) await setPendingTabs(pending.filter((id) => id !== tabId));

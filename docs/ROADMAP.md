@@ -6,6 +6,13 @@
 - Directory boundaries, architecture, and initial contracts.
 - Contribution workflow, issue/PR templates, and repository checks.
 
+## Implemented application presets
+
+- Role presets with shared personal facts, independent resumes/cover letters and portfolio links.
+- Guided Settings editor, duplication, confirmed deletion and a sidebar selector with resume preview.
+- Prepared text responses before AI and optional writing emphasis using existing Profile facts.
+- Persistent per-application snapshots protect fills from later preset switches and worker restarts.
+
 ## Implemented remembered mappings
 
 - Explicit capture/confirmation of a selected page answer; missing cards remain teachable after manual entry.

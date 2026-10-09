@@ -256,9 +256,10 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
   await panel.getByLabel('Job link').fill(LEVER_URL);
 
-  const opened = context.waitForEvent('page', { predicate: (p) => p.url().includes('/apply') });
+  const previousPages = new Set(context.pages());
   await panel.getByRole('button', { name: 'Open and fill' }).click();
-  const form = await opened;
+  await expect.poll(() => context.pages().some((p) => !previousPages.has(p) && p.url().includes('/apply')), { timeout: 15_000 }).toBe(true);
+  const form = context.pages().find((p) => !previousPages.has(p) && p.url().includes('/apply'))!;
   await form.evaluate(() => {
     (window as any).__submits = 0;
     window.addEventListener('submit', () => (window as any).__submits++, true);
@@ -933,11 +934,12 @@ test('upgrades the actual old IndexedDB schema without losing legacy answers or 
       const d = request.result;
       const tx = d.transaction(['rememberedMappings', 'profile']);
       const record = tx.objectStore('rememberedMappings').get(7), profile = tx.objectStore('profile').get('me');
-      tx.oncomplete = () => { resolve({ version: d.version, record: record.result, profile: profile.result }); d.close(); };
+      tx.oncomplete = () => { resolve({ version: d.version, stores: Array.from(d.objectStoreNames), record: record.result, profile: profile.result }); d.close(); };
     }; request.onerror = () => reject(request.error);
   }));
-  expect(result).toMatchObject({ version: 30, record: { id: 7, schemaVersion: 2, target: { value: 'Referral' }, aliases: ['Approved old alias'] }, profile: { firstName: 'Migration' } });
+  expect(result).toMatchObject({ version: 40, record: { id: 7, schemaVersion: 2, target: { value: 'Referral' }, aliases: ['Approved old alias'] }, profile: { firstName: 'Migration' } });
   expect(result.record.meaning).toBeUndefined();
+  expect(result.stores).toEqual(expect.arrayContaining(['presets', 'presetFiles', 'presetState', 'fillRuns']));
 });
 
 test('View opens the saved PDF in a new tab titled with its file name', async () => {
