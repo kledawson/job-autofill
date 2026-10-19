@@ -235,11 +235,27 @@ export default function SidePanel() {
       <section className="flex-1">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="font-semibold text-slate-800">Applications</h2>
-          {settings?.sheetUrl && (
-            <a className="text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
-              Open sheet
-            </a>
-          )}
+          <div className="flex items-center gap-3">
+            {applications.length > 0 && (
+              <button
+                type="button"
+                className="text-xs font-medium text-red-700 underline focus-visible:ring-2 focus-visible:ring-indigo-500"
+                onClick={async () => {
+                  const total = await db.applications.count();
+                  if (!(await confirmDelete(`Delete all ${total} application${total === 1 ? '' : 's'}?`, 'Every application will be removed from this list, including older ones that are not shown. Your Google Sheet is not changed.', 'Delete all'))) return;
+                  const res = await sendToBackground('clearApplications', {});
+                  if (!res.ok) setError(res.error);
+                }}
+              >
+                Clear all
+              </button>
+            )}
+            {settings?.sheetUrl && (
+              <a className="text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
+                Open sheet
+              </a>
+            )}
+          </div>
         </div>
         {applications.length === 0 ? (
           <p className="text-slate-500">Applications you fill show up here.</p>
