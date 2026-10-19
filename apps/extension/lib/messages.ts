@@ -110,6 +110,7 @@ export interface BackgroundMessages {
   /** Records an application that has nothing to autofill (e.g. a one-click apply) as submitted and adds it to the sheet. */
   /** Removes the application from the extension's list only; the Google Sheet is never touched. */
   deleteApplication: { req: { applicationId: number }; res: Result };
+  clearApplications: { req: Record<string, never>; res: Result };
   trackApplication: { req: { url: string }; res: Result<{ applicationId: number; note: string; sheetRow?: number; sheetError?: string }> };
   setGeminiKey: { req: { apiKey: string }; res: {} };
   testGemini: { req: { apiKey?: string; model?: string }; res: Result };
