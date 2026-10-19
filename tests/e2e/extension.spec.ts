@@ -1143,6 +1143,50 @@ test('Reuse controls offer broad matching or explicit application, company and s
   await page.close();
 });
 
+test('merged history controls confirm clearing older records without deleting Profile or Memories', async () => {
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await panel.evaluate(async () => {
+    await chrome.storage.local.set({ 'sidebarSection:history': true });
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const d = request.result, tx = d.transaction('applications', 'readwrite');
+        for (let i = 0; i < 51; i++) tx.objectStore('applications').add({
+          jobKey: `fictional-history-${i}`, url: `https://jobs.example.test/history/${i}`,
+          company: 'Fictional History Company', role: `Fictional role ${i}`, platform: 'greenhouse',
+          status: 'Submitted', filledAt: Date.now() + i, filledCount: 0, missingCount: 0, aiAnswers: 0,
+        });
+        tx.oncomplete = () => { d.close(); resolve(); }; tx.onabort = () => { d.close(); reject(tx.error); };
+      };
+    });
+  });
+  const counts = () => panel.evaluate(() => new Promise<number[]>((resolve, reject) => {
+    const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const d = request.result, tx = d.transaction(['applications', 'profile', 'rememberedMappings']);
+      const reads = ['applications', 'profile', 'rememberedMappings'].map(table => tx.objectStore(table).count());
+      tx.oncomplete = () => { d.close(); resolve(reads.map(r => r.result)); };
+      tx.onabort = () => { d.close(); reject(tx.error); };
+    };
+  }));
+  const before = await counts(); expect(before[0]).toBeGreaterThan(50);
+  const history = panel.locator('#sidebar-history');
+  await expect(history.locator('li')).toHaveCount(50);
+  await expect(history.locator('li').first()).toContainText('Fictional History Company');
+  await history.getByRole('button', { name: 'Clear all', exact: true }).click();
+  const dialog = panel.getByRole('dialog');
+  await expect(dialog).toHaveAccessibleName(`Delete all ${before[0]} applications?`);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect(await counts()).toEqual(before);
+  await history.getByRole('button', { name: 'Clear all', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Delete all', exact: true }).click();
+  await expect.poll(counts).toEqual([0, before[1], before[2]]);
+  await expect(history).toContainText('Applications you fill show up here.');
+  await expect(panel.getByRole('button', { name: 'Fill this page', exact: true })).toBeVisible();
+  await panel.close();
+});
+
 test('SIMULATED Google responses exercise the real connection UI and selected-tab diagnostics', async () => {
   const page = await context.newPage(); await page.goto(`chrome-extension://${extensionId}/options.html#connections`);
   await page.evaluate(() => chrome.runtime.sendMessage({ type: 'getPublicSettings' }));

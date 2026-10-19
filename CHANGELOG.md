@@ -7,6 +7,11 @@ exact implementation times were not recorded. The publication review began on
 [checkpoint status and validation](docs/WORKFLOW_RESTRUCTURE_PROPOSAL.md#implementation-checkpoints)
 for completed work, test evidence and the remaining recovery/release checkpoint.
 
+## 2026-10-19 — Feature-branch integration
+
+- Integrate the latest `main` history improvements into the redesign branch: compact company/date details and confirmed Clear all, preserving the pinned Fill, collapsible Applications section and Sheets retry actions.
+- Update the root and extension guides, architecture, contracts, roadmap and checkpoint record for collaborator review. Personal data, local screenshots and build outputs remain ignored.
+
 ## 2026-10-19 — Workflow increment 5: submission and tracking
 
 - Share guarded Greenhouse, Lever and Ashby success confirmation between individual fills and queues; record detected versus user-confirmed outcomes.

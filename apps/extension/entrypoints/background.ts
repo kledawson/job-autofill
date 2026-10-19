@@ -785,6 +785,13 @@ const handlers: Handlers = {
     return { ok: true };
   },
 
+  async clearApplications(_req, sender) {
+    if (sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL('/'))) return { ok: false, error: 'Only the side panel can clear applications.' };
+    await db.applications.clear();
+    await refreshBadge();
+    return { ok: true };
+  },
+
   async trackApplication({ url }, sender) {
     requireExtensionPage(sender);
     let parsed: URL;

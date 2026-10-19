@@ -13,7 +13,7 @@ import { Button, cx, Input, Notice } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { missingRequired } from '@/components/ProfileSections';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
-import { ALL_SITES, detectPlatform, jobKey, PLATFORM_NAMES } from '@/lib/platforms';
+import { ALL_SITES, detectPlatform, jobKey } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
 import { draftForCapture, MappingEditor } from '@/components/KnowledgeBase';
 import { confirmDelete } from '@/components/confirm-delete';
@@ -231,11 +231,27 @@ export default function SidePanel() {
       <SidebarSection id="history" title="Applications" summary={String(applications.length)}>
       <section>
         <div className="mb-2 flex items-center justify-end">
-          {settings?.sheetUrl && (
-            <a className="text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
-              Open sheet
-            </a>
-          )}
+          <div className="flex items-center gap-3">
+            {applications.length > 0 && (
+              <button
+                type="button"
+                className="text-xs font-medium text-red-700 underline focus-visible:ring-2 focus-visible:ring-indigo-500"
+                onClick={async () => {
+                  const total = await db.applications.count();
+                  if (!(await confirmDelete(`Delete all ${total} application${total === 1 ? '' : 's'}?`, 'Every application will be removed from this list, including older ones that are not shown. Your Google Sheet is not changed.', 'Delete all'))) return;
+                  const res = await sendToBackground('clearApplications', {});
+                  if (!res.ok) setError(res.error);
+                }}
+              >
+                Clear all
+              </button>
+            )}
+            {settings?.sheetUrl && (
+              <a className="text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
+                Open sheet
+              </a>
+            )}
+          </div>
         </div>
         {applications.length === 0 ? (
           <p className="text-slate-500">Applications you fill show up here.</p>
@@ -247,8 +263,9 @@ export default function SidePanel() {
                   <a className="block truncate font-medium text-slate-800 hover:underline" href={a.url} target="_blank" rel="noreferrer">
                     {a.role || 'Untitled role'}
                   </a>
-                  <p className="truncate text-xs text-slate-500">
-                    {a.company} · {a.presetName ? a.presetName + ' · ' : ''}{PLATFORM_NAMES[a.platform]} · {when(a.filledAt)}
+                  <p className="flex text-xs text-slate-500">
+                    <span className="min-w-0 truncate">{a.company}{a.presetName ? ` · ${a.presetName}` : ''}</span>
+                    <span className="shrink-0 whitespace-pre"> · {when(a.filledAt)}</span>
                   </p>
                   {a.sheetSyncPending && <p role="status" className="text-xs text-slate-500">Updating sheet…</p>}
                   {a.sheetError && <div className="text-xs text-amber-700"><p>Submitted · Sheet sync needs retry: {a.sheetError}</p><button className="font-medium underline" onClick={async () => { const res = await sendToBackground('retrySheet', { applicationId: a.id! }); if (!res.ok) setError(res.error); }}>Retry sheet sync</button></div>}
