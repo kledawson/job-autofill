@@ -254,10 +254,10 @@ test('onboarding reads the resume into the profile, then collects the rest', asy
 test('a pasted Lever link opens, fills, and waits for review without submitting', async () => {
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-  await panel.getByLabel('Job link').fill(LEVER_URL);
+  await panel.getByLabel('Job links', { exact: true }).fill(LEVER_URL);
 
   const previousPages = new Set(context.pages());
-  await panel.getByRole('button', { name: 'Open and fill' }).click();
+  await panel.getByRole('button', { name: 'Start queue', exact: true }).click();
   await expect.poll(() => context.pages().some((p) => !previousPages.has(p) && p.url().includes('/apply')), { timeout: 15_000 }).toBe(true);
   const form = context.pages().find((p) => !previousPages.has(p) && p.url().includes('/apply'))!;
   await form.evaluate(() => {
@@ -307,7 +307,8 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   // Side panel shows it as ready; marking it submitted updates the record.
   await panel.bringToFront();
   await panel.setViewportSize({ width: 380, height: 760 });
-  const row = panel.getByRole('listitem').filter({ hasText: 'Administrative Business Partner' });
+  await panel.getByRole('button', { name: 'Toggle Applications', exact: true }).click();
+  const row = panel.locator('#sidebar-history-body').getByRole('listitem').filter({ hasText: 'Administrative Business Partner' });
   await expect(row).toContainText('Contoso Labs');
   await expect(row).toContainText('Ready for review');
   await shot(panel, 'sidepanel');
@@ -318,10 +319,11 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   expect(apps).toBe(true);
   await expect(row).toContainText('Submitted');
 
+  await panel.evaluate(async () => chrome.runtime.sendMessage({ type: 'controlQueue', token: (await chrome.runtime.sendMessage({ type: 'getQueue' })).queue?.token, action: 'stop' }));
   // Pasting the same job again warns before filling twice.
   await panel.getByLabel('Job link').fill(`${LEVER_URL}/apply`);
-  await panel.getByRole('button', { name: 'Open and fill' }).click();
-  await expect(panel.getByText(/You already filled this job/)).toBeVisible();
+  await expect(panel.getByText('Previously submitted jobs are excluded', { exact: false })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Start queue', exact: true })).toBeDisabled();
 });
 
 test('remembered mappings are taught in the panel, persisted, reused, edited and removed', async () => {
@@ -337,6 +339,7 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
   await form.bringToFront();
   expect(await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }))).toMatchObject({ ok: true });
   await expect(form.locator('#learn-source')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
+  await panel.getByRole('button', { name: /^Review & remember \(/ }).click();
   const missing = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Application discovery channel' });
   await expect(missing.getByRole('button', { name: 'Remember answer', exact: true })).toHaveClass(/bg-white/);
   await form.locator('#learn-source').selectOption('Company website');
@@ -937,9 +940,9 @@ test('upgrades the actual old IndexedDB schema without losing legacy answers or 
       tx.oncomplete = () => { resolve({ version: d.version, stores: Array.from(d.objectStoreNames), record: record.result, profile: profile.result }); d.close(); };
     }; request.onerror = () => reject(request.error);
   }));
-  expect(result).toMatchObject({ version: 40, record: { id: 7, schemaVersion: 2, target: { value: 'Referral' }, aliases: ['Approved old alias'] }, profile: { firstName: 'Migration' } });
+  expect(result).toMatchObject({ version: 50, record: { id: 7, schemaVersion: 2, target: { value: 'Referral' }, aliases: ['Approved old alias'] }, profile: { firstName: 'Migration' } });
   expect(result.record.meaning).toBeUndefined();
-  expect(result.stores).toEqual(expect.arrayContaining(['presets', 'presetFiles', 'presetState', 'fillRuns']));
+  expect(result.stores).toEqual(expect.arrayContaining(['presets', 'presetFiles', 'presetState', 'fillRuns', 'applicationQueue', 'queueContexts']));
 });
 
 test('View opens the saved PDF in a new tab titled with its file name', async () => {
@@ -1026,8 +1029,8 @@ test('Save all updates education facts atomically, leaves contextual memories an
     await form.locator('#learn-school').fill('Fictional Learning University'); await form.locator('#learn-gpa').fill('3.65'); await form.locator('#learn-commute').selectOption('Yes'); await form.locator('#learn-tools').selectOption(['Python', 'TS']);
     await panel.getByRole('button', { name: 'Save all answered questions (4)' }).click();
     const review = panel.getByRole('region', { name: 'Review answers to remember' });
-    await expect(review.getByText('Update profile', { exact: true })).toHaveCount(2);
-    await expect(review.getByText('Create memory', { exact: true })).toHaveCount(2);
+    await expect(review.getByText('Destination: Profile', { exact: true })).toHaveCount(2);
+    await expect(review.getByText('Destination: Memory', { exact: true })).toHaveCount(2);
     await review.getByLabel('Reuse answers for question 4', { exact: true }).selectOption('all');
     await shot(panel, 'profile-aware-save-all');
     if (process.env.SCREENSHOTS) {
@@ -1138,6 +1141,60 @@ test('Reuse controls offer broad matching or explicit application, company and s
   await shot(page, 'proof-scope-website');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.close();
+});
+
+test('merged history controls confirm clearing older records without deleting Profile or Memories', async () => {
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const profile = await panel.evaluate(async () => (await chrome.runtime.sendMessage({ type: 'getFillContext' })).profile);
+  const keptMemory = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'saveRememberedMapping', mapping: {
+    question: 'Fictional history retention preference', aliases: [], scope: 'all',
+    target: { kind: 'answer', value: 'Retain this answer' },
+  } }));
+  expect(keptMemory.ok).toBe(true);
+  await panel.evaluate(async profile => {
+    await chrome.storage.local.set({ 'sidebarSection:history': true });
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const d = request.result, tx = d.transaction(['applications', 'profile'], 'readwrite');
+        tx.objectStore('profile').put(profile);
+        for (let i = 0; i < 51; i++) tx.objectStore('applications').add({
+          jobKey: `fictional-history-${i}`, url: `https://jobs.example.test/history/${i}`,
+          company: 'Fictional History Company', role: `Fictional role ${i}`, platform: 'greenhouse',
+          status: 'Submitted', filledAt: Date.now() + i, filledCount: 0, missingCount: 0, aiAnswers: 0,
+        });
+        tx.oncomplete = () => { d.close(); resolve(); }; tx.onabort = () => { d.close(); reject(tx.error); };
+      };
+    });
+  }, profile);
+  // Raw IndexedDB fixture writes do not emit Dexie's live-query notifications.
+  await panel.reload();
+  const counts = () => panel.evaluate(() => new Promise<number[]>((resolve, reject) => {
+    const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const d = request.result, tx = d.transaction(['applications', 'profile', 'rememberedMappings']);
+      const reads = ['applications', 'profile', 'rememberedMappings'].map(table => tx.objectStore(table).count());
+      tx.oncomplete = () => { d.close(); resolve(reads.map(r => r.result)); };
+      tx.onabort = () => { d.close(); reject(tx.error); };
+    };
+  }));
+  const before = await counts(); expect(before[0]).toBeGreaterThan(50);
+  expect(before[1]).toBeGreaterThan(0); expect(before[2]).toBeGreaterThan(0);
+  const history = panel.locator('#sidebar-history');
+  await expect(history.locator('li')).toHaveCount(50);
+  await expect(history.locator('li').first()).toContainText('Fictional History Company');
+  await history.getByRole('button', { name: 'Clear all', exact: true }).click();
+  const dialog = panel.getByRole('dialog');
+  await expect(dialog).toHaveAccessibleName(`Delete all ${before[0]} applications?`);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect(await counts()).toEqual(before);
+  await history.getByRole('button', { name: 'Clear all', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Delete all', exact: true }).click();
+  await expect.poll(counts).toEqual([0, before[1], before[2]]);
+  await expect(history).toContainText('Applications you fill show up here.');
+  await expect(panel.getByRole('button', { name: 'Fill this page', exact: true })).toBeVisible();
+  await panel.close();
 });
 
 test('SIMULATED Google responses exercise the real connection UI and selected-tab diagnostics', async () => {

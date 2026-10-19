@@ -1,3 +1,4 @@
+import { SidebarPreferences } from '@/components/SidebarPreferences';
 import { useEffect, useState } from 'react';
 import { usePublicSettings, useProfile } from '@/components/hooks';
 import {
@@ -23,6 +24,7 @@ const NAV = [
   ['memories', 'Memories'],
   ['documents', 'Documents'],
   ['connections', 'Connections'],
+  ['sidebar', 'Sidebar'],
   ['prompt', 'Prompt'],
   ['data', 'Data'],
 ] as const;
@@ -142,6 +144,7 @@ export default function Settings() {
         )}
         {tab === 'prompt' && settings && <PromptSection settings={settings} />}
         {tab === 'presets' && <PresetsSection onDirtyChange={setPresetDirty} />}
+        {tab === 'sidebar' && <SidebarPreferences />}
         {tab === 'memories' && <KnowledgeSection />}
         {tab === 'data' && (
           <DataSection

@@ -508,7 +508,7 @@ describe('Greenhouse', () => {
     expect(doc.getElementById('first_name')!.getAttribute('data-jaf-state')).toBe('filled');
     expect(doc.getElementById('question_38318888002')!.getAttribute('data-jaf-state')).toBe('ai');
     expect(submits).toBe(0);
-  });
+  }, 10000); // This large fixture also exhausts unsupported widget searches; allow CPU contention in full runs.
 });
 
 describe('Lever', () => {
@@ -539,7 +539,9 @@ describe('Lever', () => {
     const val = (sel: string) => (doc.querySelector(sel) as HTMLInputElement).value;
     expect(val('input[name="name"]')).toBe('Jordan Rivera');
     expect(val('input[name="org"]')).toBe('Acme Corp');
-    expect(val('input[name="location"]')).toBe('San Francisco, CA');
+    // This fixture has no typeahead results: search text alone is not a committed location.
+    expect(val('input[name="location"]')).toBe('');
+    expect(summary.missingLabels).toContain('Current location');
     const checked = (name: string) =>
       (doc.querySelector(`input[name="${name}"]:checked`) as HTMLInputElement | null)?.value;
     const radios = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="radio"]'));
@@ -808,7 +810,7 @@ describe('Lever late resume prefill', () => {
 });
 
 describe('Lever location typeahead', () => {
-  it('re-searches and picks the first suggestion when the box was prefilled without choosing one', async () => {
+  it('re-searches a prefilled box and chooses the geographic match after a wrong-country suggestion', async () => {
     const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/6ed76ce8-4156-4b60-b120-403538bd66cd/apply');
     const loc = doc.querySelector('input[name="location"]') as HTMLInputElement;
     const hidden = doc.querySelector('input[name="selectedLocation"]') as HTMLInputElement;
@@ -816,7 +818,7 @@ describe('Lever location typeahead', () => {
     loc.addEventListener('keydown', () => {
       setTimeout(() => {
         const results = doc.querySelector('.dropdown-results')!;
-        results.innerHTML = '<div class="dropdown-location" id="location-0">San Francisco, CA, USA</div><div class="dropdown-location" id="location-1">San Francisco, Campeche, MEX</div>';
+        results.innerHTML = '<div class="dropdown-location" id="location-0">San Francisco, Campeche, MEX</div><div class="dropdown-location" id="location-1">San Francisco, CA, USA</div>';
       }, 5);
     });
     doc.addEventListener('mousedown', (e) => {

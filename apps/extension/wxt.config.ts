@@ -19,12 +19,14 @@ try {
 // Google OAuth client ID (type "Chrome Extension") for Sheets sync. The spreadsheets scope lets the
 // extension write to a sheet the person links; drive.file would only reach files the extension created. See README.
 const GOOGLE_CLIENT_ID = process.env.WXT_GOOGLE_CLIENT_ID ?? '';
+// One ID for every entry point; Vite invokes its config separately for each bundle.
+const BUILD_ID = new Date().toISOString();
 
 export default defineConfig({
   // Visible folder (not the default .output) so it is easy to pick in Chrome's Load unpacked dialog.
   outDir: 'dist',
   modules: ['@wxt-dev/module-react'],
-  vite: () => ({ plugins: [tailwindcss()], define: { __BUILD__: JSON.stringify(new Date().toISOString()) } }),
+  vite: () => ({ plugins: [tailwindcss()], define: { __BUILD__: JSON.stringify(BUILD_ID) } }),
   manifest: {
     name: 'Job Application Autofill',
     description:
@@ -32,6 +34,7 @@ export default defineConfig({
     key: EXTENSION_KEY,
     permissions: [
       'storage',
+      'alarms',
       'unlimitedStorage',
       'sidePanel',
       'notifications',

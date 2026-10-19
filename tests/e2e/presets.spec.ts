@@ -102,6 +102,7 @@ test('creates and duplicates easy-to-select presets without changing the shared 
   expect((await readRows('presetFiles')).map(f => f.name).sort()).toEqual(['Taylor_Hardware.pdf', 'Taylor_Software.pdf']);
   const sidebar = await context.newPage(); await sidebar.goto('chrome-extension://' + extensionId + '/sidepanel.html');
   await sidebar.setViewportSize({ width: 380, height: 920 });
+  await sidebar.getByRole('button', { name: 'Toggle Application preset', exact: true }).click();
   await expect(sidebar.getByRole('combobox', { name: 'Application preset', exact: true })).toHaveValue(hardwareId);
   await expect(sidebar.getByRole('region', { name: 'Application preset' })).toContainText('Taylor_Hardware.pdf');
   await sidebar.getByRole('combobox', { name: 'Application preset', exact: true }).selectOption(softwareId);
@@ -262,7 +263,13 @@ test('tracking without autofill still reads the posting and deletes its record w
   });
   const sidebar = await context.newPage();
   await sidebar.goto('chrome-extension://' + extensionId + '/sidepanel.html');
-  const tracking = sidebar.locator('section').filter({ has: sidebar.getByRole('heading', { name: 'Track Without Autofill', exact: true }) });
+  const appearance = await context.newPage();
+  await appearance.goto('chrome-extension://' + extensionId + '/options.html#sidebar');
+  await appearance.getByRole('checkbox',{name:/^Track without autofill/}).check();
+  await expect(appearance.getByRole('status')).toContainText('Track without autofill shown');
+  await appearance.close();
+  await sidebar.getByRole('button', { name: 'Toggle Track without autofill', exact: true }).click();
+  const tracking = sidebar.locator('#sidebar-track-body');
   await tracking.getByLabel('Application Link', { exact: true }).fill(url);
   await tracking.getByRole('button', { name: 'Mark as submitted', exact: true }).click();
   await expect(tracking).toContainText('Marked as submitted.');
@@ -273,7 +280,8 @@ test('tracking without autofill still reads the posting and deletes its record w
   await expect(form.locator('#first')).toHaveValue('');
   await expect(form.locator('#email')).toHaveValue('');
   expect(await form.locator('#resume').evaluate((input: HTMLInputElement) => input.files?.length)).toBe(0);
-  const row = sidebar.getByRole('listitem').filter({ has: sidebar.getByRole('link', { name: 'Fictional Hardware Engineer', exact: true }) });
+  await sidebar.getByRole('button', { name: 'Toggle Applications', exact: true }).click();
+  const row = sidebar.locator('#sidebar-history-body').getByRole('listitem').filter({ has: sidebar.getByRole('link', { name: 'Fictional Hardware Engineer', exact: true }) });
   await row.getByRole('button', { name: 'Delete Fictional Hardware Engineer at Contoso from this list', exact: true }).click();
   await sidebar.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(row).toHaveCount(0);

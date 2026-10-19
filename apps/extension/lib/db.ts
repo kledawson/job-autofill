@@ -8,6 +8,8 @@ import { assertNoMappingConflict, normalizeQuestion, parseMappingDraft, parseSto
 // Lives in the extension's own origin. Content scripts never open it; they ask the
 // background worker instead.
 export const db = new Dexie('job-autofill') as Dexie & {
+  applicationQueue: EntityTable<import('./application-queue').QueueRecord, 'id'>;
+  queueContexts: EntityTable<{ id: string; snapshot: import('./application-queue').QueueSnapshot }, 'id'>;
   presets: EntityTable<import('./presets').ApplicationPreset, 'id'>;
   presetFiles: EntityTable<import('./presets').PresetDocument, 'id'>;
   presetState: EntityTable<{ id: 'selection'; selectedId: string }, 'id'>;
@@ -38,6 +40,8 @@ db.version(3).stores({ rememberedMappings: '++id, scope, updatedAt, lastUsed' })
 });
 
 db.version(4).stores({ presets: 'id, name', presetFiles: 'id', presetState: 'id', fillRuns: 'id, tabId, createdAt' });
+
+db.version(5).stores({ applicationQueue: 'id', queueContexts: 'id' });
 
 export async function getRememberedMappings(): Promise<RememberedMapping[]> {
   return (await db.rememberedMappings.toArray()).map(parseStoredMapping)

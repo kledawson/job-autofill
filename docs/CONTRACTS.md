@@ -21,6 +21,20 @@ Fill-plan entry: field ID, profile path, proposed value, reason, and decision (`
 
 Fill result: field ID and outcome (`filled`, `unchanged`, `skipped`, or `failed`) plus a non-sensitive reason. Check field identity and user edits again before writing.
 
+Applicant location dropdowns compare exact normalized city components, saved state abbreviations/full
+names, and explicit country equivalents. Conflicting or ambiguous places are skipped. A two-component
+city/state label may match the saved state; an explicitly supplied country must also match. Geography
+does not use fuzzy prefix or top-result fallback. A widget selecting a different location cannot report
+a verified green fill. Existing non-empty values remain preserved; correcting an earlier wrong selection
+requires clearing it or opening a fresh form. This changes local matching/writing only, with no new
+stored fields, message payloads, network requests or permissions.
+
+City values already containing agreeing state/country qualifiers are normalized only for use; the
+stored Profile is not changed. Conflicting qualifiers reject reuse. Structured location writers receive
+an explicit bounded query sequence and wait for an acceptable option within each search deadline,
+even when an earlier query's options remain visible. Manual fill checks the existing ping build ID
+before preparing a run; stale page code returns refresh instructions without writing a field.
+
 ## Messages
 
 Define discriminated, versioned messages for scan, plan, apply, verification results, and tracking. Include a request ID and tab/frame context. Validate the sender and payload. Send a selected fill plan rather than the entire profile to content scripts. Define errors and stale-plan rejection explicitly.
@@ -216,3 +230,108 @@ transaction atomicity, conservative defaults, import formats or Profile referenc
   Historical records stay readable. Existing fields/uploads remain protected; using a different
   preset on a live already-filled form requests a fresh form instead of silently mixing presets.
 - Profile JSON and Memories backup formats stay unchanged and exclude presets and their PDFs.
+
+## Application queue contract
+
+Increment 4 adds `startQueue.resumeApplicationIds?: number[]` and trusted
+`addQueueLinks({token, urls, resumeApplicationIds?}) → {ok, added, excluded}`. IDs are unique positive
+integers, max 100, and must match current unfinished/abandoned history for a supplied job. Submitted
+history is never eligible. Queue URLs are deduplicated by job identity; additions recheck history,
+existing items and the 100-total-job cap in the queue/application transaction. No context or active
+attempt is replaced. Additions while paused wait for resume. Existing same-queue jobs are excluded,
+including repeated concurrent requests. Resume creates a new owned tab, never adopts a tracker tab.
+
+External `controlQueue` requests now require the current token; internal data-reset Stop may omit it.
+Stale tokens fail before mutation. Continuous occupancy counts opening claims and all assigned live
+tab IDs (including login, blocked and settled tabs awaiting closure), not closed blocked metadata.
+Retry of a closed job requires free capacity. Lowering capacity preserves tabs; new claims wait.
+Skip (presented as Abandon) also works during filling: settle/invalidate the writer, await cancellation,
+record Abandoned, and close only the session-owned tab before replacement. Closure can be retried
+without duplicating an outcome. Persisted schemaVersion remains 1; no new fields or DB migration.
+
+- applicationQueue is an additive IndexedDB v5 table with one current schemaVersion-1 record:
+  queue token, status, batch size, current batch, timestamp, preset display metadata and validated
+  items. A separate queueContexts table stores one pinned preset/document snapshot, so progress
+  transactions do not rewrite PDFs. The snapshot excludes the Profile and credentials. Each item holds its own
+  immutable ID, canonical URL/key, batch, state, attempt UUID, optional owned tab/frame/application
+  IDs, deadline and actionable note. Maximum 100 items, batch size 1–5. Generic job-ID query
+  parameters survive normalization; tracking parameters are removed. LinkedIn is excluded.
+- Queue creation, claims and item decisions use IndexedDB write transactions. Up to five items in the current batch may
+  be opening/filling; attempt IDs and tab IDs are unique. All current review items must settle and close before another batch starts.
+  Continuous capacity edits affect new claims immediately; legacy batch edits affect future batches.
+  A new queue requires the old one complete/stopped.
+- startQueue, getQueue, controlQueue and queueAction require trusted extension pages. Actions and
+  IDs are validated. getQueue excludes document payloads. Queue/token/item IDs prevent stale-panel
+  actions from changing another queue. queueOpening additionally requires its exact extension-owned
+  opening URL and sender tab. queueFinished requires a permitted content sender; application results
+  must match run, tab and frame. Duplicate/late completions cannot advance a replaced attempt.
+- claimPendingFill carries optional queued/runId metadata and atomically claims one frame. Queue
+  content fills are bounded; missing forms require action. fillStarted and generateAnswer require an
+  active writing attempt; later review metadata may use the owned run without starting a new fill.
+  Explicit retries bind a new context and preserve user-entered values. They also restart an active attempt after cancelling and awaiting its content writer; a paused queue permits an explicit single-item retry without resuming other jobs. cancelQueue adds an optional wait acknowledgement.
+- Submitted and Skip close only queue-created/session-owned tabs. Submitted requires a ready item
+  and explicit user confirmation; the tracker update is atomic with the queue decision. Skip does
+  not mark submitted or write Sheets. Sheets sync starts independently after local persistence.
+  A double click retries closure without creating another submission. Stop preserves opened tabs.
+- A worker restart retains attempts and contexts. A new browser session pauses the queue, invalidates
+  its old run contexts and detaches persisted tab IDs; restored website pages are kept. Queue records,
+  private document snapshots and run contexts are excluded from exports and cleared by Delete all data.
+
+Queue fillStarted binds the validated application ID to its owned filling item so the panel can identify in-progress jobs. Content ping includes a build identifier; retry refuses stale content code with an actionable refresh message.
+
+## Sidebar preferences
+
+Workflow increment 3 adds optional Application/FillSummary/ fillFinished.fieldFeedback. It accepts at
+most 200 unique token-bound descriptors: {token, label, required, status, source, reason}. Status is
+verified/review/missing/entered/optional; source is profile/memory/preset/ai/page/none. Labels are
+1–700 characters and reasons at most 300. Unknown properties are discarded. No answer, value
+signature or file payload is persisted in this metadata. Existing records without it use legacy
+reviewFields/missingLabels. This is additive and requires no database version change.
+
+showApplicationField({applicationId, token}) requires a trusted extension page, a ready application,
+a tracked feedback/review token and the same live top-level job. showField carries the tracked run
+and question to its frame. The session checks the run, idle writer, live token, label and visibility;
+it only reveals/focuses the control. It neither captures an answer nor approves a mapping. Capture
+and Save all continue to use reviewFields, not all feedback tokens. A changed verified value is shown
+as entered by the user; an incomplete multi-select writer remains missing. Profile and Memory save
+contracts, export formats and permissions are unchanged.
+
+Workflow increment 2 adds optional QueueItem.waitingFor (login/account/verification/navigation) and
+resumeUntil (nonnegative epoch milliseconds) to schemaVersion 1. Both are required together on an
+assigned needs-action item with an attempt and owned tab. Legacy records without them remain manual.
+queueWaiting accepts only a permitted top-frame sender bound to the current opening/waiting attempt and
+session ownership marker. It stores only a reason and a fixed 30-minute resume bound. No answer or
+authentication value is accepted. claimPendingFill may probe a waiting job, returning its resume bound;
+commit additionally checks the actual tab and top-frame sender against the original job before granting
+one writing frame. Probing does not disclose Profile/documents. Stop, Skip, closure, expiry and a new
+browser session clear wait metadata. Expiry leaves a recoverable manual needs-action item.
+
+setPageStatus validates bounded titles/lines, origin, permitted sender and working/done/attention tone.
+The worker stores the sender's top-tab URL, and the sidebar hides status from another URL even on the
+same origin. Older origin-only status records remain readable. Attention uses text plus amber feedback.
+
+Sidebar layout booleans and session-only queue drafts are UI preferences and contain no captured applicant answers. sidebarOrder stores {version: 1, order: section IDs} in local storage; malformed or unsupported values fall back to defaults. IDs are allowlisted, deduplicated and completed with missing sections inserted before their next default neighbor. Reordering/reset does not alter collapse choices, active fills or drafts.
+
+sidebarVisibility stores {version: 1, categories: allowlisted ID-to-boolean preferences}; malformed, missing or unsupported fields use conservative UI defaults. Fill cannot be hidden. Setup and Track default hidden. Trusted UI pages persist these preferences directly; no new worker message or page-content data is involved. Hiding preserves mounted children and does not stop a queue or change preset selection. Memory capture remains explicit within Review & remember and uses unchanged capture/confirmation contracts.
+
+Workflow increment 1 renders Fill outside sortable/collapsible sections. readSidebarOrder normalizes
+the legacy fill ID to the first position; optional relative order and visibility remain intact. The old
+sidebarSection:fill boolean no longer controls visibility. A shared derived workflow view gates capture
+and submission controls using the current queue attempt before its older application summary; it adds no
+stored fields or message types. Manual fillActiveTab no longer waits for unrelated queue attempts, but
+still rejects queue-owned tabs and busy/replaced preset contexts. Session-status reads discard results
+from previous tab subscriptions and older initial reads after newer storage updates.
+
+The dismissible stopped/completed queue notice uses dismissedQueueNotice in local storage: {version: 1, token, status}. Only a validated queue token and terminal status are accepted. Dismissal is specific to that queue/status and survives reopening; it never changes queue progress, application records, or opened tabs. New queues show their own terminal notice.
+
+## Queue review and confirmation additions
+
+Queue schemaVersion 1 adds optional mode (batch/continuous), autoDetectSubmission (boolean), and per-item submitIntentAt (nonnegative timestamp). Absent fields retain batch mode/manual confirmation. New startQueue UI explicitly sends its checkbox choices; runtime validation rejects other modes/types. Continuous scheduling counts unsettled assigned items and settled tabs still awaiting closure, claims at most the configured 1–5 slots transactionally, and does not advance while paused. Decreasing the limit never closes existing review tabs.
+
+queueAction adds review: a trusted extension request stops and awaits the owned writer before declaring review. The content reviewNow request is bound to that run; capture tokens/explicit confirmation remain required. Read-only observation preserves tokens only for a single exact field-signature replacement.
+
+submissionIntent, submissionContext, submissionBlocked and submissionConfirmed accept only permitted content senders. The older queue-prefixed messages remain compatibility aliases. Intent binds to a review application/run/frame, its session marker and a supported same-job Greenhouse/Lever/Ashby route. Queue detection also requires its opt-in and owned review tab. Confirmation requires recent intent; the worker re-probes checkSubmission in the owned frame and verifies the actual tab URL. No applicant answers or submit controls cross this interface. Unsupported/ambiguous results stay manual.
+
+Application records add optional submitIntentAt, submissionIssue (validation), submissionSource (user or a supported platform confirmation), and sheetSyncPending. Old records remain valid; no IndexedDB index/version migration is needed for these optional properties. Duplicate completion preserves the original timestamp/source. A new fill clears old intent/issues. Browser-session markers are not durable ownership across browser restarts.
+
+markSubmitted, retrySheet and closeSubmittedTab require trusted extension pages and positive integer application IDs. Manual confirmation also settles its current queue item when applicable. retrySheet never changes application status/date or closes a tab. Explicit standalone closure requires Submitted status, the current session/run marker and a supported same-job URL. Queue closure retains its owned-tab checks. Existing nonempty sheets require a Job Posting URL header for retry deduplication; canonical posting identity is checked before writing only blank cells. Pending sync survives worker interruption and does not block queue capacity. No new permissions, dependency or export format is introduced.

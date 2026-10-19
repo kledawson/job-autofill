@@ -1,11 +1,17 @@
+import { useSidebarVisibility } from '@/components/SidebarPreferences';
+import { readSidebarVisibility, SIDEBAR_VISIBILITY_KEY, type SidebarId } from '@/lib/sidebar-layout';
+import { SidebarLayout } from '@/components/SidebarLayout';
+import { SidebarSection } from '@/components/SidebarSection';
+import { ApplicationQueue } from '@/components/ApplicationQueue';
 import { PresetSelector } from '@/components/Presets';
 import { ProfileAnswer } from '@/components/ProfileAnswer';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { FieldReviewList } from '@/components/FieldReviewList';
 import { browser } from 'wxt/browser';
 import { useLiveQuery, usePublicSettings } from '@/components/hooks';
-import { missingRequired } from '@/components/ProfileSections';
 import { Button, cx, Input, Notice } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
+import { missingRequired } from '@/components/ProfileSections';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
 import { ALL_SITES, detectPlatform, jobKey } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
@@ -13,6 +19,8 @@ import { draftForCapture, MappingEditor } from '@/components/KnowledgeBase';
 import { confirmDelete } from '@/components/confirm-delete';
 import { BatchRemember } from '@/components/BatchRemember';
 import type { CapturedAnswer, MappingDraft, ReviewField } from '@/lib/remembered-mappings';
+import { applicationWorkflow } from '@/lib/application-workflow';
+import type { QueueItem } from '@/lib/application-queue';
 
 const STATUS_STYLE: Record<ApplicationStatus, string> = {
   Filling: 'bg-blue-50 text-blue-700 ring-blue-200',
@@ -32,15 +40,18 @@ function StatusPill({ status }: { status: ApplicationStatus }) {
 function useActiveTab() {
   const [tab, setTab] = useState<{ id?: number; url?: string }>({});
   useEffect(() => {
+    let mounted = true, revision = 0;
     const refresh = async () => {
+      const request = ++revision;
       const [t] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
-      setTab({ id: t?.id, url: t?.url });
+      if (mounted && request === revision) setTab({ id: t?.id, url: t?.url });
     };
     void refresh();
     browser.tabs.onActivated.addListener(refresh);
     browser.tabs.onUpdated.addListener(refresh);
     browser.windows.onFocusChanged.addListener(refresh);
     return () => {
+      mounted = false;
       browser.tabs.onActivated.removeListener(refresh);
       browser.tabs.onUpdated.removeListener(refresh);
       browser.windows.onFocusChanged.removeListener(refresh);
@@ -51,24 +62,27 @@ function useActiveTab() {
 
 /** What the content script last reported for a tab, while the tab is still on the site that reported it. */
 function usePageStatus(tabId: number | undefined, tabUrl: string | undefined) {
-  type Stored = PageStatus & { origin: string };
+  type Stored = PageStatus & { origin: string; url?: string };
   const [stored, setStored] = useState<Stored | null>(null);
   useEffect(() => {
     setStored(null);
     if (tabId === undefined) return;
+    let mounted = true, revision = 0;
     const key = pageStatusKey(tabId);
-    void browser.storage.session.get(key).then((r) => setStored((r[key] as Stored | undefined) ?? null));
+    void browser.storage.session.get(key).then((r) => {
+      if (mounted && revision === 0) setStored((r[key] as Stored | undefined) ?? null);
+    }).catch(() => undefined);
     const onChanged = (changes: Record<string, { newValue?: unknown }>, area: string) => {
-      if (area === 'session' && key in changes) setStored((changes[key]!.newValue as Stored | undefined) ?? null);
+      if (area === 'session' && key in changes) { revision++; setStored((changes[key]!.newValue as Stored | undefined) ?? null); }
     };
     browser.storage.onChanged.addListener(onChanged);
-    return () => browser.storage.onChanged.removeListener(onChanged);
+    return () => { mounted = false; browser.storage.onChanged.removeListener(onChanged); };
   }, [tabId]);
   let origin = '';
   try {
     origin = tabUrl ? new URL(tabUrl).origin : '';
   } catch {}
-  return stored && stored.origin === origin ? stored : null;
+  return stored && stored.origin === origin && (!stored.url || stored.url === tabUrl) ? stored : null;
 }
 
 /**
@@ -91,23 +105,27 @@ const when = (ms: number) =>
 
 export default function SidePanel() {
   const { settings } = usePublicSettings();
+  const visibility = useSidebarVisibility();
   const profile = useLiveQuery(() => getProfile());
   const applications = useLiveQuery(() => db.applications.orderBy('filledAt').reverse().limit(50).toArray()) ?? [];
   const { id: tabId, url: tabUrl } = useActiveTab();
-  const current = applications.find((a) => a.tabId === tabId && a.status !== 'Submitted') ?? applications.find((a) => a.tabId === tabId);
+  // History is intentionally bounded; the active job must survive more than 50 later fills.
+  const tabApplications = useLiveQuery(() => tabId === undefined ? Promise.resolve([]) : db.applications.where('tabId').equals(tabId).sortBy('filledAt'), [tabId]);
+  const current = tabApplications?.findLast(a => a.status !== 'Submitted') ?? tabApplications?.at(-1);
   const pageStatus = usePageStatus(tabId, tabUrl);
+  const queue = useLiveQuery(() => db.applicationQueue.get('current'));
   const [presetId, setPresetId] = useState<string>();
+  const preset = useLiveQuery(() => presetId ? db.presets.get(presetId) : Promise.resolve(undefined), [presetId]);
+  const queueItem = queue && ['running', 'paused'].includes(queue.status) ? queue.items.find(i => i.tabId === tabId && !['submitted', 'skipped'].includes(i.state)) : undefined;
+  const workflow = applicationWorkflow(current, queueItem);
 
-  const [link, setLink] = useState('');
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [duplicate, setDuplicate] = useState<{ filledAt: number; status: string } | null>(null);
   /** The tab and job where Fill this page was clicked. Its details show only there: another tab or application starts hidden. */
   const [shown, setShown] = useState<{ tabId: number; key: string }>();
   /** Set by Open and fill, whose new tab has no id yet: its details open once the application exists. */
   const [opened, setOpened] = useState(false);
   const here = tabId !== undefined && tabUrl ? { tabId, key: jobKey(tabUrl) } : undefined;
-  const showing = !!here && shown?.tabId === here.tabId && shown.key === here.key;
+  const showing = !!here && ((shown?.tabId === here.tabId && shown.key === here.key) || !!queue?.items.some(i => i.tabId === here.tabId && i.applicationId === current?.id) || !!current && ['Ready for review', 'Submitted'].includes(current.status));
   useEffect(() => {
     if (opened && current && here) {
       setShown(here);
@@ -125,20 +143,20 @@ export default function SidePanel() {
     return () => browser.storage.onChanged.removeListener(onChanged);
   }, [here?.tabId, here?.key]);
 
-  const setupGaps = profile ? missingRequired(profile) : [];
+  // Reveal attention once a new fill finishes, without reopening it on every manual edit.
+  useEffect(() => {
+    if (showing && workflow.canRemember && (current?.missingCount || current?.reviewFields?.length || current?.fieldFeedback?.some(f => f.status === 'review'))) {
+      void browser.storage.local.set({ 'sidebarSection:review': true }).catch(() => undefined);
+    }
+  }, [showing, current?.id, workflow.canRemember]);
 
-  async function openAndFill(force = false) {
-    setError('');
-    setDuplicate(null);
-    if (!presetId) return;
-    if (!(await ensureAccess(link.trim()))) return setError(ACCESS_DENIED);
-    setBusy(true);
-    const res = await sendToBackground('startFill', { url: link, force, presetId });
-    setBusy(false);
-    if (!res.ok) return setError(res.error);
-    if (res.duplicate) return setDuplicate(res.duplicate);
-    setOpened(true);
-    setLink('');
+  async function revealSection(id: SidebarId) {
+    const stored = await browser.storage.local.get(SIDEBAR_VISIBILITY_KEY);
+    const next = readSidebarVisibility(stored[SIDEBAR_VISIBILITY_KEY]);
+    if (!next[id]) await browser.storage.local.set({ [SIDEBAR_VISIBILITY_KEY]: { version: 1, categories: { ...next, [id]: true } } });
+    const toggle = document.getElementById('sidebar-' + id + '-toggle');
+    if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+    requestAnimationFrame(() => { toggle?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); toggle?.focus({ preventScroll: true }); });
   }
 
   async function fillThisPage() {
@@ -146,7 +164,9 @@ export default function SidePanel() {
     if (!presetId) return;
     if (!(await ensureAccess(tabUrl))) return setError(ACCESS_DENIED);
     if (here) setShown(here);
-    const res = await sendToBackground('fillActiveTab', { presetId });
+    const res = queueItem && queue
+      ? await sendToBackground('queueAction', { token: queue.token, itemId: queueItem.id, action: queueItem.waitingFor ? 'open' : 'retry' })
+      : await sendToBackground('fillActiveTab', { presetId });
     if (!res.ok) {
       setShown(undefined);
       setError(res.error);
@@ -154,7 +174,8 @@ export default function SidePanel() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col gap-4 p-4 text-sm">
+    <div className="flex min-h-screen flex-col gap-2 p-3 text-sm">
+      <div id="sidebar-fill" className="sticky top-0 z-20 -mx-3 -mt-3 space-y-2 border-b border-slate-200 bg-slate-50 px-3 pb-3 pt-3">
       <header className="flex items-center gap-2">
         <img src="/icon/32.png" alt="" className="size-6" />
         <h1 className="flex-1 text-base font-semibold">Job Autofill</h1>
@@ -163,78 +184,53 @@ export default function SidePanel() {
         </Button>
       </header>
 
-      {settings && !settings.onboardingComplete ? (
-        <Notice tone="info">
-          Finish setup to start filling applications.{' '}
-          <button className="font-medium underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>
-            Continue setup
-          </button>
-        </Notice>
-      ) : (
-        <>
-          {setupGaps.length > 0 && (
-            <Notice tone="warn">
-              Your profile is missing {setupGaps.join(', ')}.{' '}
-              <button className="font-medium underline" onClick={() => browser.runtime.openOptionsPage()}>
-                Edit profile
-              </button>
-            </Notice>
-          )}
-
-          {settings && !settings.hasGeminiKey && (
-            <Notice tone="info">Add a Gemini key in Settings to get AI-written free responses.</Notice>
-          )}
-        </>
-      )}
-
-      <PresetSelector onSelected={setPresetId} />
-
-      <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <label className="block font-medium text-slate-800" htmlFor="job-link">
-          Job Link
-        </label>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (link.trim()) void openAndFill();
-          }}
-        >
-          <Input
-            id="job-link"
-            value={link}
-            onChange={(e) => setLink(e.target.value)}
-            placeholder="Application Link"
-          />
-          <Button type="submit" disabled={busy || !link.trim() || !presetId} className="shrink-0">
-            Open and fill
-          </Button>
-        </form>
-        <Button variant="secondary" className="w-full" disabled={!presetId} onClick={fillThisPage}>
-          Fill this page
+      <section aria-label="Fill this page" className="space-y-2">
+        {settings && !settings.onboardingComplete && <p className="text-xs text-slate-600">New here? <button className="font-medium text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button> to add your profile.</p>}
+        <div className="flex items-center justify-between gap-2 text-xs text-slate-500"><span className="truncate">Preset: {queueItem ? queue?.presetName + ' · locked' : preset?.name || 'Default'}</span>
+          <button className="shrink-0 text-indigo-700 underline" onClick={() => {
+            if (visibility.presets) void revealSection('presets');
+            else void browser.tabs.create({ url: browser.runtime.getURL('/options.html#presets' as never) });
+          }}>Change preset</button></div>
+        <Button className="w-full" disabled={!presetId} onClick={fillThisPage}>
+          {queueItem && ['opening', 'filling'].includes(queueItem.state) ? 'Restart autofill' : 'Fill this page'}
         </Button>
+        {error && <Notice tone="error">{error}</Notice>}
+      </section>
+      </div>
+      <section id="current-page-review" aria-label="Current page review" className="scroll-mt-40 rounded-xl border border-slate-200 bg-white p-3 shadow-sm" hidden={!showing}>
         {showing &&
-          (current ? (
-            <CurrentApplication key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} />
+          (queueItem?.state === 'needs-action' && !current ? <PageStatusBox status={{ title: workflow.title, lines: [queueItem.note || 'Finish this step on the website, then retry autofill.'], tone: 'attention' }} /> : current ? (
+            <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl}
+              queueItem={queueItem}
+              queueEntry={queueItem && queue ? { token: queue.token, itemId: queueItem.id, ready: queueItem.state === 'review', autoDetectSubmission: queue.autoDetectSubmission } : undefined} onReview={() => void revealSection('review')} />
           ) : (
             <PageStatusBox status={pageStatus ?? { title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' }} />
           ))}
-        {error && <Notice tone="error">{error}</Notice>}
-        {duplicate && (
-          <Notice tone="warn">
-            You already filled this job on {when(duplicate.filledAt)} ({duplicate.status}).{' '}
-            <button className="font-medium underline" onClick={() => openAndFill(true)}>
-              Fill it again
-            </button>
-          </Notice>
-        )}
       </section>
+      <SidebarLayout>
+      <SidebarSection id="queue" title="Application queue" defaultOpen summary={queue && !['stopped','complete'].includes(queue.status) ? queue.mode === 'continuous' ? 'Next job after each finish' : 'Batch ' + (queue.batch || 1) : undefined}>
+        <ApplicationQueue presetId={presetId} activeTabId={tabId} />
+      </SidebarSection>
+      <SidebarSection id="review" title="Review & remember" summary={showing && current ? current.status === 'Submitted' ? 'Completed' : (current.reviewFields?.filter(field => field.answered).length || 0) + ' ready to save · ' + current.missingCount + ' need you' : undefined}>
+        {showing && current ? <ApplicationReview key={current.id} app={current} canRemember={workflow.canRemember} /> : <p className="text-xs text-slate-500">Fill an application to review missing questions and remember answers here.</p>}
+      </SidebarSection>
+      <SidebarSection id="setup" title="Setup & connections">
+        <div className="space-y-2 text-xs text-slate-600">
+          <p>{settings?.onboardingComplete ? profile && missingRequired(profile).length ? missingRequired(profile).length + ' required profile fields missing.' : 'Your profile is ready.' : 'Finish setup to add your profile.'}</p>
+          {!settings?.onboardingComplete && <button className="text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button>}
+          <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#profile' as never)} target="_blank" rel="noreferrer">Edit profile</a>
+          <p>AI responses: {settings?.hasGeminiKey ? 'Connected' : 'Not connected'}</p>
+          <p>Google Sheets: {settings?.sheetUrl ? 'Connected' : 'Not connected'}</p>
+          <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#connections' as never)} target="_blank" rel="noreferrer">Manage connections</a>
+        </div>
+      </SidebarSection>
+      <SidebarSection id="track" title="Track without autofill">
+        <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
+      </SidebarSection>
 
-      <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
-
-      <section className="flex-1">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="font-semibold text-slate-800">Applications</h2>
+      <SidebarSection id="history" title="Applications" summary={String(applications.length)}>
+      <section>
+        <div className="mb-2 flex items-center justify-end">
           <div className="flex items-center gap-3">
             {applications.length > 0 && (
               <button
@@ -271,7 +267,8 @@ export default function SidePanel() {
                     <span className="min-w-0 truncate">{a.company}{a.presetName ? ` · ${a.presetName}` : ''}</span>
                     <span className="shrink-0 whitespace-pre"> · {when(a.filledAt)}</span>
                   </p>
-                  {a.sheetError && <p className="truncate text-xs text-amber-700">Sheet not updated: {a.sheetError}</p>}
+                  {a.sheetSyncPending && <p role="status" className="text-xs text-slate-500">Updating sheet…</p>}
+                  {a.sheetError && <div className="text-xs text-amber-700"><p>Submitted · Sheet sync needs retry: {a.sheetError}</p><button className="font-medium underline" onClick={async () => { const res = await sendToBackground('retrySheet', { applicationId: a.id! }); if (!res.ok) setError(res.error); }}>Retry sheet sync</button></div>}
                 </div>
                 <StatusPill status={a.status} />
                 <button
@@ -292,6 +289,11 @@ export default function SidePanel() {
           </ul>
         )}
       </section>
+      </SidebarSection>
+      <SidebarSection id="presets" title="Application preset" summary={preset?.name || 'Default'}>
+        <PresetSelector onSelected={setPresetId} />
+      </SidebarSection>
+      </SidebarLayout>
     </div>
   );
 }
@@ -318,8 +320,7 @@ function TrackOnly({ tabUrl, sheetUrl }: { tabUrl?: string; sheetUrl?: string })
 
   const usable = tabUrl && /^https?:\/\//i.test(tabUrl) ? tabUrl : '';
   return (
-    <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h2 className="font-medium text-slate-800">Track Without Autofill</h2>
+    <section className="space-y-2">
       <p className="text-xs text-slate-500">For postings with just an Apply button. Log the link as submitted and add it to your sheet.</p>
       <form
         className="space-y-2"
@@ -366,7 +367,7 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
     <div className="space-y-0.5 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700" role="status">
       {!hideTitle && (
         <p className="flex items-center gap-2 font-semibold text-slate-800">
-          <span className={cx('size-2 shrink-0 rounded-full', status.tone === 'working' ? 'bg-blue-600' : 'bg-green-600')} />
+          <span className={cx('size-2 shrink-0 rounded-full', status.tone === 'working' ? 'bg-blue-600' : status.tone === 'attention' ? 'bg-amber-500' : 'bg-green-600')} />
           {status.title}
         </p>
       )}
@@ -377,14 +378,99 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
   );
 }
 
-function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string }) {
+function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, onReview }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean }; onReview(): void }) {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const workflow = applicationWorkflow(app, queueItem);
+  const toCheck = app.fieldFeedback?.filter(f => f.status === 'review').length ?? app.aiAnswers;
+  const attentionCount = app.fieldFeedback?.filter(f => ['missing', 'review', 'optional'].includes(f.status) || app.reviewFields?.some(r => r.token === f.token)).length ?? (app.reviewFields?.length || app.missingCount);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate font-semibold text-slate-900">{app.role || 'Application'}</p>
+          <p className="truncate text-slate-500">{app.company}</p>
+
+        </div>
+        <span className={cx('inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', workflow.writing ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-700')}>{workflow.title}</span>
+      </div>
+
+      {!workflow.writing && app.status !== 'Submitted' && <p className="text-xs text-slate-600">{[app.missingCount ? `${app.missingCount} missing` : '', toCheck ? `${toCheck} to review` : ''].filter(Boolean).join(' · ') || 'Review the filled answers on the website.'}</p>}
+      {/* The pill already names the status, so a matching title is left out. */}
+      {workflow.writing && pageStatus?.tone === 'working' && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
+      {!workflow.writing && <details className="text-xs text-slate-500"><summary className="cursor-pointer">Fill details</summary><p>{app.filledCount} filled in the latest attempt{app.aiAnswers > 0 && ` · ${app.aiAnswers} AI-written`}</p>{pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}{app.resumeName && <p className="mt-1">Resume: {app.resumeName}</p>}</details>}
+
+      {app.status !== 'Submitted' && (app.missingCount > 0 || !!app.reviewFields?.length || !!app.fieldFeedback?.length) && <button className="text-xs font-medium text-indigo-700 underline" onClick={onReview}>{attentionCount ? `Review & remember (${attentionCount})` : 'Review filled answers'}</button>}
+      {app.submissionIssue === 'validation' && <Notice tone="warn">Submission needs attention. Fix the website’s missing or invalid answers, then submit again. This application has stayed open.</Notice>}
+      {workflow.canConfirmSubmission && (
+        <>
+          <p className="text-xs text-slate-500">{queueEntry?.autoDetectSubmission && ['greenhouse', 'lever', 'ashby'].includes(app.platform) ? 'Save Memories before submitting on the website. Recognized success confirmations close this tab; use Submitted below if detection misses it.' : 'Submit on the website. If the result is not detected, confirm successful submission below.'}</p>
+          <Button
+            className="w-full" disabled={busy}
+            onClick={async () => {
+              setBusy(true); setError('');
+              try { const res = await sendToBackground('markSubmitted', { applicationId: app.id! }); if (!res.ok) setError(res.error); }
+              catch { setError('Could not confirm submission. Try again.'); } finally { setBusy(false); }
+            }}
+          >
+            {busy ? 'Confirming…' : queueEntry ? 'Submitted — close tab' : 'I submitted this application'}
+          </Button>
+        </>
+      )}
+      {workflow.writing && <p className="text-xs text-slate-500">Known answers fill first. Optional AI responses may take longer.</p>}
+      {workflow.phase === 'blocked' && queueItem?.note && <Notice tone="warn">{queueItem.note} Use the queue's Retry autofill action to continue.</Notice>}
+      {app.status === 'Submitted' && <div role="status" className="space-y-2 rounded-lg bg-green-50 p-2 text-xs text-green-800"><p>{app.submissionSource && app.submissionSource !== 'user' ? 'Successful submission detected.' : 'Submission confirmed by you.'}</p>{!queueEntry && app.tabId !== undefined && <Button variant="secondary" disabled={busy} onClick={async () => { setBusy(true); const res = await sendToBackground('closeSubmittedTab', { applicationId: app.id! }); if (!res.ok) setError(res.error); setBusy(false); }}>Close application tab</Button>}</div>}
+      {app.sheetSyncPending && <p role="status" className="text-xs text-slate-600">Submitted · Updating your sheet…</p>}
+      {app.status === 'Submitted' && app.sheetRow && sheetUrl && (
+        <Notice tone="success">
+          Added to your sheet (row {app.sheetRow}).{' '}
+          <a className="underline" href={`${sheetUrl}#range=A${app.sheetRow}`} target="_blank" rel="noreferrer">
+            Open sheet
+          </a>
+        </Notice>
+      )}
+      {app.sheetError && (
+        <>
+          <Notice tone="warn">Sheet not updated: {app.sheetError}</Notice>
+          {app.status === 'Submitted' && (
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={async () => {
+                const res = await sendToBackground('retrySheet', { applicationId: app.id! });
+                if (!res.ok) setError(res.error);
+              }}
+            >
+              Retry adding to sheet
+            </Button>
+          )}
+        </>
+      )}
+      {error && <Notice tone="error">{error}</Notice>}
+    </div>
+  );
+}
+
+function ApplicationReview({ app, canRemember }: { app: Application; canRemember: boolean }) {
   const [showMissing, setShowMissing] = useState(true);
   const [error, setError] = useState('');
   const [teaching, setTeaching] = useState<{ capture: CapturedAnswer; initial: MappingDraft; id?: number }>();
   const [remembered, setRemembered] = useState('');
   const [capturing, setCapturing] = useState<string>();
   const [batch, setBatch] = useState<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }>();
+  const editor = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!teaching && !batch) return;
+    requestAnimationFrame(() => { editor.current?.scrollIntoView({ block: 'nearest' }); editor.current?.focus({ preventScroll: true }); });
+  }, [teaching?.capture.captureId, batch]);
   const context = { platform: app.platform, company: app.company, url: app.url };
+  async function showField(token: string) {
+    setError('');
+    try {
+      const result = await sendToBackground('showApplicationField', { applicationId: app.id!, token });
+      if (!result.ok) throw new Error(result.error);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not locate the field.'); }
+  }
   async function remember(field: ReviewField, suggestion = false) {
     setCapturing(field.token); setError(''); setRemembered('');
     try {
@@ -409,51 +495,23 @@ function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; p
     finally { setCapturing(undefined); }
   }
   return (
-    <div className="space-y-3 border-t border-slate-100 pt-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate font-semibold text-slate-900">{app.role || 'Application'}</p>
-          <p className="truncate text-slate-500">{app.company}</p>
-          {app.presetName && <p className="mt-1 break-words text-xs text-slate-600">Preset used: {app.presetName}{app.resumeName ? ' · ' + app.resumeName : ' · no resume'}</p>}
-        </div>
-        <StatusPill status={app.status} />
-      </div>
-
-      {app.status !== 'Filling' && (
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <Stat value={app.filledCount} label="Profile / memories" color="text-green-700" />
-          <Stat value={app.aiAnswers} label="AI-written" color="text-blue-700" />
-          <Stat value={app.missingCount} label="Need you" color={app.missingCount ? 'text-red-700' : 'text-slate-400'} />
-        </div>
-      )}
-
-      {/* The pill already names the status, so a matching title is left out. */}
-      {pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
-
-      {!teaching && !batch && (app.missingLabels.length > 0 || reviewFields.length > 0) && (
+    <div className="space-y-2">
+      <p className="truncate text-xs text-slate-500" title={app.role}>{app.role} · {app.company}</p>
+      {app.status === 'Submitted' && <p className="text-xs text-slate-600">Application submitted. Save reusable answers before submitting your next application.</p>}
+      {app.status !== 'Submitted' && !teaching && !batch && (app.missingLabels.length > 0 || reviewFields.length > 0 || !!app.fieldFeedback?.length) && (
         <div>
-          <Button className="mb-3 w-full" variant={answered.length ? 'primary' : 'secondary'} disabled={!answered.length || !!capturing || app.status === 'Filling'} onClick={() => void rememberAll()}>{capturing === 'all' ? 'Reading answered questions…' : `Save all answered questions (${Math.min(answered.length, 100)})`}</Button>
-          <p className="mb-2 text-xs text-slate-500">Answer the missing questions on the page, then save them together. You can review and exclude answers first.{answered.length > 100 ? ' Save up to 100 questions per batch.' : ''}</p>
+          <Button className="mb-3 w-full" variant={answered.length ? 'primary' : 'secondary'} disabled={!answered.length || !!capturing || !canRemember} onClick={() => void rememberAll()}>{capturing === 'all' ? 'Reading answered questions…' : `Save all answered questions (${Math.min(answered.length, 100)})`}</Button>
+          <p className="mb-2 text-xs text-slate-500">Answer on the website → review the captured answer → confirm Save to Profile or Memory.{answered.length > 100 ? ' Save up to 100 questions per batch.' : ''}</p>
           <button className="text-xs font-medium text-slate-600 underline" onClick={() => setShowMissing((s) => !s)}>
             {showMissing ? 'Hide' : 'Show'} questions to review
           </button>
           {showMissing && (
-            <ul aria-label="Questions to review" className="mt-2 space-y-2">
-              {reviewFields.map(field => <li key={field.token} className={cx('rounded-lg border p-3 text-xs text-slate-700', field.answered ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-white')}>
-                <p className="font-medium break-words">{field.label}</p>
-                <p className="mt-1 text-slate-600">{field.answered ? field.selectionMode === 'multiple' ? `${field.selectedCount ?? 0} answers selected — ready to save for next time.` : 'Answer entered — ready to save for next time.' : field.suggestionId ? 'A similar saved question is available. Confirm it before reuse.' : 'Answer on the page, then remember it here.'}</p>
-                {field.reason && <p className="mt-1 text-slate-600">{field.reason}</p>}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Button className="px-2 py-1 text-xs" variant={field.answered ? 'primary' : 'secondary'} disabled={!!capturing || app.status === 'Filling'} onClick={() => void remember(field)}>{capturing === field.token ? 'Reading field…' : field.selectionMode === 'multiple' ? field.answered ? 'Save these answers' : 'Remember answers' : field.answered ? 'Save this answer' : 'Remember answer'}</Button>
-                  {field.suggestionId && !field.answered && <Button className="px-2 py-1 text-xs" variant="secondary" disabled={!!capturing} onClick={() => void remember(field, true)}>Review suggestion</Button>}
-                </div>
-              </li>)}
-              {app.missingLabels.filter((_, i) => !app.missingQuestions?.[i] || !reviewFields.some(f => f.label === app.missingQuestions?.[i])).map((label, i) => <li key={`manual-${i}`} className="rounded-lg bg-slate-50 p-3 text-xs text-slate-700">{label}<p className="mt-1 text-slate-500">{app.reviewFields ? 'Complete this field on the page.' : 'Click Fill this page to refresh these results and enable answer capture.'}</p></li>)}
-            </ul>
+            <FieldReviewList app={app} disabled={!canRemember} capturing={capturing} onShow={token => void showField(token)} onRemember={(field, suggestion) => void remember(field, suggestion)} />
           )}
         </div>
       )}
 
+      {(batch || teaching) && <div ref={editor} tabIndex={-1} role="region" aria-label="Review save destination" className="rounded-lg focus-visible:ring-2 focus-visible:ring-indigo-500">
       {batch && <BatchRemember applicationId={app.id!} context={context} {...batch} onCancel={() => setBatch(undefined)} onSaved={(note, count) => { setBatch(undefined); setRemembered(note); }} />}
       {teaching && (
         <div className="space-y-3 border-t border-slate-200 pt-3">
@@ -466,60 +524,12 @@ function CurrentApplication({ app, pageStatus, sheetUrl }: { app: Application; p
             }} />}
         </div>
       )}
+      </div>}
       {remembered && <div role="status"><Notice tone="success">{remembered}</Notice></div>}
 
       <a className="text-xs text-indigo-700 underline" href={browser.runtime.getURL('/options.html#memories' as never)} target="_blank" rel="noreferrer">Manage Memories in Settings</a>
 
-      {app.status === 'Ready for review' && (
-        <>
-          <p className="text-xs text-slate-500">Review every field, submit on the page yourself, then mark it here.</p>
-          <Button
-            className="w-full"
-            onClick={async () => {
-              const res = await sendToBackground('markSubmitted', { applicationId: app.id! });
-              if (!res.ok) setError(res.error);
-            }}
-          >
-            Mark as submitted
-          </Button>
-        </>
-      )}
-      {app.status === 'Filling' && <p className="text-slate-500">Filling… AI answers can take a few seconds each.</p>}
-      {app.status === 'Submitted' && app.sheetRow && sheetUrl && (
-        <Notice tone="success">
-          Added to your sheet (row {app.sheetRow}).{' '}
-          <a className="underline" href={`${sheetUrl}#range=A${app.sheetRow}`} target="_blank" rel="noreferrer">
-            Open sheet
-          </a>
-        </Notice>
-      )}
-      {app.sheetError && (
-        <>
-          <Notice tone="warn">Sheet not updated: {app.sheetError}</Notice>
-          {app.status === 'Submitted' && (
-            <Button
-              variant="secondary"
-              className="w-full"
-              onClick={async () => {
-                const res = await sendToBackground('markSubmitted', { applicationId: app.id! });
-                if (!res.ok) setError(res.error);
-              }}
-            >
-              Retry adding to sheet
-            </Button>
-          )}
-        </>
-      )}
       {error && <Notice tone="error">{error}</Notice>}
-    </div>
-  );
-}
-
-function Stat({ value, label, color }: { value: number; label: string; color: string }) {
-  return (
-    <div className="rounded-lg bg-slate-50 py-2">
-      <div className={cx('text-lg font-semibold', color)}>{value}</div>
-      <div className="text-xs text-slate-500">{label}</div>
     </div>
   );
 }

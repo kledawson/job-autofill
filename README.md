@@ -4,8 +4,14 @@ A local-first Chrome extension for assisted job application autofill and applica
 
 **Status:** working MVP in [`apps/extension`](apps/extension/README.md): fills Greenhouse, Lever, Ashby, Workday, and other careers-site applications from a saved profile, writes free responses with Gemini (optional), tracks applications in Google Sheets (optional), and never submits for you.
 
-Recent improvements: multi-select memories, batch saving with profile updates, simpler reuse controls,
-and a searchable **Memories** library in Settings. See the [changelog](CHANGELOG.md).
+Recent improvements: role-specific presets, batches of applications with manual review, multi-select
+Memories, batch saving with profile updates, and a searchable **Memories** library in Settings. See the [changelog](CHANGELOG.md).
+
+**Workflow redesign branch:** `codex/application-queue` contains checkpoints 1–5: permanent Fill,
+login/resume, prioritized review, live queue controls, and shared submission/Sheets recovery.
+See the [dated implementation record and validation](docs/WORKFLOW_RESTRUCTURE_PROPOSAL.md#implementation-checkpoints)
+before continuing. Checkpoint 6 (recovery, performance measurement and release packaging) remains planned.
+This branch snapshot is available for review separately from `main`.
 
 ## Start here
 
@@ -20,11 +26,15 @@ Codex reads the root `AGENTS.md`. Claude Code loads `CLAUDE.md`, which imports t
 Set up your profile -> open an application -> fill -> review and answer remaining questions ->
 remember reusable answers -> submit manually -> mark submitted.
 
+- Choose a role preset, paste job links, and keep 1–5 applications open with independent background fills. Change capacity or add links while the queue runs; legacy batch mode remains optional.
+- Pause, stop, retry or abandon a queued job. Submit on the website yourself; supported confirmation or your explicit confirmation records completion and releases the owned tab before its replacement opens.
+- Sign in manually when needed; supported same-tab queue flows resume without blocking other jobs.
+- Review required gaps first, use Show field, and distinguish Verified, Review, Missing and Entered by you statuses.
 - Fill supported fields from your profile or confirmed memories, with verified writes and preserved user edits.
 - Remember single answers or multiple selections, with approved variations and company/application/site scopes.
 - Review and save several answered questions together using **Save all answered questions**.
 - Save recognized facts to the profile; manage custom answers in **Settings → Memories**.
-- Track applications locally; optionally configure Gemini drafts and Google Sheets tracking.
+- Track applications locally; optionally configure Gemini drafts and Google Sheets tracking. Retry failed sheet sync independently of submission or queue progress.
 
 Applicant data stays local by default. External integrations are opt-in, and the extension never submits applications.
 
