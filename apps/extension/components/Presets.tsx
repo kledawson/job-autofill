@@ -7,7 +7,8 @@ import { useLiveQuery } from './hooks';
 import { Button, Card, Field, Input, Notice, Select, Textarea, cx } from './ui';
 import { confirmDelete } from './confirm-delete';
 
-export function PresetSelector({ onSelected }: { onSelected?: (id: string | undefined) => void }) {
+/** Choose the preset used by Fill this page. During a queue job the queue's own preset is shown and locked. */
+export function PresetSelector({ onSelected, locked }: { onSelected?: (id: string | undefined) => void; locked?: string }) {
   const data = useLiveQuery(async () => {
     const presets = await listPresets(), selected = await selectedPresetId();
     const preset = presets.find(p => p.id === selected) ?? defaultPreset();
@@ -16,21 +17,22 @@ export function PresetSelector({ onSelected }: { onSelected?: (id: string | unde
   });
   const [error, setError] = useState(''), [saving, setSaving] = useState(false);
   useEffect(() => { if (data) onSelected?.(data.selected); }, [data?.selected]);
-  return <section className="space-y-2" aria-label="Application preset">
-    <div className="flex items-center justify-between gap-2">
-      <label htmlFor="application-preset" className="font-semibold text-slate-800">Application preset</label>
-      <button className="text-xs font-medium text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/options.html#presets' as never) })}>Manage presets</button>
+  return <section className="space-y-1" aria-label="Application preset">
+    <div className="flex items-center justify-between gap-2 text-xs">
+      <label htmlFor="application-preset" className="font-medium text-slate-700">Application Preset</label>
+      <button className="font-medium text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/options.html#presets' as never) })}>Manage presets</button>
     </div>
-    <Select id="application-preset" value={data?.selected ?? DEFAULT_PRESET_ID} disabled={!data || saving}
-      options={(data?.presets ?? [defaultPreset()]).map(p => [p.id, p.name])}
-      onChange={async e => {
-        setSaving(true); setError(''); onSelected?.(undefined);
-        try { await selectPreset(e.target.value); onSelected?.(e.target.value); }
-        catch (err) { setError(err instanceof Error ? err.message : 'Could not select this preset.'); onSelected?.(data?.selected); }
-        finally { setSaving(false); }
-      }} />
-    <p className="break-words text-xs text-slate-600"><span className="font-medium">Resume: </span>{data?.resumeName ?? (data?.missing ? 'Missing — edit this preset' : 'No resume selected')}</p>
-    <p className="text-xs text-slate-500">Used for your next fill. Existing page answers stay as they are.</p>
+    {locked !== undefined
+      ? <p className="truncate rounded-md border border-slate-200 bg-white px-2 py-1.5 text-slate-700">{locked || 'Default'} <span className="text-xs text-slate-500">· locked by queue</span></p>
+      : <Select id="application-preset" value={data?.selected ?? DEFAULT_PRESET_ID} disabled={!data || saving}
+          options={(data?.presets ?? [defaultPreset()]).map(p => [p.id, p.name])}
+          onChange={async e => {
+            setSaving(true); setError(''); onSelected?.(undefined);
+            try { await selectPreset(e.target.value); onSelected?.(e.target.value); }
+            catch (err) { setError(err instanceof Error ? err.message : 'Could not select this preset.'); onSelected?.(data?.selected); }
+            finally { setSaving(false); }
+          }} />}
+    {locked === undefined && <p className="break-words text-xs text-slate-600"><span className="font-medium">Resume: </span>{data?.resumeName ?? (data?.missing ? 'Missing — edit this preset' : 'No resume selected')}</p>}
     {error && <div role="alert"><Notice tone="error">{error}</Notice></div>}
   </section>;
 }
@@ -56,12 +58,8 @@ export function PresetsSection({ onDirtyChange }: { onDirtyChange?: (dirty: bool
   if (editing) return <PresetEditor key={editing.draft.id} initial={editing.draft} expected={editing.expected}
     onDirtyChange={onDirtyChange} files={files} sharedFiles={sharedFiles} profileLinks={profile ? { portfolio: profile.portfolio, github: profile.github, website: profile.website } : { portfolio: '', github: '', website: '' }}
     onCancel={() => setEditing(undefined)} onSaved={p => { setEditing(undefined); setNotice(p.name + ' saved and selected for your next application.'); }} />;
-  return <Card title="Application presets" description="Choose a resume and responses for each kind of role. Your personal Profile stays shared.">
+  return <Card title="Application presets" description="Choose a resume and responses for each kind of role. Your personal Profile stays shared." actions={<Button onClick={() => start()}>Create preset</Button>}>
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-md text-sm text-slate-600">Create Software Engineer and Hardware Engineer presets, then switch between them in the sidebar.</p>
-        <Button onClick={() => start()}>Create preset</Button>
-      </div>
       <div className="rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">
         <strong className="text-slate-800">Shared from your Profile:</strong> name, contact details, education, work history, skills and eligibility answers. Personal Memories and transcript are shared too.
       </div>

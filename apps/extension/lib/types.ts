@@ -95,6 +95,14 @@ export interface Profile {
     disability: string;
   };
 
+  /** When true, that item is filled only on applications that require it; when false it is always filled if saved. */
+  fillOnlyIfRequired: {
+    address: boolean;
+    gpa: boolean;
+    /** School start and end dates. */
+    schoolDates: boolean;
+  };
+
   updatedAt: number;
 }
 
@@ -168,6 +176,7 @@ export function emptyProfile(): Profile {
     skills: [],
     preferences: { salary: '', startDate: '', relocate: '', workMode: '', nonCompete: '' },
     eeo: { gender: DECLINE, race: DECLINE, hispanic: DECLINE, veteran: DECLINE, disability: DECLINE },
+    fillOnlyIfRequired: { address: false, gpa: false, schoolDates: false },
     updatedAt: 0,
   };
 }

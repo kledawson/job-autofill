@@ -104,6 +104,7 @@ export async function getProfile(): Promise<Profile> {
     workAuth: { ...base.workAuth, ...stored.workAuth },
     preferences: { ...base.preferences, ...stored.preferences },
     eeo: { ...base.eeo, ...stored.eeo },
+    fillOnlyIfRequired: { ...base.fillOnlyIfRequired, ...stored.fillOnlyIfRequired },
   };
 }
 

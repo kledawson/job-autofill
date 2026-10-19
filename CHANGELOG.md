@@ -9,6 +9,10 @@ for completed work, test evidence and the remaining recovery/release checkpoint.
 
 ## 2026-10-19 — Feature-branch integration
 
+- Show Autofilled / AI-written / Need review counts instead of Fill details; drop the duplicate Review & remember link and the generic submit hint; rename the manual confirmation to **Add Applied Position to Spreadsheet**.
+- Tolerate an unusable field label when a fill finishes, so one blank or oversized label no longer leaves an application on Filling.
+- Fix the first fill on links with tracking parameters (`?utm_source=`) staying on Filling: match the job rather than the exact URL when a fill starts, and report a failed start instead of finishing silently.
+
 - Integrate the latest `main` history improvements into the redesign branch: compact company/date details and confirmed Clear all, preserving the pinned Fill, collapsible Applications section and Sheets retry actions.
 - Update the root and extension guides, architecture, contracts, roadmap and checkpoint record for collaborator review. Personal data, local screenshots and build outputs remain ignored.
 - Validate the combined source: 481 unit tests and 59 applicable browser cases across full/focused runs; one configuration-specific OAuth case skipped. Document the corrected history fixture and exact results in the checkpoint record.

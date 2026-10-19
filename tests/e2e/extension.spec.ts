@@ -339,7 +339,7 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
   await form.bringToFront();
   expect(await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }))).toMatchObject({ ok: true });
   await expect(form.locator('#learn-source')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
-  await panel.getByRole('button', { name: /^Review & remember \(/ }).click();
+  await panel.evaluate(() => { const t = document.getElementById('sidebar-review-toggle')!; if (t.getAttribute('aria-expanded') === 'false') t.click(); });
   const missing = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Application discovery channel' });
   await expect(missing.getByRole('button', { name: 'Remember answer', exact: true })).toHaveClass(/bg-white/);
   await form.locator('#learn-source').selectOption('Company website');

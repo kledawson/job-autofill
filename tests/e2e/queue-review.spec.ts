@@ -86,7 +86,7 @@ test('queued hydration matches manual Memories, preserves review edits, saves an
   const initial = await queue(); expect(await request('queueAction', { token: initial.token, itemId: initial.items[0].id, action: 'retry' })).toMatchObject({ ok: true }); await ready(0);
   expect(await first.locator('select').evaluateAll(selects => selects.map(s => (s as HTMLSelectElement).value))).toEqual(before);
   await request('queueAction', { token: initial.token, itemId: initial.items[0].id, action: 'open' });
-  await panel.getByRole('button', { name: /^Review & remember \(/ }).click();
+  await panel.evaluate(() => { const t = document.getElementById('sidebar-review-toggle')!; if (t.getAttribute('aria-expanded') === 'false') t.click(); });
   // Replace the entire form during manual review, as React can do after an answer.
   await first.evaluate(() => {
     const f = document.querySelector('form')!, values = [...f.querySelectorAll('select')].map(s => s.value);
@@ -196,7 +196,7 @@ test('prioritized review locates fields, preserves edits and clearly confirms Pr
   const page = form(860), q = await queue(), item = q.items[0];
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   await request('queueAction', { token: q.token, itemId: item.id, action: 'open' });
-  await panel.getByRole('button', { name: /^Review & remember \(/ }).click();
+  await panel.evaluate(() => { const t = document.getElementById('sidebar-review-toggle')!; if (t.getAttribute('aria-expanded') === 'false') t.click(); });
   const list = panel.getByRole('list', { name: 'Questions to review', exact: true });
   await expect(list.getByRole('listitem').first()).toContainText('Fictional review reference');
   const upload = list.getByRole('listitem').filter({ hasText: 'Academic transcript' });
@@ -247,7 +247,7 @@ test('AI drafts are amber and remain visible for review even without missing ans
   await panel.evaluate(() => chrome.storage.local.set({ geminiApiKey: 'synthetic-e2e-key' }));
   expect(await request('startQueue', { urls: [url(861)], batchSize: 1, mode: 'continuous' })).toMatchObject({ ok: true }); await ready(0);
   const page = form(861), q = await queue(); await request('queueAction', { token: q.token, itemId: q.items[0].id, action: 'open' });
-  await panel.getByRole('button', { name: /^Review & remember \(/ }).click();
+  await panel.evaluate(() => { const t = document.getElementById('sidebar-review-toggle')!; if (t.getAttribute('aria-expanded') === 'false') t.click(); });
   await expect(page.locator('#review-essay')).toHaveAttribute('data-jaf-state', 'ai');
   expect(await page.locator('#review-essay').evaluate(el => el.style.outline)).toContain('217, 119, 6');
   const card = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Why are you interested' });

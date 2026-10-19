@@ -278,15 +278,15 @@ async function applicationForCapture(id: number, token: string, sender: Sender) 
   const field = app?.reviewFields?.find(f => f.token === token);
   if (!app || app.tabId === undefined || !field) throw new Error('This field is no longer available. Fill the current page again.');
   const tab = await browser.tabs.get(app.tabId);
-  if (!tab.url || applicationKey(tab.url) !== applicationKey(app.topUrl ?? app.url)) throw new Error('The application page changed. Fill it again before remembering an answer.');
+  if (!tab.url || jobKey(tab.url) !== jobKey(app.topUrl ?? app.url)) throw new Error('The application page changed. Fill it again before remembering an answer.');
   return { app, field, context: { platform: app.platform, company: app.company, url: app.url } satisfies MappingContext };
 }
 
 async function pageContext(sender: Sender): Promise<MappingContext> {
   if (sender.id !== browser.runtime.id || sender.tab?.id === undefined || !sender.url || !isWebUrl(sender.url) || !(await canAccess(sender.url))) throw new Error('Only an authorised application page can request memories.');
-  const app = (await db.applications.where('tabId').equals(sender.tab.id).toArray()).find(a => a.frameId === (sender.frameId ?? 0) && applicationKey(a.url) === applicationKey(sender.url!));
+  const app = (await db.applications.where('tabId').equals(sender.tab.id).toArray()).find(a => a.frameId === (sender.frameId ?? 0) && jobKey(a.url) === jobKey(sender.url!));
   return { platform: platformFor(sender.url), url: sender.url,
-    company: app?.frameId === (sender.frameId ?? 0) && applicationKey(app.url) === applicationKey(sender.url) ? app.company : '' };
+    company: app?.frameId === (sender.frameId ?? 0) && jobKey(app.url) === jobKey(sender.url) ? app.company : '' };
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +557,8 @@ const handlers: Handlers = {
   },
 
   async fillStarted(req, sender) {
-    if (sender.id !== browser.runtime.id || !sender.url || applicationKey(sender.url) !== applicationKey(req.url)) throw new Error('Invalid application sender.');
+    // Compare jobs, not exact URLs: a site can rewrite tracking parameters (utm_source) in place, so the sender URL and location.href may differ.
+    if (sender.id !== browser.runtime.id || !sender.url || jobKey(sender.url) !== jobKey(req.url)) throw new Error('Invalid application sender.');
     if (sender.tab?.id !== undefined) fillingFrames.set(sender.tab.id, Date.now());
     const run = req.runId ? await ownedRun(req.runId, sender) : undefined;
     if (run?.context.queue && req.runId) await queueOwns(req.runId, sender, true);
@@ -590,19 +591,32 @@ const handlers: Handlers = {
     const app = await db.applications.get(req.applicationId);
     if (!app?.id || sender.id !== browser.runtime.id || app.tabId !== sender.tab?.id || (app.frameId ?? 0) !== (sender.frameId ?? 0) || (app.runId && req.runId !== app.runId)) return {};
     if (req.runId) await ownedRun(req.runId, sender);
-    const memoryQuestions = req.memoryQuestions === undefined ? undefined : parseQuestionList(req.memoryQuestions);
-    const fieldFeedback = req.fieldFeedback === undefined ? undefined : parseFieldFeedback(req.fieldFeedback);
-    const reviewFields = req.reviewFields === undefined ? undefined : parseReviewFields(req.reviewFields);
-    if (req.missingQuestions !== undefined && (!Array.isArray(req.missingQuestions) ||
-      req.missingQuestions.length !== req.missingLabels.length || req.missingQuestions.length > 200 ||
-      req.missingQuestions.some((q) => q !== null && (typeof q !== 'string' || !q.trim() || q.length > 700)))) {
-      throw new Error('Invalid remembered question metadata.');
-    }
+    // One odd label (blank, or a long consent paragraph) must not discard the whole result and leave the application stuck on Filling.
+    const lenient = <T,>(items: unknown, parse: (one: unknown) => T): T[] | undefined => {
+      if (items === undefined) return undefined;
+      if (!Array.isArray(items)) throw new Error('Invalid fill result.');
+      const kept: T[] = [];
+      for (const item of items.slice(0, 200)) { try { kept.push(parse(item)); } catch { /* skip an unusable entry */ } }
+      return kept;
+    };
+    const memoryQuestions = lenient(req.memoryQuestions, q => parseQuestionList([q])[0]!);
+    const seenFeedback = new Set<string>();
+    const fieldFeedback = lenient(req.fieldFeedback, f => {
+      const [one] = parseFieldFeedback([f]);
+      if (seenFeedback.has(one!.token)) throw new Error('duplicate');
+      seenFeedback.add(one!.token);
+      return one!;
+    });
+    const reviewFields = lenient(req.reviewFields, f => parseReviewFields([f])[0]!);
+    if (!Array.isArray(req.missingLabels)) throw new Error('Invalid fill result.');
+    const missingQuestions = req.missingQuestions === undefined ? undefined : (Array.isArray(req.missingQuestions) ? req.missingQuestions : []).slice(0, req.missingLabels.length)
+      .map(q => typeof q === 'string' && q.trim() && q.length <= 700 ? q : null);
+    while (missingQuestions && missingQuestions.length < req.missingLabels.length) missingQuestions.push(null);
     const first = app.status === 'Filling';
     if (req.usedMappingIds !== undefined) {
-      if (!Array.isArray(req.usedMappingIds) || req.usedMappingIds.length > 200 || req.usedMappingIds.some(id => !Number.isSafeInteger(id) || id < 1)) throw new Error('Invalid used answer IDs.');
+      const usedIds = Array.isArray(req.usedMappingIds) ? req.usedMappingIds.filter(id => Number.isSafeInteger(id) && id >= 1).slice(0, 200) : [];
       const context = { platform: app.platform, company: app.company, url: app.url };
-      const valid = (await getRememberedMappings()).filter(m => req.usedMappingIds!.includes(m.id) && scopeRank(m.scope, context) >= 0);
+      const valid = (await getRememberedMappings()).filter(m => usedIds.includes(m.id) && scopeRank(m.scope, context) >= 0);
       await db.transaction('rw', db.rememberedMappings, async () => {
         for (const m of valid) await db.rememberedMappings.update(m.id, { lastUsed: Date.now() });
       });
@@ -614,7 +628,7 @@ const handlers: Handlers = {
       aiAnswers: req.aiAnswers,
       missingCount: req.missingLabels.length,
       missingLabels: req.missingLabels,
-      missingQuestions: req.missingQuestions,
+      missingQuestions,
       reviewFields,
       fieldFeedback,
       memoryQuestions,
@@ -785,9 +799,10 @@ const handlers: Handlers = {
     return { ok: true };
   },
 
-  async clearApplications(_req, sender) {
+  async clearApplications({ status }, sender) {
     if (sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL('/'))) return { ok: false, error: 'Only the side panel can clear applications.' };
-    await db.applications.clear();
+    if (status) await db.applications.where('status').equals(status).delete();
+    else await db.applications.clear();
     await refreshBadge();
     return { ok: true };
   },
