@@ -23,7 +23,8 @@ Start with a Chrome extension using TypeScript, WXT, Manifest V3, React, and Zod
 5. User selects entries to apply; the content script receives only those values.
 6. Writer checks field identity/current value, applies values, triggers appropriate events, and reads values back.
 7. UI reports verified fills, mismatches, and skips. User reviews and submits manually.
-8. User explicitly records application status. A fill run is not submission evidence.
+8. Supported, guarded confirmation after the user's submit action or explicit user confirmation records
+   application status. A fill run or submit click alone is not submission evidence.
 
 ## Reliability boundaries
 
@@ -142,8 +143,9 @@ Connections persist the numeric tab ID from the pasted URL and its current displ
 connections use the first tab until tested/reconnected; an explicit missing tab fails without fallback.
 Test connection reads metadata/headers through the same Chrome OAuth path as writes. Submission writes
 preserve occupied cells/formulas and unrelated columns; a matching Posting URL makes retries reuse the
-existing row. Without a URL column, a lost write acknowledgement cannot always be deduplicated. No
-write occurs on autofill or connection testing.
+existing row. Existing nonempty sheets without a Job Posting URL column are rejected with guidance
+to add that column so a lost write acknowledgement can be retried safely. No write occurs on autofill
+or connection testing.
 
 ## Memories backup and restore
 

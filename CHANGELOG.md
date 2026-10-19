@@ -11,6 +11,7 @@ for completed work, test evidence and the remaining recovery/release checkpoint.
 
 - Integrate the latest `main` history improvements into the redesign branch: compact company/date details and confirmed Clear all, preserving the pinned Fill, collapsible Applications section and Sheets retry actions.
 - Update the root and extension guides, architecture, contracts, roadmap and checkpoint record for collaborator review. Personal data, local screenshots and build outputs remain ignored.
+- Validate the combined source: 481 unit tests and 59 applicable browser cases across full/focused runs; one configuration-specific OAuth case skipped. Document the corrected history fixture and exact results in the checkpoint record.
 
 ## 2026-10-19 — Workflow increment 5: submission and tracking
 

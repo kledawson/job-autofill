@@ -1146,12 +1146,19 @@ test('Reuse controls offer broad matching or explicit application, company and s
 test('merged history controls confirm clearing older records without deleting Profile or Memories', async () => {
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-  await panel.evaluate(async () => {
+  const profile = await panel.evaluate(async () => (await chrome.runtime.sendMessage({ type: 'getFillContext' })).profile);
+  const keptMemory = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'saveRememberedMapping', mapping: {
+    question: 'Fictional history retention preference', aliases: [], scope: 'all',
+    target: { kind: 'answer', value: 'Retain this answer' },
+  } }));
+  expect(keptMemory.ok).toBe(true);
+  await panel.evaluate(async profile => {
     await chrome.storage.local.set({ 'sidebarSection:history': true });
     await new Promise<void>((resolve, reject) => {
       const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
       request.onsuccess = () => {
-        const d = request.result, tx = d.transaction('applications', 'readwrite');
+        const d = request.result, tx = d.transaction(['applications', 'profile'], 'readwrite');
+        tx.objectStore('profile').put(profile);
         for (let i = 0; i < 51; i++) tx.objectStore('applications').add({
           jobKey: `fictional-history-${i}`, url: `https://jobs.example.test/history/${i}`,
           company: 'Fictional History Company', role: `Fictional role ${i}`, platform: 'greenhouse',
@@ -1160,7 +1167,9 @@ test('merged history controls confirm clearing older records without deleting Pr
         tx.oncomplete = () => { d.close(); resolve(); }; tx.onabort = () => { d.close(); reject(tx.error); };
       };
     });
-  });
+  }, profile);
+  // Raw IndexedDB fixture writes do not emit Dexie's live-query notifications.
+  await panel.reload();
   const counts = () => panel.evaluate(() => new Promise<number[]>((resolve, reject) => {
     const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
     request.onsuccess = () => {
@@ -1171,6 +1180,7 @@ test('merged history controls confirm clearing older records without deleting Pr
     };
   }));
   const before = await counts(); expect(before[0]).toBeGreaterThan(50);
+  expect(before[1]).toBeGreaterThan(0); expect(before[2]).toBeGreaterThan(0);
   const history = panel.locator('#sidebar-history');
   await expect(history.locator('li')).toHaveCount(50);
   await expect(history.locator('li').first()).toContainText('Fictional History Company');

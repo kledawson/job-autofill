@@ -42,6 +42,36 @@ not recorded; the publication-review timestamp above is separate from those impl
 Continue with checkpoint 6 after reviewing this snapshot. Passing the controlled checks below does
 not establish that every employer form is supported or that performance targets have been measured.
 
+Publication preparation on 2026-10-19 (PDT, UTC−07:00):
+
+- **13:23:40** — `b6278b5` records the implemented checkpoints and dated documentation.
+- **13:24:57** — `2b15bce` integrates `main` through `c09639e` into this feature branch. The merge
+  retains compact company/date history and confirmed Clear all alongside the redesigned sidebar and
+  Sheets retry controls. A browser regression checks cancellation, records beyond the visible 50-row
+  list, and preservation of Profile/Memories. No changes are merged back into `main` by this publication.
+
+### Publication validation — 2026-10-19, 13:36 PDT (UTC−07:00)
+
+Validation used Windows, Node.js 24.12.0, npm 11.6.2 and the production Chromium extension build.
+
+| Check | Actual result |
+| --- | --- |
+| `npm run check` | Passed, including local documentation links |
+| `npm run typecheck` | Passed on the merged source |
+| `npm test` | 481 passed across 31 files on the merged source |
+| `npm run build` (through `test:e2e`) | Passed; current and legacy unpacked-extension folders updated |
+| `npm run test:e2e` | 58 passed, 1 configuration-specific skip, 1 new test-fixture failure in 10.8 minutes |
+| `npx playwright test tests/e2e/extension.spec.ts --grep 'merged history controls'` | 1 passed after correcting the fixture, in 7.6 seconds |
+
+The new history test originally seeded IndexedDB without refreshing the UI's Dexie subscription.
+Its focused retry also exposed an assumed pre-existing Profile in a fresh browser. The fixture now
+persists a Profile and Memory explicitly and reloads after raw database seeding. Its final run checks
+Clear all cancellation, deletion beyond the visible 50 records, retained Profile/Memories and permanent
+Fill availability. No application source changed after the full-suite build. All **59 applicable
+browser cases** passed across the full and corrected focused runs; a single fresh all-green full run
+is not claimed. The skipped test specifically requires a build without an OAuth client, whereas this
+local build has one configured. Personal-account OAuth and live employer submissions were not tested.
+
 Individual and queued fills now share supported Greenhouse, Lever and Ashby confirmation checks.
 Submit on the website yourself: a click alone never counts. Validation failures show **Submission
 needs attention** and keep the tab open. Individual success stays open with **Close application tab**;
