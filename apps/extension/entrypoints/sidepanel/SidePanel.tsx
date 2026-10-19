@@ -7,7 +7,7 @@ import { missingRequired } from '@/components/ProfileSections';
 import { Button, cx, Input, Notice } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
-import { ALL_SITES, detectPlatform, jobKey, PLATFORM_NAMES } from '@/lib/platforms';
+import { ALL_SITES, detectPlatform, jobKey } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
 import { draftForCapture, MappingEditor } from '@/components/KnowledgeBase';
 import { confirmDelete } from '@/components/confirm-delete';
@@ -251,8 +251,9 @@ export default function SidePanel() {
                   <a className="block truncate font-medium text-slate-800 hover:underline" href={a.url} target="_blank" rel="noreferrer">
                     {a.role || 'Untitled role'}
                   </a>
-                  <p className="truncate text-xs text-slate-500">
-                    {a.company} · {a.presetName ? a.presetName + ' · ' : ''}{PLATFORM_NAMES[a.platform]} · {when(a.filledAt)}
+                  <p className="flex text-xs text-slate-500">
+                    <span className="min-w-0 truncate">{a.company}{a.presetName ? ` · ${a.presetName}` : ''}</span>
+                    <span className="shrink-0 whitespace-pre"> · {when(a.filledAt)}</span>
                   </p>
                   {a.sheetError && <p className="truncate text-xs text-amber-700">Sheet not updated: {a.sheetError}</p>}
                 </div>
