@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FieldReviewList } from '@/components/FieldReviewList';
 import { browser } from 'wxt/browser';
 import { useLiveQuery, usePublicSettings } from '@/components/hooks';
-import { Button, cx, Input, Notice } from '@/components/ui';
+import { Button, cx, Input, Notice, Select } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { missingRequired } from '@/components/ProfileSections';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
@@ -103,11 +103,21 @@ const ACCESS_DENIED = 'To fill applications outside Greenhouse, Lever, Ashby, an
 const when = (ms: number) =>
   new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
+type HistoryFilter = 'all' | 'review' | 'submitted';
+const HISTORY_FILTERS: [HistoryFilter, string, ApplicationStatus?][] = [
+  ['all', 'All'], ['review', 'Ready for review', 'Ready for review'], ['submitted', 'Submitted', 'Submitted'],
+];
+
 export default function SidePanel() {
   const { settings } = usePublicSettings();
   const visibility = useSidebarVisibility();
   const profile = useLiveQuery(() => getProfile());
-  const applications = useLiveQuery(() => db.applications.orderBy('filledAt').reverse().limit(50).toArray()) ?? [];
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
+  const applications = useLiveQuery(() => {
+    const status = HISTORY_FILTERS.find(f => f[0] === historyFilter)?.[2];
+    const all = db.applications.orderBy('filledAt').reverse();
+    return (status ? all.filter(a => a.status === status) : all).limit(50).toArray();
+  }, [historyFilter]) ?? [];
   const { id: tabId, url: tabUrl } = useActiveTab();
   // History is intentionally bounded; the active job must survive more than 50 later fills.
   const tabApplications = useLiveQuery(() => tabId === undefined ? Promise.resolve([]) : db.applications.where('tabId').equals(tabId).sortBy('filledAt'), [tabId]);
@@ -230,16 +240,26 @@ export default function SidePanel() {
 
       <SidebarSection id="history" title="Applications" summary={String(applications.length)}>
       <section>
-        <div className="mb-2 flex items-center justify-end">
-          <div className="flex items-center gap-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+            Show
+            <Select className="w-auto" aria-label="Filter applications by status" options={HISTORY_FILTERS.map(f => [f[0], f[1]] as [string, string])} value={historyFilter} onChange={e => setHistoryFilter(e.target.value as HistoryFilter)} />
+          </label>
+          <div className="flex shrink-0 items-center gap-3">
             {applications.length > 0 && (
               <button
                 type="button"
-                className="text-xs font-medium text-red-700 underline focus-visible:ring-2 focus-visible:ring-indigo-500"
+                className="whitespace-nowrap text-xs font-medium text-red-700 underline focus-visible:ring-2 focus-visible:ring-indigo-500"
                 onClick={async () => {
-                  const total = await db.applications.count();
-                  if (!(await confirmDelete(`Delete all ${total} application${total === 1 ? '' : 's'}?`, 'Every application will be removed from this list, including older ones that are not shown. Your Google Sheet is not changed.', 'Delete all'))) return;
-                  const res = await sendToBackground('clearApplications', {});
+                  const filter = HISTORY_FILTERS.find(f => f[0] === historyFilter);
+                  const status = filter?.[2];
+                  const total = status ? await db.applications.where('status').equals(status).count() : await db.applications.count();
+                  const noun = `application${total === 1 ? '' : 's'}`;
+                  const [title, detail] = status
+                    ? [`Delete ${total} "${filter![1]}" ${noun}?`, `Only "${filter![1]}" applications will be removed, including older ones that are not shown. Other statuses are kept. Your Google Sheet is not changed.`]
+                    : [`Delete all ${total} ${noun}?`, 'Every application will be removed from this list, including older ones that are not shown. Your Google Sheet is not changed.'];
+                  if (!(await confirmDelete(title, detail, 'Delete all'))) return;
+                  const res = await sendToBackground('clearApplications', { status });
                   if (!res.ok) setError(res.error);
                 }}
               >
@@ -247,14 +267,14 @@ export default function SidePanel() {
               </button>
             )}
             {settings?.sheetUrl && (
-              <a className="text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
+              <a className="whitespace-nowrap text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
                 Open sheet
               </a>
             )}
           </div>
         </div>
         {applications.length === 0 ? (
-          <p className="text-slate-500">Applications you fill show up here.</p>
+          <p className="text-slate-500">{historyFilter === 'all' ? 'Applications you fill show up here.' : 'No applications match this filter.'}</p>
         ) : (
           <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
             {applications.map((a) => (

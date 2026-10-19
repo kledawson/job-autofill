@@ -785,9 +785,10 @@ const handlers: Handlers = {
     return { ok: true };
   },
 
-  async clearApplications(_req, sender) {
+  async clearApplications({ status }, sender) {
     if (sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL('/'))) return { ok: false, error: 'Only the side panel can clear applications.' };
-    await db.applications.clear();
+    if (status) await db.applications.where('status').equals(status).delete();
+    else await db.applications.clear();
     await refreshBadge();
     return { ok: true };
   },
