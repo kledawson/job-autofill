@@ -2,7 +2,7 @@
 // extension can read and edit the spreadsheet the person links.
 import { browser } from 'wxt/browser';
 import type { Application } from './types';
-import { postingUrl } from './platforms';
+import { jobKey, postingUrl } from './platforms';
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
@@ -41,7 +41,11 @@ export function sheetsConfigured(): boolean {
 }
 
 async function getToken(interactive: boolean): Promise<string> {
-  const res = await browser.identity.getAuthToken({ interactive });
+  // A stalled noninteractive token lookup must not hold every following sheet write.
+  const res = interactive ? await browser.identity.getAuthToken({ interactive }) : await new Promise<{ token?: string } | string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Google sign-in timed out. Reconnect your sheet and retry.')), 20000);
+    browser.identity.getAuthToken({ interactive }).then(resolve, reject).finally(() => clearTimeout(timer));
+  });
   const token = typeof res === 'string' ? res : res?.token;
   if (!token) throw new Error('Not signed in to Google.');
   return token;
@@ -52,6 +56,7 @@ async function request(path: string, init: RequestInit, interactive = false): Pr
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await fetch(`${API}${path}`, {
       ...init,
+      signal: AbortSignal.timeout(20000),
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     });
     if (res.status === 401 && attempt === 0) {
@@ -91,7 +96,7 @@ export async function testSheetConnection(sheetId: string, tabId?: number) {
   const headers = grid.find(r => r.filter(c => String(c).trim()).length >= 2) ?? grid.find(r => r.some(c => String(c).trim())) ?? [];
   const sample = { company: '', role: '', url: '', filledAt: 0, status: 'Submitted', platform: 'other', jobKey: '', aiAnswers: 0, filledCount: 0, missingCount: 0, missingLabels: [] } as Application;
   const columns = planRow(headers, sample).map(c => c.key);
-  if (headers.length && !columns.some(c => ['company', 'role', 'jobUrl'].includes(c))) throw new Error('Add a Company, Position or Job Posting URL header so applications can be tracked safely.');
+  if (headers.length && !columns.includes('jobUrl')) throw new Error('Add a Job Posting URL column so retries can find an existing application without duplicating it.');
   return { ...sheet, columns };
 }
 
@@ -242,6 +247,7 @@ export async function appendApplication(sheetId: string, app: Application, tabId
   const firstCol = Math.max(0, line.findIndex((c) => c.trim()));
   const headers = line.slice(firstCol);
   const cells = planRow(headers, app);
+  if (!cells.some(c => c.key === 'jobUrl')) throw new Error('Add a Job Posting URL column, then retry. It prevents duplicate rows after a connection interruption.');
   if (!cells.length) {
     throw new Error('None of the columns in your sheet look like company, position, date applied, link, location, work model, pay, or status.');
   }
@@ -252,7 +258,7 @@ export async function appendApplication(sheetId: string, app: Application, tabId
   const identity = cells.filter((c) => c.key === 'company' || c.key === 'role' || c.key === 'jobUrl').map((c) => c.index);
   const urlColumn = cells.find(c => c.key === 'jobUrl');
   if (urlColumn) {
-    const canonical = (url: string) => postingUrl(url);
+    const canonical = (url: string) => jobKey(postingUrl(url));
     const existing = rows.findIndex(r => canonical(String(r[firstCol + urlColumn.index] ?? '')) === canonical(app.url));
     if (existing >= 0) {
       // Already tracked: fill in details the row is missing (e.g. added by an earlier attempt), never overwrite.

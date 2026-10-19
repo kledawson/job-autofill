@@ -25,7 +25,7 @@ export function SidebarSection({ id, title, summary, defaultOpen = false, hidden
     }).catch(() => undefined);
     return () => { mounted = false; browser.storage.onChanged.removeListener(changed); };
   }, [key]);
-  return <section hidden={hidden} id={'sidebar-' + id} className={'overflow-hidden rounded-xl border bg-white shadow-sm ' +
+  return <section hidden={hidden} id={'sidebar-' + id} className={'scroll-mt-40 overflow-hidden rounded-xl border bg-white shadow-sm ' +
     (layout?.target?.id === id ? layout.target.after ? 'border-slate-200 border-b-4 border-b-indigo-500' : 'border-slate-200 border-t-4 border-t-indigo-500' : 'border-slate-200') +
     (layout?.dragging?.id === id ? ' opacity-60' : '')}
     onDragOver={event => {

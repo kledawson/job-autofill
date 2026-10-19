@@ -1,23 +1,22 @@
 import { OWN_ATTR } from './scan';
 
-export type ReviewState = 'filled' | 'ai' | 'missing' | 'pending';
+export type ReviewState = 'filled' | 'ai' | 'review' | 'missing' | 'pending' | 'entered';
 
 const COLORS: Record<ReviewState, string> = {
   filled: '#16a34a',
-  ai: '#2563eb',
+  ai: '#d97706',
+  review: '#d97706',
   missing: '#dc2626',
   pending: '#2563eb',
+  entered: '#64748b',
 };
-
-const outlined = new Map<HTMLElement, ReviewState>();
 
 export function outline(el: HTMLElement, state: ReviewState) {
   el.style.setProperty('outline', `2px ${state === 'pending' ? 'dashed' : 'solid'} ${COLORS[state]}`, 'important');
   el.style.setProperty('outline-offset', '2px', 'important');
   el.style.setProperty('border-radius', el.style.borderRadius || '4px');
   el.setAttribute('data-jaf-state', state);
-  outlined.set(el, state);
-  if (state === 'ai' || state === 'pending') tags.set(el, state === 'ai' ? 'AI' : 'Writing…');
+  if (state === 'ai' || state === 'review' || state === 'pending') tags.set(el, state === 'ai' ? 'AI' : state === 'review' ? 'Review' : 'Writing…');
   else tags.delete(el);
   scheduleOverlay();
 }
@@ -26,7 +25,6 @@ export function clearOutline(el: HTMLElement) {
   el.style.removeProperty('outline');
   el.style.removeProperty('outline-offset');
   el.removeAttribute('data-jaf-state');
-  outlined.delete(el);
   tags.delete(el);
   scheduleOverlay();
 }
@@ -79,9 +77,18 @@ function render() {
     if (!r.width && !r.height) continue;
     const tag = document.createElement('div');
     tag.className = 'tag';
+    if (label === 'AI' || label === 'Review') tag.style.background = COLORS.ai;
     tag.textContent = label;
     tag.style.top = `${r.top + window.scrollY - 10}px`;
     tag.style.left = `${r.right + window.scrollX - 34}px`;
     tagLayer.appendChild(tag);
   }
+}
+
+/** Only an explicit Show field action scrolls. Animation leaves the review outline intact. */
+export function revealField(target: HTMLElement, control: HTMLElement) {
+  const reduced = target.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  target.scrollIntoView?.({ behavior: reduced ? 'instant' : 'smooth', block: 'center' });
+  control.focus({ preventScroll: true });
+  if (!reduced) target.animate?.([{ boxShadow: '0 0 0 0 transparent' }, { boxShadow: '0 0 0 7px #a5b4fc' }, { boxShadow: '0 0 0 0 transparent' }], { duration: 1400 });
 }

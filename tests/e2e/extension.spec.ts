@@ -319,10 +319,10 @@ test('a pasted Lever link opens, fills, and waits for review without submitting'
   expect(apps).toBe(true);
   await expect(row).toContainText('Submitted');
 
-  await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'controlQueue', action: 'stop' }));
+  await panel.evaluate(async () => chrome.runtime.sendMessage({ type: 'controlQueue', token: (await chrome.runtime.sendMessage({ type: 'getQueue' })).queue?.token, action: 'stop' }));
   // Pasting the same job again warns before filling twice.
   await panel.getByLabel('Job link').fill(`${LEVER_URL}/apply`);
-  await expect(panel.getByText('Already tracked jobs are excluded.', { exact: false })).toBeVisible();
+  await expect(panel.getByText('Previously submitted jobs are excluded', { exact: false })).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Start queue', exact: true })).toBeDisabled();
 });
 
@@ -1029,8 +1029,8 @@ test('Save all updates education facts atomically, leaves contextual memories an
     await form.locator('#learn-school').fill('Fictional Learning University'); await form.locator('#learn-gpa').fill('3.65'); await form.locator('#learn-commute').selectOption('Yes'); await form.locator('#learn-tools').selectOption(['Python', 'TS']);
     await panel.getByRole('button', { name: 'Save all answered questions (4)' }).click();
     const review = panel.getByRole('region', { name: 'Review answers to remember' });
-    await expect(review.getByText('Update profile', { exact: true })).toHaveCount(2);
-    await expect(review.getByText('Create memory', { exact: true })).toHaveCount(2);
+    await expect(review.getByText('Destination: Profile', { exact: true })).toHaveCount(2);
+    await expect(review.getByText('Destination: Memory', { exact: true })).toHaveCount(2);
     await review.getByLabel('Reuse answers for question 4', { exact: true }).selectOption('all');
     await shot(panel, 'profile-aware-save-all');
     if (process.env.SCREENSHOTS) {

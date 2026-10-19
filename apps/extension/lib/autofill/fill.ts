@@ -125,7 +125,7 @@ export function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value
   const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
   withGuard(el, () => {
-    el.focus();
+    el.focus({ preventScroll: true });
     if (setter) setter.call(el, value);
     else el.value = value;
     fire(el, 'input');
@@ -184,6 +184,10 @@ export interface ChoiceOpts {
   strict?: boolean;
   /** Chooses from the option texts directly instead of matching candidates (location preferences). */
   pick?: (options: string[]) => number;
+  /** A validated option picker can still search async catalogs (applicant locations). */
+  search?: boolean;
+  /** Explicit query sequence for structured values; bypasses generic word-shortening fallbacks. */
+  queries?: string[];
   /** Search lists: the first result is acceptable when it starts like the answer. */
   acceptFirstResult?: boolean;
   /** Multi-select lists: add another item even if one is already chosen. */
@@ -210,7 +214,7 @@ export function fillSelect(field: ScannedField, candidates: string[], opts: Choi
   const option = options[idx];
   if (!option) return 'nomatch';
   withGuard(select, () => {
-    select.focus();
+    select.focus({ preventScroll: true });
     select.value = option.value;
     option.selected = true;
     fire(select, 'input');
@@ -469,7 +473,10 @@ async function scrollForOption(
     observe?.(rows);
     const idx = match(candidates, rows.map(optionLabel));
     if (idx >= 0) {
-      rows[idx]!.scrollIntoView?.({ block: 'nearest' });
+      // Move only the popup's scroll container; scrollIntoView can also move the job page.
+      const row = rows[idx]!.getBoundingClientRect(), viewport = scroller.getBoundingClientRect();
+      if (row.top < viewport.top) scroller.scrollTop -= viewport.top - row.top;
+      else if (row.bottom > viewport.bottom) scroller.scrollTop += row.bottom - viewport.bottom;
       await sleep(60);
       return rows[idx]!;
     }
@@ -544,7 +551,7 @@ async function commitByKeyboard(field: ScannedField, label: string): Promise<boo
   const button = field.el;
   const doc = button.ownerDocument;
   const want = normalize(label);
-  withGuard(button, () => button.focus());
+  withGuard(button, () => button.focus({ preventScroll: true }));
   let moved = false;
   for (let step = 0; step < 80 && !listboxHasValue(field); step++) {
     const popup = openPopup(button);
@@ -581,7 +588,7 @@ async function typeOnClosed(field: ScannedField, label: string): Promise<boolean
     return face === want || face.endsWith(` ${want}`) || face.startsWith(`${want} `);
   };
   withGuard(button, () => {
-    button.focus();
+    button.focus({ preventScroll: true });
     for (const ch of label) {
       press(button, ch);
       if (shows()) break;
@@ -707,7 +714,7 @@ export async function fillListbox(
   const matchOption = chooser(opts);
   let idx = matchOption(candidates, options.map(optionLabel));
   // Long lists render only the options in view; typing the start of the answer scrolls to it.
-  const query = opts.pick ? '' : (candidates[0] ?? '');
+  const query = opts.pick && !opts.search ? '' : (candidates[0] ?? '');
   if (idx < 0 && query && options.length) {
     const target = (button.ownerDocument.activeElement as HTMLElement | null) ?? button;
     withGuard(target, () => {
@@ -719,7 +726,7 @@ export async function fillListbox(
   if (idx < 0 && opts.topOption) idx = options.findIndex((o) => !isPlaceholderOption(optionLabel(o)));
   let choice = options[idx];
   // The answer may be further down a list that only draws the rows in view.
-  if (!choice && !opts.pick) choice = (await scrollForOption(button, candidates, matchOption)) ?? undefined;
+  if (!choice && (!opts.pick || opts.search)) choice = (await scrollForOption(button, candidates, matchOption)) ?? undefined;
   // Labels and the page's own option texts only; the person's answer is never logged.
   const seen = options.slice(0, 30).map((o) => `"${optionLabel(o).slice(0, 40)}"`).join(', ');
   if (!choice) {
@@ -866,7 +873,7 @@ export async function fillPrompt(
   }
   // Then search: the saved wording, its other spellings, and shorter forms of it. Each search waits for its own
   // results; Enter asks lists that do not search as you type.
-  const queries = opts.pick ? [] : Array.from(new Set([...candidates.slice(0, 3), ...searchQueries(candidates)])).slice(0, 5);
+  const queries = opts.queries ?? (opts.pick && !opts.search ? [] : Array.from(new Set([...candidates.slice(0, 3), ...searchQueries(candidates)])).slice(0, 5));
   let firstResults: HTMLElement[] = [];
   const readOptions = () => {
     const found = listOptions(search);
@@ -883,7 +890,7 @@ export async function fillPrompt(
     let entered = false;
     for (;;) {
       options = readOptions();
-      if (options.length && signature(options) !== before) break;
+      if (options.length && signature(options) !== before && (!opts.queries || matchOption(candidates, options.map(optionLabel)) >= 0)) break;
       // Workday searches on Enter, not as you type.
       if (!entered && Date.now() - started > Math.min(250, limit / 4)) {
         withGuard(search, () => press(search, 'Enter'));
@@ -970,7 +977,7 @@ export function closeMenu(input: HTMLElement) {
 export function closeIfOpen(input: HTMLElement) {
   if (input.getAttribute('aria-expanded') !== 'true') return;
   withGuard(input, () => {
-    input.focus();
+    input.focus({ preventScroll: true });
     key(input, 'Escape');
     input.blur();
     fire(input, 'focusout');
@@ -986,7 +993,7 @@ export async function fillCombobox(
   if (comboboxHasValue(field)) return 'already';
 
   withGuard(input, () => {
-    input.focus();
+    input.focus({ preventScroll: true });
     mouse(input, 'mousedown');
     key(input, 'ArrowDown');
   });
@@ -1021,18 +1028,20 @@ export async function fillCombobox(
   const staticOptions = options;
 
   // Async search lists (locations, schools) need a query first. A picker chooses from the list as shown.
-  const query = opts.pick ? '' : (candidates[0] ?? '');
+  const query = opts.pick && !opts.search ? '' : (candidates[0] ?? '');
   if (idx < 0 && query) {
     let firstResults: HTMLElement[] = [];
     // The list may spell things differently ("University of California - Santa Cruz"), so try the
     // wording as given, then cleaner and shorter searches, until a result matches.
-    const queries = opts.strict ? candidates : searchQueries(candidates);
+    const queries = opts.queries ?? (opts.strict ? candidates : searchQueries(candidates));
     for (const [i, q] of queries.entries()) {
       setNativeValueKeepFocus(input, q);
       options =
         (await waitFor(() => {
           const o = comboboxOptions(input).filter((o) => !/^(loading|searching|no (results|options))/i.test(o.textContent?.trim() ?? ''));
-          return o.length ? o : null;
+          // Location results can arrive in stages. A nonempty old/unrelated list is
+          // not completion: keep waiting for a verified match to this place.
+          return o.length && (!opts.queries || matchOption(candidates, o.map(row => row.textContent ?? '')) >= 0) ? o : null;
         }, i === 0 ? timing.search : Math.min(timing.search, 1500))) ?? [];
       trace.push(`typed${i + 1}=${options.length}`);
       if (options.length && !firstResults.length) firstResults = options;
@@ -1063,6 +1072,10 @@ export async function fillCombobox(
   closeMenu(input);
   // Give the page time to commit the choice to its own state before the next field is touched.
   await sleep(timing.settle);
+  if (opts.search && opts.pick) {
+    const selected = comboboxSelectedValues(field);
+    return selected.length === 1 && opts.pick(selected) === 0 ? 'filled' : 'failed';
+  }
   return comboboxHasValue(field) || !input.isConnected ? 'filled' : 'failed';
 }
 
@@ -1113,8 +1126,8 @@ export function setNativeValueKeepFocus(el: HTMLInputElement, value: string) {
   });
 }
 
-/** Lever-style location inputs: type, then pick the first suggestion that mentions the city. */
-export async function fillTypeahead(field: ScannedField, candidates: string[]): Promise<FillOutcome> {
+/** Lever-style inputs must commit an approved suggestion, not just retain typed search text. */
+export async function fillTypeahead(field: ScannedField, candidates: string[], opts: ChoiceOpts = {}): Promise<FillOutcome> {
   const input = field.el as HTMLInputElement;
   const container = input.closest('li, [class*="field"], .application-question') ?? input.parentElement!;
   // Lever keeps the chosen suggestion in a hidden box. Text with an empty hidden box was prefilled (e.g. by
@@ -1130,17 +1143,22 @@ export async function fillTypeahead(field: ScannedField, candidates: string[]): 
       container.querySelectorAll<HTMLElement>('[role="option"], .dropdown-results > div, .dropdown-location, .pac-item'),
     ).filter((el) => el.textContent?.trim());
     if (!items.length) return null;
-    const idx = bestOption(candidates, items.map((i) => i.textContent ?? ''));
-    return items[Math.max(idx, 0)];
+    const idx = chooser(opts)(candidates, items.map((i) => i.textContent ?? ''));
+    return idx >= 0 ? items[idx] : null;
   }, timing.typeahead);
-  if (suggestion) clickSafely(suggestion);
+  if (!suggestion) {
+    setNativeValueKeepFocus(input, '');
+    withGuard(input, () => input.blur());
+    return 'nomatch';
+  }
+  clickSafely(suggestion);
   await sleep(100);
   withGuard(input, () => {
     fire(input, 'change');
     input.blur();
   });
   if (chosen?.value.trim()) keepSelection(input, chosen);
-  return input.value.trim() ? 'filled' : 'failed';
+  return input.value.trim() && (!chosen || chosen.value.trim()) && chooser(opts)(candidates, [input.value]) === 0 ? 'filled' : 'failed';
 }
 
 /**

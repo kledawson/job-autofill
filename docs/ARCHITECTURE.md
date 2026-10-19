@@ -27,6 +27,53 @@ Start with a Chrome extension using TypeScript, WXT, Manifest V3, React, and Zod
 
 ## Reliability boundaries
 
+Workflow increment 3 reports bounded `fieldFeedback` metadata (tokens, question labels, status,
+source and an action reason) separately from eligible Memory capture tokens. Required gaps precede
+unverified writes, drafts and optional questions. Verified Profile/Memory/preset writes appear green;
+AI interpretations/drafts and unreadable widgets require amber review; missing required/failed writes
+are red; existing and subsequently edited page answers are neutral. Local committed-value signatures
+are compared on review without being sent to the worker, persisted or used for silent learning.
+Manual edits are preserved and may be explicitly captured; trusted input/change events mark an existing
+optional question teachable without capturing its answer. Partial writer failures remain incomplete.
+
+`showApplicationField` routes an explicit UI request to the tracked tab/frame/run, checks current job
+identity, then locates a live token/question. It scrolls once and focuses without another scroll, never
+clicking or reading a captured answer. Hidden, changed and stale targets fail with refresh guidance.
+Autofill focus calls prevent scrolling and virtualized lists scroll their own container. Destination
+confirmation moves into view after an explicit capture; Profile updates and scoped Memories retain
+their existing atomic validation/replacement protections. Wrapping labels take precedence over nearby
+headings, using nested label captions and excluding dropdown choices/textarea answers from questions.
+
+Workflow increment 2 adds metadata-only authentication readiness before requesting a fill context.
+Visible password/account and verification controls stop writing regardless of field count. OTP controls
+are excluded from matching. `autofill/page-readiness.ts` shares readiness inspection between manual and
+queued entry points; authentication remains manual. Standalone fills explain the next click instead of
+automatically filling a newly authenticated page.
+
+Queued waiting uses optional `waitingFor`/`resumeUntil` metadata on existing needs-action items.
+The worker retains the attempt and private context while waiting, without sending it to authentication
+pages. One cancellable watcher per document/attempt checks readiness. The first authorized frame must
+atomically claim the original job in its session-owned tab before requesting that context. Same-tab
+authentication redirects may wait, but different jobs cannot claim a writer. Wait bounds persist for
+30 minutes rather than resetting after worker recovery. Stop/Skip/closure cancel the wait; other queue
+slots continue. Pause holds new jobs while already opened jobs can finish signing in and filling.
+New browser sessions detach old tabs as before. External login popups and unsupported redirects require
+the user to return to the original application; no extra permissions or authentication automation are added.
+
+Applicant city/location choices use the pure `pickApplicantLocation` matcher in `autofill/values.ts`.
+It compares exact city boundaries, saved state aliases and country equivalents, including diacritics,
+instead of generic text similarity or a top-result fallback. City questions cannot select broad regions;
+generic region questions retain exact saved state/country/region matching. Multiple compatible labels
+remain ambiguous. Validated pickers can search async widget catalogs, and committed locations are read
+back before reporting green. Lever typeahead text without a committed suggestion stays unresolved.
+
+Location queries are separate from generic dropdown search shortening: full city/state/country,
+city/state, then city only. Agreeing state/country qualifiers already present in the saved City are
+removed for matching/query construction without modifying storage; conflicting qualifiers require
+manual review. Async location search waits for a geographically valid result instead of advancing
+as soon as stale/unrelated rows appear. Manual fills reject old content-script build IDs, matching
+the queue retry behavior, so a reloaded sidebar cannot silently invoke older page code.
+
 Persist important state outside worker globals. Handle dynamic fields with bounded rescans. Revalidate target fields before applying a previously generated plan. Preserve user edits. Initially support normal text fields, textareas, and native selects; flag custom widgets, embedded forms without permissions, file uploads, and unsupported pages.
 
 Store only synthetic diagnostics in committed fixtures. Application identity should prefer platform + job ID and fall back to a normalized URL; company/title alone are insufficient.
@@ -144,8 +191,10 @@ dependency, account or backend is introduced.
 
 ## Application review queue
 
-The sidebar replaces single-link entry with a parsed list and configurable batches of 1–5
-(default 3, maximum 100 URLs). Existing tracked jobs are excluded and can be opened for review.
+The sidebar replaces single-link entry with a parsed list and configurable capacity of 1–5
+(default 3, maximum 100 jobs per queue). Submitted jobs are excluded; unfinished/abandoned tracked
+jobs require explicit resume/retry selection. Resuming creates an owned tab rather than adopting an
+arbitrary tracker tab; existing local history is reused. Unsaved website answers stay in the old tab.
 Queue metadata lives in applicationQueue; one immutable document snapshot lives in queueContexts.
 IndexedDB version 5 adds both tables. lib/application-queue.ts validates records and makes
 pure batch decisions. lib/queue-worker.ts atomically claims independent opening/filling attempts within the current batch (maximum five),
@@ -155,11 +204,12 @@ races share the same transaction; only one binds the tab.
 
 All current-batch tabs start filling independently in the background; one slow page or AI response does not hold other tabs. Known Profile and Memories fields fill before optional AI question matching and essays. Network messages are bounded and cancelled local waits ignore late results; optional Gemini requests have 45-second abort deadlines. Explicit restart invalidates the old attempt, waits for its writer to stop, and keeps manually entered values.
 
+Both initial queue fills and manual fills use a bounded field-readiness check and one local recovery pass for changed empty controls/new Memory matches. Reporting uses cached job metadata and updates asynchronously; it does not keep capture locked after the writer finishes. Review-only observation watches the document body and retains exact field tokens across unambiguous rerenders.
+
 One preset/document snapshot is stored per queue. Each new fill combines it with the latest
 Profile and current opt-in Gemini setting; its immutable fillRuns record binds tab, job, frame
 and attempt. Current Memories are matched locally before AI. Pending URLs hold no document
-copies and do not open browser tabs. A batch advances only when every current item is explicitly
-submitted or skipped and its owned tab has closed. Submission is recorded locally before optional
+copies and do not open browser tabs. New UI-started queues use a continuous 1–5-tab window: each submitted/skipped owned tab must close before its slot is reused. Optional batch mode and older queues retain the all-items barrier. Submission is recorded locally before optional
 Sheets synchronization, whose failure does not block the queue. No website Submit is clicked.
 
 Pause prevents the next claim; Stop disconnects all active sessions and preserves open pages.
@@ -173,10 +223,45 @@ closure to queue-created tabs. Previous restored pages are kept; retries open ne
 
 Queue-owned tabs are temporarily protected from automatic Chrome discarding while filling, then restored to normal memory management on review/cancellation. Existing pages report their build during Retry; stale content scripts request a page refresh instead of silently ignoring a new fill.
 
+Increment 4 exposes live capacity and add-links controls. Shared pure intake classification drives
+preview and transactional commits. Explicit tracked IDs are revalidated; submitted history wins.
+`addQueueLinks` appends to the current token without replacing its preset/context or active attempts.
+Concurrent additions deduplicate against the stored queue, and the 100-item cap includes finished jobs.
+Opening claims reserve slots before browser I/O; closed blocked jobs retain recovery metadata without
+holding capacity. Token-bound controls reject stale panels. Abandon settles the attempt before waiting
+for cancellation and closing only its owned tab. Closing failures remain visible and occupy a slot
+until resolved. A cancelled tabs.create handoff removes only its exact orphan opening page.
+
 ## Sidebar layout and review
+
+The first workflow-restructuring increment fixes Fill above the sortable sections in a sticky header.
+Legacy collapse/order preferences cannot hide or move it. Optional keyed sections stay mounted and
+retain their visibility, drafts and relative order. Missing-answer review opens when a new fill becomes
+reviewable, not on every keystroke. Detail statistics remain expandable rather than filling the header.
+`lib/application-workflow.ts` derives a shared view from existing application and queue records for the
+current summary and queue cards; an in-flight retry takes precedence over an older ready result.
+It does not add persisted state or replace the worker scheduler. Independent standalone fills may run
+while another queue tab fills; per-tab run ownership and the queue-owned-tab guard remain enforced.
 
 SidebarSection stores validated open/closed booleans per section in extension local storage. SidebarLayout reorders keyed mounted children using native drag handles, keyboard arrows or move buttons, preserving live forms and drafts. A validated versioned local preference retains order across panels; removed IDs are ignored and newly added sections inserted before their next default neighbor. Applications is last by default; Reset order affects order only.
 
 SidebarPreferences stores versioned, allowlisted category visibility. Hidden sections remain mounted to preserve drafts and selected presets; hiding the queue does not cancel it. Fill is always visible as the recovery action. Setup and Track are hidden by default, but can be enabled in Settings → Sidebar.
 
-Fill holds a compact application summary; ApplicationReview holds the confirmed capture/Save all flow in a separate collapsed section with a bounded question-list scroll area. QueueCard promotes Review/Submitted, exposes failure retry, and keeps secondary actions/details under More. Setup configuration stays in Settings with a minimal unfinished-onboarding prompt in Fill. Queue link drafts use session storage. Public-settings subscriptions ignore unrelated queue/layout status changes.
+The current-application summary sits below the fixed Fill header. ApplicationReview holds the confirmed
+capture/Save all flow in a separate section with a bounded question-list scroll area; it reveals unresolved
+answers after filling while respecting subsequent manual collapse. QueueCard promotes Review/Submitted,
+exposes failure retry, and keeps secondary actions/details under More. Setup configuration stays in Settings
+with a minimal unfinished-onboarding prompt in Fill. Queue link drafts use session storage. Public-settings
+subscriptions ignore unrelated queue/layout status changes.
+
+## Shared submission confirmation
+
+Workflow increment 5 shares `submission-worker.ts` between standalone and queued fills. Content records only trusted user submit/click intent, never fires a Submit action. Supported Greenhouse, Lever and Ashby headings/statuses require the application form to be gone, no visible validation errors, the same origin/company/job route, a recent persisted intent, the live attempt/frame and a browser-session marker. The worker re-probes evidence in that frame and rechecks the actual tab. Queue detection additionally requires its opt-in and queue ownership. Native or visible form errors clear intent and show an attention message. Unfamiliar confirmations remain manual.
+
+`submission-state.ts` builds the same idempotent local update for user and detected confirmation, preserving the first submission date/source. Queue outcomes commit with queue state before owned-tab closure/replacement. Standalone tabs stay open and offer an explicit, session/URL-guarded close action. Manual confirmation remains available on a tracked tab after extraction or confirmation navigation fails. A worker restart preserves intent; browser-session changes invalidate automatic detection/closure.
+
+Sheets starts independently after the local outcome, including when tab closure fails. Pending sync intent persists on the application and is retried on worker startup; failures stay Submitted and offer Retry sheet sync in history. One worker serializes all sheet writes so different applications cannot choose the same empty row concurrently. A Job Posting URL column is required for existing sheets; a retry checks canonical job identity before filling only blank cells. Fetches have a twenty-second bound. Google OAuth, network interruption and external sheet edits remain external failure modes; no live Google account test is implied by synthetic API tests.
+
+Stop autofill & review disconnects/cancels and awaits the old writer before entering a capture-capable read-only session. It does not revoke the existing confirmed Memory flow or run a second fill.
+
+When a foreground owned tab finishes, the worker hands focus to another owned review/opening tab in the same still-focused window. Background completions do not change the active tab.

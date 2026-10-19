@@ -328,8 +328,10 @@ export function valueFor(
       return nonEmpty(p.age);
     case 'address':
       return nonEmpty(p.address);
-    case 'city':
-      return nonEmpty(p.city);
+    case 'city': {
+      const place = applicantLocationParts(p);
+      return place.valid ? nonEmpty(place.city) : null;
+    }
     case 'state':
       return stateVariants(p.state);
     case 'zip':
@@ -340,18 +342,23 @@ export function valueFor(
       const line = [[p.city, p.state].filter(Boolean).join(', '), p.zip].filter(Boolean).join(' ');
       return nonEmpty(line, [p.city, p.state].filter(Boolean).join(', '));
     }
-    case 'cityState':
-      return nonEmpty([p.city, p.state].filter(Boolean).join(', '), p.city);
-    case 'location':
+    case 'cityState': {
+      const place = applicantLocationParts(p);
+      return place.valid ? nonEmpty([place.city, place.state].filter(Boolean).join(', '), place.city) : null;
+    }
+    case 'location': {
+      const place = applicantLocationParts(p);
+      if (!place.valid) return null;
       // Region lists ("North America", "Europe") are matched by the region of the country.
       return nonEmpty(
-        [p.city, p.state].filter(Boolean).join(', '),
-        [p.city, p.state, p.country].filter(Boolean).join(', '),
-        p.city,
+        [place.city, place.state].filter(Boolean).join(', '),
+        [place.city, place.state, place.country].filter(Boolean).join(', '),
+        place.city,
         // Lists of states ("California", "Texas"): the profile state by name and abbreviation.
         ...(isUS(p.country) !== false ? (stateVariants(p.state) ?? []) : []),
         ...regionOf(p.country),
       );
+    }
     case 'linkedin':
       return nonEmpty(p.linkedin);
     case 'github':
@@ -808,10 +815,71 @@ export const CHOICE_ONLY_KEYS = new Set<ProfileKey>([
   'declineOnly',
 ]);
 
-/** Keys never guessed from the top dropdown option when nothing matches. */
-/** Keys where guessing the top search result beats leaving the field empty ("San Jose, CA, United States"). */
-export const TOP_OPTION_KEYS = new Set<ProfileKey>(['location', 'city']);
+const geo = (s: string) => normalize(s.normalize('NFD').replace(/\p{M}/gu, ''));
+function locationCountry(s: string) {
+  const n = geo(s);
+  if (/^(us|usa|u s|u s a|united states( of america)?)$/.test(n)) return 'united states';
+  if (/^(uk|u k|gb|gbr|great britain|united kingdom)$/.test(n)) return 'united kingdom';
+  if (/^(ca|can|canada)$/.test(n)) return 'canada';
+  if (/^(mx|mex|mexico)$/.test(n)) return 'mexico';
+  return n;
+}
 
+/** A saved City may already contain its state/country. Strip only qualifiers that
+ * agree with the explicit Profile fields; never rewrite the stored Profile or infer a conflicting fact.
+ */
+export function applicantLocationParts(profile: Pick<Profile, 'city' | 'state' | 'country'>) {
+  const parts = profile.city.split(/\s*[,|·]\s*/).map(s => s.trim()).filter(Boolean);
+  const city = parts[0] ?? '', country = profile.country.trim(), state = profile.state.trim();
+  const states = (locationCountry(country) === 'united states' ? stateVariants(state) ?? [] : [state]).map(geo).filter(Boolean);
+  const valid = parts.slice(1).every(p => states.includes(geo(p)) || (!!country && locationCountry(p) === locationCountry(country)));
+  return { city, state, country, valid };
+}
 
-/** Keys where the first search result is acceptable when no option matches by text. */
-export const SEARCH_FIRST_RESULT_KEYS = new Set<ProfileKey>(['location']);
+/** Only complete place searches and a city fallback; no state-only, country-only or truncated fragments. */
+export function applicantLocationQueries(profile: Pick<Profile, 'city' | 'state' | 'country'>): string[] {
+  const place = applicantLocationParts(profile);
+  if (!place.valid || !place.city) return [];
+  const fullState = locationCountry(place.country) === 'united states' ? US_STATES[place.state.toUpperCase()] ?? place.state : place.state;
+  return [...new Set([
+    [place.city, fullState, place.country].filter(Boolean).join(', '),
+    [place.city, fullState].filter(Boolean).join(', '), place.city,
+  ])];
+}
+
+/** Compare geographic components, never shared word fragments or the first search result. */
+export function pickApplicantLocation(options: string[], rawProfile: Pick<Profile, 'city' | 'state' | 'country'>, allowBroad = false): number {
+  const profile = applicantLocationParts(rawProfile);
+  if (!profile.valid) return -1;
+  const country = locationCountry;
+  const city = geo(profile.city), savedCountry = country(profile.country);
+  const states = (savedCountry === 'united states' ? stateVariants(profile.state) ?? [] : [profile.state]).map(geo).filter(Boolean);
+  const matches = options.map((label, index) => {
+    if (!city || isPlaceholderOption(label)) return -1;
+    const parts = label.split(/\s*[,|·]\s*/).map(geo).filter(Boolean);
+    if (parts.length > 1) {
+      // Exact city boundaries prevent San Jose from matching San Jose del Castillo.
+      if (parts[0] !== city) return -1;
+      const tail = parts.slice(1);
+      const regions = parts.length >= 3 ? tail.slice(0, -1) : tail;
+      if (states.length && !regions.some(p => states.includes(p))) return -1;
+      if (parts.length >= 3 && savedCountry && country(tail.at(-1)!) !== savedCountry) return -1;
+      // A two-component label must explicitly identify the saved state or country.
+      if (parts.length === 2 && !states.includes(tail[0]!) && (!savedCountry || country(tail[0]!) !== savedCountry)) return -1;
+      return index;
+    }
+    // Also support punctuation-free complete labels, without substring similarity.
+    const countries = savedCountry === 'united states' ? ['United States', 'United States of America', 'US', 'USA', 'U.S.'] : [profile.country];
+    const variants = states.flatMap(state => countries.map(c => geo([city, state, c].filter(Boolean).join(' '))));
+    if (!states.length && !savedCountry) variants.push(city);
+    return variants.includes(geo(label)) ? index : -1;
+  }).filter(index => index >= 0);
+  // Duplicate or competing place labels are ambiguous, even if the shared city matches.
+  if (matches.length) return matches.length === 1 ? matches[0]! : -1;
+  // Generic region/state questions still support their explicit, exact saved values.
+  // Never take this path for a city question or a list containing geographic place rows.
+  if (!allowBroad || options.some(o => /[,|·]/.test(o))) return -1;
+  const broad = options.map((label, index) => !isPlaceholderOption(label) &&
+    (states.includes(geo(label)) || (!!savedCountry && country(label) === savedCountry) || regionOf(profile.country).some(r => geo(r) === geo(label))) ? index : -1).filter(i => i >= 0);
+  return broad.length === 1 ? broad[0]! : -1;
+}

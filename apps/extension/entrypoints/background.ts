@@ -1,4 +1,7 @@
-import { installQueue, queueStart, queuePublic, queueOpening, queuePending, queueFinished, queueStarted, queueControl, queueAction, queueRemoved, queueOwns, queueBusy, queueTab } from '@/lib/queue-worker';
+import { bindSubmissionTab, forgetSubmissionTab, submissionIntent, submissionContext, submissionConfirmed, submissionBlocked, confirmManually, closeSubmittedTab } from '@/lib/submission-worker';
+import { submittedPatch } from '@/lib/submission-state';
+import { installQueue, queueStart, queueAdd, queuePublic, queueOpening, queuePending, queueWaiting, queueFinished, queueStarted, queueControl, queueAction, queueRemoved, queueOwns, queueBusy, queueTab } from '@/lib/queue-worker';
+import { parseFieldFeedback } from '@/lib/field-feedback';
 import { selectedPresetId, buildPresetContext } from '@/lib/preset-db';
 import { presetId } from '@/lib/presets';
 import { browser, type Browser } from 'wxt/browser';
@@ -63,12 +66,18 @@ async function refreshBadge() {
  * application (shown in the side panel with a retry), never thrown.
  */
 const syncingSheet = new Set<number>();
+let sheetWrites: Promise<unknown> = Promise.resolve();
 
 async function syncSheet(id: number) {
   if (syncingSheet.has(id)) return;
   syncingSheet.add(id);
   try {
-    await writeSheetRow(id);
+    // Different applications share a sheet. Serialize read/choose-row/write across them.
+    const work = sheetWrites.catch(() => undefined).then(() => writeSheetRow(id));
+    sheetWrites = work;
+    await work;
+  } catch {
+    await db.applications.update(id, { sheetSyncPending: false, sheetError: 'Sheet sync failed. Check your connection and retry.' }).catch(() => undefined);
   } finally {
     syncingSheet.delete(id);
   }
@@ -80,7 +89,13 @@ async function writeSheetRow(id: number) {
   const app = await db.applications.get(id);
   if (!app || app.status !== 'Submitted') return;
   if (app.sheetRow) {
+    await db.applications.update(id, { sheetSyncPending: false });
     console.info(`[Job Autofill] application ${id} is already in the sheet (row ${app.sheetRow})`);
+    return;
+  }
+  // Sheets is optional. An unconnected integration is not a submission failure.
+  if (!sheetId) {
+    await db.applications.update(id, { sheetSyncPending: false, sheetError: undefined });
     return;
   }
   const skip = !sheetId
@@ -90,16 +105,16 @@ async function writeSheetRow(id: number) {
       : '';
   if (skip) {
     console.info(`[Job Autofill] sheet row skipped: ${skip}`);
-    await db.applications.update(id, { sheetError: skip });
+    await db.applications.update(id, { sheetError: skip, sheetSyncPending: false });
     return;
   }
   try {
     const sheetRow = await appendApplication(sheetId, app, tabId ?? undefined);
     console.info(`[Job Autofill] application ${id} added to the sheet at row ${sheetRow}`);
-    await db.applications.update(id, { sheetRow, sheetError: undefined });
+    await db.applications.update(id, { sheetRow, sheetError: undefined, sheetSyncPending: false });
   } catch (err) {
-    console.info('[Job Autofill] sheet write failed', err);
-    await db.applications.update(id, { sheetError: errorText(err) });
+    // Provider errors can contain cell contents. Keep diagnostics free of applicant values.
+    await db.applications.update(id, { sheetError: errorText(err), sheetSyncPending: false });
   }
 }
 
@@ -280,21 +295,53 @@ async function pageContext(sender: Sender): Promise<MappingContext> {
 
 const handlers: Handlers = {
   async getQueue(_req, sender) { requireExtensionPage(sender); return { ok: true, queue: await queuePublic() }; },
-  async startQueue(req, sender) { requireExtensionPage(sender); if (req.presetId !== undefined) presetId(req.presetId); await queueStart(req.urls, req.batchSize, req.presetId); return { ok: true }; },
+  async queueSubmitIntent(req, sender) { await pageContext(sender); presetId(req.runId); await submissionIntent(req.runId, sender); return { ok: true }; },
+  async queueSubmissionContext(_req, sender) { await pageContext(sender); return { ok: true, runId: await submissionContext(sender) }; },
+  async queueSubmissionConfirmed(req, sender) {
+    await pageContext(sender); presetId(req.runId);
+    try { await submissionConfirmed(req.runId, sender); }
+    finally {
+      await refreshBadge();
+      const app = (await db.applications.where('tabId').equals(sender.tab!.id!).toArray()).find(a => a.runId === req.runId && a.status === 'Submitted');
+      if (app?.id) void syncSheet(app.id);
+    }
+    return { ok: true };
+  },
+  async submissionBlocked(req, sender) { await pageContext(sender); presetId(req.runId); await submissionBlocked(req.runId, sender); return { ok: true }; },
+  async submissionIntent(req, sender) { await pageContext(sender); presetId(req.runId); await submissionIntent(req.runId, sender); return { ok: true }; },
+  async submissionContext(_req, sender) { await pageContext(sender); return { ok: true, runId: await submissionContext(sender) }; },
+  async submissionConfirmed(req, sender) {
+    await pageContext(sender); presetId(req.runId);
+    try { await submissionConfirmed(req.runId, sender); }
+    finally {
+      await refreshBadge();
+      const app = (await db.applications.where('tabId').equals(sender.tab!.id!).toArray()).find(a => a.runId === req.runId && a.status === 'Submitted');
+      if (app?.id) void syncSheet(app.id);
+    }
+    return { ok: true };
+  },
+  async startQueue(req, sender) { requireExtensionPage(sender); if (req.presetId !== undefined) presetId(req.presetId); await queueStart(req.urls, req.batchSize, req.presetId, req.mode, req.autoDetectSubmission, req.resumeApplicationIds); return { ok: true }; },
+  async addQueueLinks(req, sender) { requireExtensionPage(sender); presetId(req.token); return { ok: true, ...await queueAdd(req.token, req.urls, req.resumeApplicationIds) }; },
   async controlQueue(req, sender) {
-    requireExtensionPage(sender);
+    requireExtensionPage(sender); presetId(req.token);
     if (!['pause', 'resume', 'stop', 'size'].includes(req.action)) throw new Error('Invalid queue action.');
-    await queueControl(req.action, req.batchSize); return { ok: true };
+    await queueControl(req.action, req.batchSize, req.token); return { ok: true };
   },
   async queueAction(req, sender) {
     requireExtensionPage(sender); presetId(req.token); presetId(req.itemId);
-    if (!['open', 'retry', 'submitted', 'skip'].includes(req.action)) throw new Error('Invalid application action.');
-    const id = await queueAction(req.token, req.itemId, req.action);
-    if (id && (req.action === 'submitted' || req.action === 'skip')) await refreshBadge();
-    if (req.action === 'submitted' && id) void syncSheet(id);
+    if (!['open', 'retry', 'review', 'submitted', 'skip'].includes(req.action)) throw new Error('Invalid application action.');
+    try { await queueAction(req.token, req.itemId, req.action); }
+    finally {
+      if (req.action === 'submitted' || req.action === 'skip') await refreshBadge();
+      if (req.action === 'submitted') {
+        const q = await queuePublic(), id = q?.token === req.token ? q.items.find(i => i.id === req.itemId)?.applicationId : undefined;
+        if (id && (await db.applications.get(id))?.status === 'Submitted') void syncSheet(id);
+      }
+    }
     return { ok: true };
   },
   async queueOpening(req, sender) { presetId(req.attempt); await queueOpening(req.attempt, sender); return { ok: true }; },
+  async queueWaiting(req, sender) { await pageContext(sender); presetId(req.runId); await queueWaiting(req.runId, sender, req.reason); return { ok: true }; },
   async queueFinished(req, sender) {
     await pageContext(sender); presetId(req.runId);
     if (req.note !== undefined && (typeof req.note !== 'string' || req.note.length > 500)) throw new Error('Invalid queue status.');
@@ -332,6 +379,19 @@ const handlers: Handlers = {
       suggestion = records.find(m => m.id === req.suggestionId);
     }
     return { ok: true, capture: { ...validated, profileUpdate: proposeConfirmedProfileUpdate(validated, await getProfile(), await getRememberedMappings(), context) ?? undefined }, ...(suggestion ? { suggestion } : {}) };
+  },
+  async showApplicationField(req, sender) {
+    requireExtensionPage(sender);
+    if (!Number.isSafeInteger(req.applicationId) || typeof req.token !== 'string') throw new Error('Invalid field request.');
+    const app = await db.applications.get(req.applicationId);
+    const field = app?.fieldFeedback?.find(f => f.token === req.token) ?? app?.reviewFields?.find(f => f.token === req.token);
+    if (!app || app.tabId === undefined || !field || app.status !== 'Ready for review') throw new Error('Fill this application and wait for review before locating a field.');
+    const tab = await browser.tabs.get(app.tabId);
+    if (!tab.url || applicationKey(tab.url) !== applicationKey(app.topUrl ?? app.url)) throw new Error('This tab has moved to another application. Refresh its fill results.');
+    const result = await browser.tabs.sendMessage(app.tabId, { type: 'showField', token: field.token, question: field.label, runId: app.runId } satisfies ContentMessage, { frameId: app.frameId ?? 0 });
+    if (!result?.ok) throw new Error(result?.error ?? 'This field is no longer available. Fill the page again.');
+    await browser.tabs.update(app.tabId, { active: true });
+    return { ok: true };
   },
 
   async capturePageAnswers(req, sender) {
@@ -489,9 +549,10 @@ const handlers: Handlers = {
   },
 
   async setPageStatus(req, sender) {
-    if (sender.tab?.id !== undefined) {
-      await browser.storage.session.set({ [pageStatusKey(sender.tab.id)]: { ...req.status, origin: req.origin } });
-    }
+    await pageContext(sender);
+    const s = req.status;
+    if (!s || typeof s.title !== 'string' || s.title.length > 200 || !Array.isArray(s.lines) || s.lines.length > 10 || s.lines.some(l => typeof l !== 'string' || l.length > 1000) || !['working', 'done', 'attention'].includes(s.tone) || req.origin !== new URL(sender.url!).origin) throw new Error('Invalid page status.');
+    await browser.storage.session.set({ [pageStatusKey(sender.tab!.id!)]: { title: s.title, lines: s.lines, tone: s.tone, origin: req.origin, url: sender.tab!.url } });
     return {};
   },
 
@@ -503,7 +564,8 @@ const handlers: Handlers = {
     const preset = run?.context.preset;
     const key = jobKey(req.url);
     const existing = await db.applications.where('jobKey').equals(key).last();
-    const patch = { presetId: preset?.id, presetName: preset?.name, presetRevision: preset?.revision, resumeName: run?.context.resume?.name, runId: run?.id, company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [], memoryQuestions: [] };
+    if (run?.id && sender.tab?.id !== undefined) await bindSubmissionTab(sender.tab.id, run.id);
+    const patch = { submitIntentAt: undefined, submissionIssue: undefined, presetId: preset?.id, presetName: preset?.name, presetRevision: preset?.revision, resumeName: run?.context.resume?.name, runId: run?.id, company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [], fieldFeedback: [], memoryQuestions: [] };
     if (existing?.id && existing.status !== 'Submitted') {
       await db.applications.update(existing.id, { ...patch, status: 'Filling' });
       if (run?.context.queue && req.runId) await queueStarted(req.runId, sender, existing.id);
@@ -529,6 +591,8 @@ const handlers: Handlers = {
     if (!app?.id || sender.id !== browser.runtime.id || app.tabId !== sender.tab?.id || (app.frameId ?? 0) !== (sender.frameId ?? 0) || (app.runId && req.runId !== app.runId)) return {};
     if (req.runId) await ownedRun(req.runId, sender);
     const memoryQuestions = req.memoryQuestions === undefined ? undefined : parseQuestionList(req.memoryQuestions);
+    const fieldFeedback = req.fieldFeedback === undefined ? undefined : parseFieldFeedback(req.fieldFeedback);
+    const reviewFields = req.reviewFields === undefined ? undefined : parseReviewFields(req.reviewFields);
     if (req.missingQuestions !== undefined && (!Array.isArray(req.missingQuestions) ||
       req.missingQuestions.length !== req.missingLabels.length || req.missingQuestions.length > 200 ||
       req.missingQuestions.some((q) => q !== null && (typeof q !== 'string' || !q.trim() || q.length > 700)))) {
@@ -551,7 +615,8 @@ const handlers: Handlers = {
       missingCount: req.missingLabels.length,
       missingLabels: req.missingLabels,
       missingQuestions: req.missingQuestions,
-      reviewFields: req.reviewFields === undefined ? undefined : parseReviewFields(req.reviewFields),
+      reviewFields,
+      fieldFeedback,
       memoryQuestions,
       location: (typeof req.location === 'string' && formatLocation(req.location)) || app.location,
       workMode: WORK_MODELS.find((m) => m === req.workMode) ?? app.workMode,
@@ -614,7 +679,7 @@ const handlers: Handlers = {
     await pageContext(sender);
     const tabId = sender.tab?.id;
     if (tabId === undefined) return { fill: false };
-    const queued = await queuePending(tabId, sender.frameId ?? 0, commit);
+    const queued = await queuePending(sender, commit);
     if (queued.fill || await queueTab(tabId)) return queued;
     const pending = await pendingTabs();
     if (!pending.includes(tabId)) return { fill: false };
@@ -665,14 +730,14 @@ const handlers: Handlers = {
     const tab = await activeTab();
     if (!tab?.id) return { ok: false, error: 'No active tab.' };
     if (await queueTab(tab.id)) throw new Error('Use Fill this step in the queue to keep the selected preset.');
-    if (await queueBusy()) throw new Error('Wait for the current queue fill to finish.');
     if (tab.url !== undefined && !isWebUrl(tab.url)) return { ok: false, error: 'Open a job application page first.' };
     const profile = await getProfile();
     if (!profile.firstName || !profile.email) {
       return { ok: false, error: 'Finish your profile first (at least your name and email).' };
     }
     try {
-      const state = await sendToTab(tab.id, { type: 'ping' }) as { filling?: boolean; presetId?: string; presetRevision?: number };
+      const state = await sendToTab(tab.id, { type: 'ping' }) as { build?: string; filling?: boolean; presetId?: string; presetRevision?: number };
+      if (state?.build !== __BUILD__) return { ok: false, error: 'This application page is using older extension code. Copy any unsaved answers, refresh the application page, then click Fill this page again.' };
       if (state?.filling) return { ok: false, error: 'This page is still filling. Wait for it to finish before changing the preset.' };
       const selection = selectedId ?? await selectedPresetId();
       const selected = await db.presets.get(selection);
@@ -694,17 +759,24 @@ const handlers: Handlers = {
     return { ok: true };
   },
 
-  async markSubmitted({ applicationId }) {
-    const app = await db.applications.get(applicationId);
-    if (!app) return { ok: false, error: 'Application not found.' };
-    // Calling this again for a submitted application only retries a failed sheet write.
-    if (app.status !== 'Submitted') {
-      await db.applications.update(applicationId, { status: 'Submitted', submittedAt: Date.now() });
+  async markSubmitted({ applicationId }, sender) {
+    requireExtensionPage(sender);
+    try { await confirmManually(applicationId); }
+    finally {
       await refreshBadge();
+      if ((await db.applications.get(applicationId))?.status === 'Submitted') void syncSheet(applicationId);
     }
-    await syncSheet(applicationId);
     return { ok: true };
   },
+  async retrySheet({ applicationId }, sender) {
+    requireExtensionPage(sender);
+    if (!(await getSettings()).sheetId) throw new Error('Connect a sheet in Settings → Connections, then retry.');
+    if (!Number.isSafeInteger(applicationId) || applicationId < 1 || (await db.applications.get(applicationId))?.status !== 'Submitted') throw new Error('Choose a submitted application to retry.');
+    await db.applications.update(applicationId, { sheetSyncPending: true, sheetError: undefined });
+    void syncSheet(applicationId);
+    return { ok: true };
+  },
+  async closeSubmittedTab({ applicationId }, sender) { requireExtensionPage(sender); await closeSubmittedTab(applicationId); return { ok: true }; },
 
   async deleteApplication({ applicationId }, sender) {
     if (sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL('/'))) return { ok: false, error: 'Only the side panel can delete applications.' };
@@ -713,7 +785,8 @@ const handlers: Handlers = {
     return { ok: true };
   },
 
-  async trackApplication({ url }) {
+  async trackApplication({ url }, sender) {
+    requireExtensionPage(sender);
     let parsed: URL;
     try {
       parsed = new URL(url.trim());
@@ -740,7 +813,7 @@ const handlers: Handlers = {
         platform: platformFor(parsed.href),
         status: 'Submitted',
         filledAt: Date.now(),
-        submittedAt: Date.now(),
+        submittedAt: Date.now(), submissionSource: 'user', sheetSyncPending: true,
         aiAnswers: 0,
         filledCount: 0,
         missingCount: 0,
@@ -748,7 +821,7 @@ const handlers: Handlers = {
       })) as number;
       await refreshBadge();
     } else if (existing!.status !== 'Submitted') {
-      await db.applications.update(id, { ...details, status: 'Submitted', submittedAt: Date.now() });
+      await db.applications.update(id, { ...details, ...submittedPatch(existing!, 'user') });
       await refreshBadge();
     } else {
       // Re-marking re-syncs the sheet, which fills any blank cells in the existing row.
@@ -898,6 +971,7 @@ export default defineBackground(() => {
   });
 
   browser.tabs.onRemoved.addListener(async (tabId) => {
+    await forgetSubmissionTab(tabId);
     await queueRemoved(tabId);
     fillingFrames.delete(tabId);
     await db.fillRuns.where('tabId').equals(tabId).delete();
@@ -909,6 +983,6 @@ export default defineBackground(() => {
   void refreshBadge();
   // A worker interruption after local submission must not lose a queued Sheets write.
   void db.applications.where('status').equals('Submitted').toArray().then(apps => {
-    for (const app of apps) if (app.id && app.sheetError === 'Sheet sync pending. Retry from the application tracker if needed.') void syncSheet(app.id);
+    for (const app of apps) if (app.id && (app.sheetSyncPending || app.sheetError === 'Sheet sync pending. Retry from the application tracker if needed.')) void syncSheet(app.id);
   });
 });

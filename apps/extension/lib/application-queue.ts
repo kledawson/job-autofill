@@ -1,13 +1,27 @@
 import type { FillContext } from './messages';
 import { jobKey, detectPlatform } from './platforms';
+import type { Application } from './types';
 export interface QueueItem {
   id: string; url: string; key: string;
   state: 'queued' | 'opening' | 'filling' | 'review' | 'needs-action' | 'submitted' | 'skipped';
   batch: number; attempt?: string; tabId?: number; frameId?: number; applicationId?: number; deadline?: number; note?: string;
+  submitIntentAt?: number;
+  /** Metadata only; no authentication values are captured. Absent on legacy records. */
+  waitingFor?: QueueWaitReason;
+  resumeUntil?: number;
+}
+export type QueueWaitReason = 'login' | 'account' | 'verification' | 'navigation';
+export const QUEUE_WAIT_MS = 30 * 60_000;
+export const queueWaitReasons: QueueWaitReason[] = ['login', 'account', 'verification', 'navigation'];
+export function clearQueueWait(item: QueueItem) { item.waitingFor = undefined; item.resumeUntil = undefined; }
+/** Authentication redirects may wait in their owned tab, but only the original job may claim a writer. */
+export function queueJobMatches(item: QueueItem, topUrl: string | undefined): boolean {
+  try { return !!topUrl && queueKey(topUrl) === item.key; } catch { return false; }
 }
 export interface QueueState {
   id: 'current'; schemaVersion: 1; token: string; status: 'running' | 'paused' | 'stopped' | 'complete';
   batchSize: number; batch: number; createdAt: number; items: QueueItem[];
+  mode?: 'batch' | 'continuous'; autoDetectSubmission?: boolean;
 }
 export type QueueSnapshot = Omit<FillContext, 'profile' | 'hasGeminiKey' | 'runId' | 'queue'>;
 export type QueueRecord = QueueState & { presetName: string; resumeName?: string };
@@ -19,20 +33,26 @@ export const queueSchema = { parse(value: unknown): QueueState {
       !['running', 'paused', 'stopped', 'complete'].includes(q.status) ||
       !integer(q.batch) || !integer(q.createdAt) || !Array.isArray(q.items) || q.items.length < 1 || q.items.length > 100) throw new Error('Invalid stored queue. Stop it and create a new queue.');
   batchSize(q.batchSize);
-  if (q.items.filter(i => i.batch === q.batch && i.batch > 0).length > 5) throw new Error('Invalid queue: batch exceeds five tabs.');
+  if (q.mode !== undefined && !['batch', 'continuous'].includes(q.mode)) throw new Error('Invalid queue mode.');
+  if (q.autoDetectSubmission !== undefined && typeof q.autoDetectSubmission !== 'boolean') throw new Error('Invalid submission detection setting.');
+  if ((q.mode === 'continuous' ? queueOccupancy(q) : q.items.filter(i => i.batch === q.batch && i.batch > 0).length) > 5) throw new Error('Invalid queue: batch exceeds five tabs.');
   const attempts = new Set<string>(), tabs = new Set<number>();
-  const ids = new Set<string>();
+  const ids = new Set<string>(), keys = new Set<string>();
   for (const i of q.items) {
     if (!i || !uuid(i.id) || ids.has(i.id) || !integer(i.batch) || i.batch > q.batch ||
         typeof i.key !== 'string' || i.key.length > 2400 ||
         !['queued', 'opening', 'filling', 'review', 'needs-action', 'submitted', 'skipped'].includes(i.state) ||
         (i.attempt !== undefined && !uuid(i.attempt)) ||
-        [i.tabId, i.frameId, i.applicationId, i.deadline].some(v => v !== undefined && !integer(v)) ||
+        [i.tabId, i.frameId, i.applicationId, i.deadline, i.submitIntentAt, i.resumeUntil].some(v => v !== undefined && !integer(v)) ||
         (i.note !== undefined && (typeof i.note !== 'string' || i.note.length > 500))) throw new Error('Invalid stored queue item.');
     if (inFlight(i) && (!uuid(i.attempt) || i.deadline === undefined || i.batch === 0)) throw new Error('Invalid active queue attempt.');
     if (i.state === 'filling' && (i.tabId === undefined || i.frameId === undefined)) throw new Error('Invalid queue frame ownership.');
     if (i.state === 'review' && !i.applicationId) throw new Error('Invalid queue review result.');
+    if (i.waitingFor !== undefined && (!queueWaitReasons.includes(i.waitingFor) || i.state !== 'needs-action' || !i.attempt || i.tabId === undefined || i.resumeUntil === undefined || i.batch === 0)) throw new Error('Invalid waiting queue attempt.');
+    if (i.resumeUntil !== undefined && i.waitingFor === undefined) throw new Error('Invalid queue resume deadline.');
     if (queueKey(queueUrl(i.url)) !== i.key) throw new Error('Invalid stored application link.');
+    if (keys.has(i.key)) throw new Error('Duplicate job in stored queue.');
+    keys.add(i.key);
     if (inFlight(i) && i.batch !== q.batch) throw new Error('Active attempt outside current batch.');
     if (i.attempt && attempts.has(i.attempt)) throw new Error('Duplicate queue attempt.');
     if (i.tabId !== undefined && tabs.has(i.tabId)) throw new Error('Duplicate queue tab.');
@@ -44,6 +64,25 @@ export const queueSchema = { parse(value: unknown): QueueState {
 } };
 export const settled = (i: QueueItem) => i.state === 'submitted' || i.state === 'skipped';
 export const inFlight = (i: QueueItem) => i.state === 'opening' || i.state === 'filling';
+/** Opening claims reserve capacity before tabs exist; closed blocked jobs hold metadata only. */
+export function queueOccupancy(q: QueueState): number {
+  return q.items.filter(i => i.batch > 0 && (i.tabId !== undefined || inFlight(i))).length;
+}
+export type QueueLinkChoice = { url: string; kind: 'new' | 'queued' | 'submitted' | 'unfinished' | 'abandoned'; app?: Application; item?: QueueItem };
+/** Shared preview/commit policy. Submitted history always wins over older unfinished records. */
+export function queueLinkChoices(urls: string[], apps: Application[], queue?: QueueState): QueueLinkChoice[] {
+  return urls.map(url => {
+    const key = queueKey(url), item = queue?.items.find(i => i.key === key);
+    if (item) return { url, kind: 'queued', item };
+    const matches = apps.filter(a => a.jobKey === jobKey(url) || queueKey(a.url) === key);
+    const app = matches.find(a => a.status === 'Submitted') ?? matches.sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
+    return { url, app, kind: !app ? 'new' : app.status === 'Submitted' ? 'submitted' : app.status === 'Abandoned' ? 'abandoned' : 'unfinished' };
+  });
+}
+export function validateQueueResumes(value: unknown): number[] {
+  if (!Array.isArray(value) || value.length > 100 || value.some(id => !Number.isSafeInteger(id) || id < 1) || new Set(value).size !== value.length) throw new Error('Invalid application resume selection. Review the links again.');
+  return value;
+}
 export function batchSize(value: unknown): number {
   if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 5) throw new Error('Choose between 1 and 5 applications per batch.');
   return Number(value);
@@ -75,7 +114,18 @@ export function parseQueueLinks(input: string) {
   return { urls, duplicates, rejected, noLinks: !!input.trim() && !tokens.length };
 }
 export function nextQueueItem(q: QueueState): QueueItem | undefined {
+  if (['running', 'paused'].includes(q.status) && q.items.length && q.items.every(i => settled(i) && i.tabId === undefined)) { q.status = 'complete'; return; }
   if (q.status !== 'running') return;
+  if (q.mode === 'continuous') {
+    const open = queueOccupancy(q);
+    const assigned = q.items.find(i => i.batch > 0 && i.state === 'queued' && (i.tabId !== undefined || open < q.batchSize));
+    if (assigned) return assigned;
+    if (open >= q.batchSize) return;
+    const next = q.items.find(i => i.batch === 0 && i.state === 'queued');
+    if (next) { q.batch = 1; next.batch = 1; return next; }
+    if (!open && q.items.every(settled)) q.status = 'complete';
+    return;
+  }
   const current = q.items.filter(i => i.batch === q.batch && i.batch > 0);
   if (current.some(i => i.state === 'queued')) return current.find(i => i.state === 'queued');
   if (current.some(i => !settled(i) || i.tabId !== undefined)) return;

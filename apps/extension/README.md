@@ -24,6 +24,34 @@ the extension ID and Chrome's saved profile data. Reopen Settings to see the upd
 
 The manifest includes a public key, so the extension ID is always `kjepjmmbimmbpdfinkippakkmhbglccc`.
 
+## Signing in before filling
+
+If a site asks for sign-in, account creation or a verification code, complete it on the website yourself.
+The extension leaves these fields untouched. For a single application, click **Fill this page** once
+you reach the application. On a dynamic sign-in page, the sidebar changes to **Application ready**.
+
+A queue shows **Sign in required** and **Open to sign in**. Other queue jobs continue. Once you return
+to the original application in the same queue tab, autofill resumes automatically. The job keeps its
+slot while waiting; the wait ends after 30 minutes and offers **Retry autofill**. **Stop queue** cancels
+automatic resume while preserving pages; **More → Skip** closes that owned tab. Pause prevents new
+jobs opening, while already opened jobs can finish. For an external login popup, complete login there
+and return to the original queue tab. Unsupported redirects never receive the original job's answers.
+
+## Review and remember
+
+After filling, open **Review & remember**. Required missing answers come first, followed by answers
+to check and optional gaps. **Verified** (green) means a saved Profile, Memory or preset answer was
+applied and read back. **Review** (amber) marks AI drafts/interpretations or a widget that cannot be
+fully verified. **Missing** (red) needs attention. **Entered by you** is neutral and preserves page
+answers, including your edits to autofilled values. Check that saved facts are current before submitting.
+
+Use **Show field** to scroll to and focus a question. Autofill itself avoids moving the page.
+Answer a missing question on the website, then choose **Save this answer** or **Save all answered
+questions**. The confirmation opens in view and clearly names the destination: **Profile** for supported
+personal facts, or a scoped **Memory** for contextual questions. Confirm replacement of existing Profile
+facts when prompted. Verified/entered answers can be inspected under **Verified & entered answers**;
+viewing them does not capture or save anything. Refresh older application tabs to enable this review UI.
+
 ## Google Sheets tracking (optional)
 
 Sheets sync needs a Google OAuth client. Filling works without it.
@@ -39,9 +67,9 @@ If this build has no OAuth client ID, pasting a link and choosing **Connect shee
 Then, in onboarding or Settings → Connections → Google Sheets tracking:
 
 Create a sheet in Google Sheets, paste its link, and choose **Connect sheet** and approve access. There is nothing
-else to configure: the sheet's headers decide what is saved.
+else to configure. Keep a Job Posting URL column so retries can identify applications; the other headers decide what is saved.
 
-When you click **Mark as submitted** or the queue's **Submitted — close tab** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
+When you click **I submitted this application** or the queue's **Submitted — close tab** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
 no company or position, and the side panel shows the row number with a link. The extension reads the header row and
 fills the columns it recognizes, whatever their order: company name, position, date applied (and a "Found" column,
 which gets the same date), link, location, work model, base pay (the pay range posted on the job page, when it
@@ -264,24 +292,31 @@ the chosen preset and resume. Default preserves existing shared-document behavio
 Presets and their PDFs stay local. Profile JSON and Memories backups do not include presets or
 preset documents. Delete all local data includes presets, their documents and fill snapshots.
 
-## Fill a batch of applications
+## Queue applications for review
 
 1. Choose an **Application preset** in the sidebar. Its resume, presentation links and prepared
    answers are fixed for the queue; changing or deleting that preset later does not change the queue.
 2. Paste one or many full job URLs into **Job links**. Review the preview; duplicate links are removed.
-   Already tracked applications are excluded. **Review existing application** opens them without refilling.
-3. Choose **Applications per batch** (1–5, default 3), then **Start queue**. The extension fills all current-batch pages independently in the background and opens no more than the current batch's application tabs.
+   Submitted jobs stay excluded. Unfinished jobs offer **Resume in queue (new tab)**; abandoned jobs
+   offer **Retry in queue (new tab)**. Choose these explicitly. Unsaved answers stay in the old tab;
+   the new owned tab uses saved Profile/Memories. **View application** opens the original job without filling.
+3. Choose **Applications open at once** (1–5, default 3), then **Start queue**. Pages fill independently in the background. **Open the next job when an application finishes** is enabled by default: each finished/closed tab makes room for one next job. Uncheck it for the earlier batch workflow.
 4. Use **Review** to review, complete missing fields and submit on the website yourself.
    Memories and Save all remain available in the current-page review section.
-5. Only after confirming success on the website, click **Submitted — close tab**. It updates local
-   tracking and optionally Sheets. **Skip — close tab** closes that queue tab without marking submission.
-   The next batch begins after every current item is submitted or skipped.
-6. On a later application step, use **Fill this step**. For sign-in, missing forms or a manually closed
-   tab, use **Retry autofill** after resolving the issue. Existing page values are kept.
+5. **Close confirmed submissions automatically** is enabled for new UI-started queues. After you click Submit yourself, a supported success screen records submission and closes that owned tab. A click, invalid form, route change or unsupported confirmation alone never counts. If detection cannot confirm success, use **Submitted — close tab** after verifying it yourself. Saving Memories must happen before submitting. **More → Abandon — close tab** stops even a stalled writer, records Abandoned, and frees its slot after closure.
+6. For sign-in, use **Open to sign in**, complete the website step and return to this job; the initial
+   queue fill resumes automatically. On a later application step, use **Fill this step**. Missing forms,
+   closed tabs and expired waits offer **Retry autofill** after resolving the issue. Existing values stay.
 
-**Pause queue** lets active fills finish and prevents new fills. **Resume queue** continues.
-**Stop queue** stops further work and keeps opened pages for you. Batch-size changes apply to the next
-batch. Up to 100 pending links are local metadata; only 1–5 review tabs are opened. Actual memory use
+**Pause queue** lets already opened jobs finish signing in/filling and prevents new jobs opening. **Resume queue** continues.
+The visible **Open application limit** takes effect immediately: three to five opens two more waiting
+jobs when available. Reducing the limit keeps current tabs open, then waits for space. Sign-in, blocked
+and closing tabs count toward capacity. Closed blocked jobs can be retried when a slot is free.
+**Add job links** adds to the same queue and pinned preset, including while paused. Existing queue
+entries are never duplicated. Each queue holds up to 100 jobs total, including finished entries.
+**Queue options → Stop queue** stops further work and keeps opened pages for you. In legacy batch mode,
+size changes affect the next batch. Pending links are local metadata; only 1–5 owned tabs are opened
+(a reduction may temporarily leave more tabs than the new limit). Actual memory use
 still depends on the job websites. The additional alarms permission supports timeout/recovery checks.
 No queue action clicks Submit, solves CAPTCHA, signs in, or automates LinkedIn.
 
@@ -290,14 +325,31 @@ explicit resume/retry; previous restored tabs are kept and retries create owned 
 may be lost on restart. Sheets failures are shown on the tracker and do not hold up subsequent batches.
 The latest saved Profile and Memories are used when each fill begins. Backups do not export queue state.
 
-Sidebar sections remember your layout. Fill and Queue start open; Review & remember, Presets and Applications start closed, with Applications last by default. **Settings → Sidebar** has checkboxes for Queue, Review & remember, Setup & connections, Track without autofill, Presets and Applications. Setup and Track start hidden. Fill always stays available. Hiding a category preserves its drafts and data; running queues continue.
+**Fill this page** stays at the top while you scroll and cannot be collapsed or reordered. Queue starts
+open; Review & remember, Presets and Applications start closed, with Applications last by default.
+Missing-question review opens when a fill finishes without moving your focus. Optional sections remember
+your layout. **Settings → Sidebar** has checkboxes for Queue, Review & remember, Setup & connections,
+Track without autofill, Presets and Applications. Setup and Track start hidden. Hiding a category preserves
+its drafts and data; running queues continue. Manual filling on another tab can run while the queue fills.
 
 Drag a dotted handle to reorder sections, or click it for Move up/down buttons; keyboard Up/Down arrows work on a focused handle. **Reset order** restores the default order without closing sections or losing drafts.
 
 Profile and integrations stay in Settings; the optional Setup & connections category offers quick links and status. Unfinished onboarding offers **Continue setup** within Fill. Your pasted link draft and batch size survive reopening the panel.
 
-Fill shows a compact application summary; **Review & remember** holds missing questions, single-answer capture and Save all confirmation. Its question list scrolls within the section. Queue cards show **Review** and **Submitted** first; **More** contains Fill this step/Restart, Skip and document/link details. **Submitted** records your confirmation and closes the owned tab; it never submits on the website.
+Below Fill, a compact application summary shows attention counts; expand **Fill details** for latest-attempt
+statistics and resume information. **Review & remember** holds missing questions, single-answer capture
+and Save all confirmation. Its question list scrolls within the section. Queue cards show **Review** and
+**Submitted** first; **More** contains Fill this step/Restart, Abandon and document/link details. **Submitted**
+records your confirmation and closes the owned tab; it never submits on the website.
 
 During an active fill, **Restart autofill** cancels the previous attempt before retrying and preserves non-empty answers. AI responses have bounded waits; a slow answer does not block other applications.
 
 Stopped/completed queue notices have a small × button. Dismissal is remembered for that queue; it does not delete tracked applications or close their tabs.
+
+Both queued and manual fills wait briefly for stable controls before scanning. A single local recovery pass retries changed empty controls or newly available Memories; it never repeats AI responses/uploads or replaces manual answers. Review reporting does not wait on optional job metadata. **Stop autofill & review** stops a slow writer and opens the form for manual answers and Memory confirmation. Reviewed forms are observed without further automatic writes, including form replacements.
+
+## Submission and sheet recovery (workflow increment 5)
+
+Submit applications on the website yourself. Supported Greenhouse, Lever and Ashby confirmations can record success after your submit action. Validation errors keep the tab open and show **Submission needs attention**. For an unfamiliar result, use **I submitted this application** (or **Submitted — close tab** in the queue) only after verifying success. Individual tabs stay open; **Close application tab** is optional. Automatic queue closure follows its checkbox preference and advances only after confirmation. Save Memories before submitting.
+
+A failed Sheets write leaves the application Submitted and the queue continues. Expand **Applications** and choose **Retry sheet sync**; this retries tracking without submitting again. Existing sheets need a **Job Posting URL** column to recognize retries safely. Writes from different applications are serialized and pending writes recover when the worker restarts. Supported confirmation patterns and fictional API tests do not guarantee every website variant or Google account configuration.

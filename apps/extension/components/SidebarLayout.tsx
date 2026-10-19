@@ -37,7 +37,7 @@ export function SidebarLayout({ children }: { children: ReactNode }) {
     });
   }
   function move(id: SidebarId, direction: number, title: string) {
-    const shown = current.current.filter(section => visibility[section]), index = shown.indexOf(id), destination = index + direction;
+    const shown = current.current.filter(section => section !== 'fill' && visibility[section]), index = shown.indexOf(id), destination = index + direction;
     if (index < 0 || destination < 0 || destination >= shown.length) return;
     const next = current.current.filter(section => section !== id), neighbor = shown[destination]!;
     const insert = next.indexOf(neighbor) + (direction > 0 ? 1 : 0);
@@ -59,7 +59,7 @@ export function SidebarLayout({ children }: { children: ReactNode }) {
     if (!isValidElement<{ id?: string; hidden?: boolean }>(child) || !child.props.id || !isSidebarId(child.props.id)) return [];
     return [[child.props.id, cloneElement(child, { key: child.props.id, hidden: !visibility[child.props.id] })] as const];
   }));
-  return <LayoutContext.Provider value={{ order: order.filter(id => visibility[id]), dragging, target, drag: value => { setDragging(value); if (!value) setTarget(null); }, aim: setTarget, drop, move }}>
+  return <LayoutContext.Provider value={{ order: order.filter(id => id !== 'fill' && visibility[id]), dragging, target, drag: value => { setDragging(value); if (!value) setTarget(null); }, aim: setTarget, drop, move }}>
     <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
       <p id="sidebar-arrange-help">Drag the dotted handles to reorder.</p>
       <button type="button" className="shrink-0 text-indigo-700 underline" onClick={() => save([...SIDEBAR_ORDER], 'Default section order restored. Applications is last.')}>Reset order</button>

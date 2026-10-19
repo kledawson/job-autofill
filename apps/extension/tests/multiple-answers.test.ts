@@ -90,7 +90,10 @@ describe('multi-select capture, verified writes and batch snapshots', () => {
     const again = new FillSession(document, ADAPTERS.greenhouse, { context: { profile: sampleProfile(), resume: null, coverLetter: null, transcript: null, hasGeminiKey: false }, answer: vi.fn(), jobDescription: vi.fn(), matchSavedAnswers: async fields => fields.map(f => new SavedAnswerIndex([record], context).match(f)) });
     await again.run();
     expect(selectedValues(scanFields(document)[0]!).sort()).toEqual(['Python', 'SQL', 'TS']);
-    expect(session.verify().missingLabels).toContain(draft.question);
+    // A later manual change is preserved and identified as the user's answer;
+    // it is different from a writer that failed to commit the requested set.
+    expect(session.verify().missingLabels).not.toContain(draft.question);
+    expect(session.verify().fieldFeedback?.find(f => f.label === draft.question)).toMatchObject({ status: 'entered', source: 'page' });
   });
   it('does not select a subset when a native option is unavailable', async () => {
     const session = setup(native.replace('<option>TS</option>', ''), [record]);

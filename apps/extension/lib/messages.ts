@@ -44,7 +44,7 @@ export interface FieldQuestion {
 export interface PageStatus {
   title: string;
   lines: string[];
-  tone: 'working' | 'done';
+  tone: 'working' | 'done' | 'attention';
 }
 
 /** Session-storage key holding a tab's {@link PageStatus} plus the page origin it was set on. */
@@ -76,6 +76,7 @@ export interface BackgroundMessages {
       missingLabels: string[];
       missingQuestions?: (string | null)[];
       reviewFields?: ReviewField[];
+      fieldFeedback?: import('./field-feedback').FieldFeedback[];
       memoryQuestions?: string[];
       usedMappingIds?: number[];
       location?: string;
@@ -90,13 +91,22 @@ export interface BackgroundMessages {
   /** Location and work model from the platform's public posting API, for apply pages that don't show them. */
   jobDetails: { req: { platform: 'lever' | 'ashby'; org: string; jobId: string }; res: JobDetails };
   /** Tabs opened from a pasted link are marked pending; `commit` consumes the mark. */
-  claimPendingFill: { req: { commit: boolean }; res: { fill: boolean; queued?: boolean; runId?: string } };
+  claimPendingFill: { req: { commit: boolean }; res: { fill: boolean; queued?: boolean; runId?: string; resumeUntil?: number } };
   queueOpening: { req: { attempt: string }; res: Result };
   queueFinished: { req: { runId: string; applicationId?: number; note?: string }; res: Result };
+  queueWaiting: { req: { runId: string; reason: import('./application-queue').QueueWaitReason }; res: Result };
+  queueSubmitIntent: { req: { runId: string }; res: Result };
+  submissionIntent: { req: { runId: string }; res: Result };
+  submissionContext: { req: {}; res: Result<{ runId?: string }> };
+  submissionConfirmed: { req: { runId: string }; res: Result };
+  submissionBlocked: { req: { runId: string }; res: Result };
+  queueSubmissionContext: { req: {}; res: Result<{ runId?: string }> };
+  queueSubmissionConfirmed: { req: { runId: string }; res: Result };
   getQueue: { req: {}; res: Result<{ queue: (import('./application-queue').QueueState & { presetName: string; resumeName?: string }) | null }> };
-  startQueue: { req: { urls: string[]; batchSize: number; presetId?: string }; res: Result };
-  controlQueue: { req: { action: 'pause' | 'resume' | 'stop' | 'size'; batchSize?: number }; res: Result };
-  queueAction: { req: { token: string; itemId: string; action: 'open' | 'retry' | 'submitted' | 'skip' }; res: Result };
+  startQueue: { req: { urls: string[]; batchSize: number; presetId?: string; mode?: 'batch' | 'continuous'; autoDetectSubmission?: boolean; resumeApplicationIds?: number[] }; res: Result };
+  addQueueLinks: { req: { token: string; urls: string[]; resumeApplicationIds?: number[] }; res: Result<{ added: number; excluded: number }> };
+  controlQueue: { req: { token: string; action: 'pause' | 'resume' | 'stop' | 'size'; batchSize?: number }; res: Result };
+  queueAction: { req: { token: string; itemId: string; action: 'open' | 'retry' | 'review' | 'submitted' | 'skip' }; res: Result };
   // From extension pages
   /** Opens a job link and fills it. Links outside the known job sites need the all-sites permission first. */
   startFill: {
@@ -107,6 +117,7 @@ export interface BackgroundMessages {
   getRememberedMappings: { req: { questions: string[] }; res: Result<{ mappings: RememberedMapping[] }> };
   matchSavedAnswers: { req: { fields: SavedField[]; runId?: string }; res: Result<{ matches: { mapping: RememberedMapping | null; suggestionId?: number; reason: string }[] }> };
   capturePageAnswer: { req: { applicationId: number; token: string; suggestionId?: number }; res: Result<{ capture: CapturedAnswer; suggestion?: RememberedMapping }> };
+  showApplicationField: { req: { applicationId: number; token: string }; res: Result };
   capturePageAnswers: { req: { applicationId: number; tokens: string[] }; res: Result<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }> };
   savePageAnswers: { req: { applicationId: number; entries: { token: string; captureId: string; mapping?: MappingDraft; profile?: import('./profile-learning').ProfileConfirmation }[] }; res: Result<{ count: number; profileCount: number; note: string }> };
   applySavedAnswer: { req: { applicationId: number; token: string; captureId: string; mappingId: number }; res: Result<{ note: string }> };
@@ -114,6 +125,8 @@ export interface BackgroundMessages {
   saveRememberedMapping: { req: { mapping: MappingDraft; id?: number }; res: Result<{ id: number }> };
   removeRememberedMapping: { req: { id: number }; res: Result };
   markSubmitted: { req: { applicationId: number }; res: Result };
+  closeSubmittedTab: { req: { applicationId: number }; res: Result };
+  retrySheet: { req: { applicationId: number }; res: Result };
   /** Records an application that has nothing to autofill (e.g. a one-click apply) as submitted and adds it to the sheet. */
   /** Removes the application from the extension's list only; the Google Sheet is never touched. */
   deleteApplication: { req: { applicationId: number }; res: Result };
@@ -146,7 +159,9 @@ export function sendToBackground<K extends keyof BackgroundMessages>(
 }
 
 /** Messages handled by the content script. */
-export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: string } | { type: 'cancelQueue'; runId?: string; wait?: boolean } | { type: 'ping' } | { type: 'readPosting' } |
+export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: string } | { type: 'cancelQueue'; runId?: string; wait?: boolean } | { type: 'reviewNow'; runId: string } | { type: 'ping' } | { type: 'readPosting' } |
+  { type: 'checkSubmission' } |
+  { type: 'showField'; token: string; question: string; runId?: string } |
   { type: 'captureAnswer'; token: string; question: string } |
   { type: 'captureAnswers'; fields: { token: string; label: string }[] } |
   { type: 'validateCaptures'; entries: { token: string; captureId: string }[] } |

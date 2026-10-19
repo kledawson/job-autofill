@@ -36,11 +36,12 @@ import {
   timing,
   type FillOutcome,
 } from './fill';
-import { clearOutline, outline, type ReviewState } from './highlight';
+import { clearOutline, outline, revealField, type ReviewState } from './highlight';
+import { feedbackPriority, type FieldFeedback } from '../field-feedback';
 import { bestGpaOption, characterLimitFor } from './match';
-import { composedCompare, isSignInPage, scanFields, type ScannedField } from './scan';
+import { composedCompare, isHidden, isSignInPage, scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE } from './classify';
-import { pickLocationPreference, raceChoices, SEARCH_FIRST_RESULT_KEYS, TOP_OPTION_KEYS, valueFor } from './values';
+import { applicantLocationQueries, pickApplicantLocation, pickLocationPreference, raceChoices, valueFor } from './values';
 import { isPlaceholderOption } from './match';
 import { parseSelections, resolveRememberedMapping, type RememberedMapping, type SavedField, type SavedMatch, type ReviewField, type CapturedAnswer } from '../remembered-mappings';
 import { rememberedChoice } from '../saved-answer-preview';
@@ -68,6 +69,7 @@ export interface FillSummary {
   missingLabels: string[];
   missingQuestions: (string | null)[];
   reviewFields?: ReviewField[];
+  fieldFeedback?: FieldFeedback[];
   memoryQuestions?: string[];
   usedMappingIds?: number[];
   /** Why free responses were skipped, when they were. */
@@ -87,6 +89,8 @@ interface FieldRecord {
   suggestionId?: number;
   selectionLabels?: string[];
   selectionReason?: string;
+  /** Local read-back only; never sent to the worker or persisted. */
+  writtenValue?: string;
 }
 
 /** Questions whose answer is known to reveal a follow-up directly beneath them. */
@@ -131,6 +135,23 @@ export class FillSession {
 
   get info(): JobInfo {
     return this.jobInfo;
+  }
+  get knownDetails(): JobDetails { return this.details; }
+  showField(token: string, question: string) {
+    if (this.busy || this.stopped) throw new Error('Wait for autofill to finish before locating a field.');
+    const rec = [...this.records.values()].find(r => r.token === token);
+    const field = rec && this.relocate(rec);
+    if (!field || !labelMatches(field, question) || isHidden(field.el)) throw new Error('This field changed or is hidden. Click Fill this page to refresh the results.');
+    rec!.field = { ...field, label: rec!.field.label };
+    revealField(field.outlineTarget, field.el);
+  }
+  summary(): FillSummary { return this.verify(); }
+  /** Called only after the old writer has stopped; keep capture/edits live without more writes. */
+  enterReview(): FillSummary {
+    this.stopped = false;
+    this.collectFresh(true);
+    this.observe(false);
+    return this.verify();
   }
 
   /** Where the job is, whether it is remote, and its pay. Keeps what an earlier step found when a later page shows less. */
@@ -279,13 +300,41 @@ export class FillSession {
       await sleep(timing.settle);
       if (!(await this.processNew())) break;
     }
+    // Hydration/options can finish after the first pass. Retry only empty local facts;
+    // essays, uploads and user-entered values are never replayed here.
+    if (!this.stopped) {
+      const retry = [...this.records.values()].filter(rec =>
+        ['failed', 'nomatch'].includes(rec.outcome ?? '') &&
+        !['free_response', 'challenge', 'consent'].includes(rec.cls.kind) && !rec.ai && rec.field.kind !== 'file');
+      if (retry.length) {
+        await sleep(timing.settle);
+        const before = new Map(retry.map(rec => [rec, { el: rec.field.el, label: rec.field.label, kind: rec.field.kind, options: JSON.stringify(rec.field.options), saved: rec.saved?.id }]));
+        const current = new Map(scanFields(this.root()).map(field => [field.el, field]));
+        for (const rec of retry) {
+          const field = current.get(rec.field.el) ?? this.relocate(rec);
+          if (field && field.label === before.get(rec)!.label && field.kind === before.get(rec)!.kind) rec.field = field;
+        }
+        await this.applyRememberedMappings(retry);
+        for (const rec of retry) {
+          const field = rec.field.el.isConnected ? rec.field : this.relocate(rec);
+          if (this.stopped) break;
+          if (!field || fieldHasValue(field) || (!rec.saved && !['profile', 'saved_answer'].includes(rec.cls.kind))) continue;
+          const was = before.get(rec)!;
+          if (field.label !== was.label || field.kind !== was.kind) continue;
+          if (field.el === was.el && JSON.stringify(field.options) === was.options && rec.saved?.id === was.saved) continue;
+          rec.field = field;
+          await this.fillRecord(rec);
+          if (rec.outcome === 'filled') { rec.review = false; rec.selectionReason = undefined; }
+        }
+      }
+    }
     return this.verify();
   }
 
   /** Watches for conditional follow-up questions, user edits, and (multi-step forms) the next step. */
   observe(autofill = true) {
     // A multi-step form swaps its whole form between steps, so watch the page instead.
-    const root = (this.adapter.multiStep ? this.doc.body : this.root()) as Node;
+    const root = this.doc.body;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const rescan = () => {
       clearTimeout(timer);
@@ -293,8 +342,9 @@ export class FillSession {
       timer = setTimeout(async () => {
         if (this.stopped) return;
         if (this.busy) return rescan();
-        const added = autofill ? await this.processNew(true) : this.collectFresh(true).length;
-        if (added) this.deps.onProgress?.(this.verify());
+        if (autofill) await this.processNew(true);
+        else this.collectFresh(true);
+        this.deps.onProgress?.(this.verify());
       }, 700);
     };
     this.observer = new MutationObserver((mutations) => {
@@ -306,7 +356,14 @@ export class FillSession {
     this.observer.observe(root, { childList: true, subtree: true });
 
     let editTimer: ReturnType<typeof setTimeout> | undefined;
-    const onEdit = () => {
+    const onEdit = (event: Event) => {
+      // A real edit makes even an optional question teachable. This marks only
+      // the existing field token; reading an answer still requires explicit capture.
+      if (event.isTrusted && ['input', 'change'].includes(event.type) && event.target instanceof Node) {
+        const target = event.target;
+        const rec = [...this.records.values()].find(r => r.field.el === target || r.field.members.some(member => member.contains(target)));
+        if (rec && canRemember(rec)) rec.review = true;
+      }
       clearTimeout(editTimer);
       editTimer = setTimeout(() => {
         if (!this.busy) this.deps.onProgress?.(this.verify());
@@ -360,6 +417,14 @@ export class FillSession {
       // button) is a new element, but not a new question: leave it for the next explicit Fill.
       const sig = fieldSignature(field);
       if (watching && this.seen.has(sig)) {
+        const previous = [...this.records.values()].filter(r => !r.field.el.isConnected && fieldSignature(r.field) === sig);
+        if (previous.length === 1) {
+          const rec = previous[0]!;
+          this.records.delete(rec.field.el);
+          rec.field = field;
+          this.records.set(field.el, rec);
+          continue;
+        }
         this.records.set(field.el, { field, cls: { kind: 'unknown', askAi: false }, token: crypto.randomUUID() });
         continue;
       }
@@ -559,6 +624,11 @@ export class FillSession {
 
   /** Fills one field of the top-to-bottom pass, whatever kind of answer it takes. */
   private async fillRecord(rec: FieldRecord) {
+    await this.writeRecord(rec);
+    if (rec.outcome === 'filled' && rec.field.el.isConnected) rec.writtenValue = fieldValueSignature(rec.field);
+  }
+
+  private async writeRecord(rec: FieldRecord) {
     if (this.stopped) return;
     if (rec.saved?.target.kind === 'answers') {
       try {
@@ -628,7 +698,7 @@ export class FillSession {
       console.warn(`[Job Autofill] re-filling ${lost.length} dropdown(s) that went blank (round ${round + 1})`);
       for (const rec of lost) {
         rec.outcome = undefined;
-        await this.fillProfileField(rec);
+        await this.fillRecord(rec);
       }
       await sleep(timing.settle);
     }
@@ -646,7 +716,7 @@ export class FillSession {
       console.warn(`[Job Autofill] re-answering ${lost.length} Yes/No question(s) the page cleared (round ${round + 1})`);
       for (const rec of lost) {
         rec.outcome = undefined;
-        await this.fillProfileField(rec);
+        await this.fillRecord(rec);
       }
     }
   }
@@ -695,14 +765,11 @@ export class FillSession {
         const fresh = values.filter((v) => !taken.has(norm(v)));
         values.splice(0, values.length, ...fresh);
       }
-      const topOption = key !== undefined && TOP_OPTION_KEYS.has(key);
       const choice: ChoiceOpts = {
-        topOption,
         degree: key === 'degree',
         // "University of California" is not "University of California, Santa Cruz".
         strict: key !== undefined && STRICT_KEYS.has(key),
         remembered: savedAnswer !== undefined,
-        acceptFirstResult: key !== undefined && SEARCH_FIRST_RESULT_KEYS.has(key),
       };
       if (key === 'locationPreference') {
         // Ranked office choices: never repeat an earlier preference; see pickLocationPreference.
@@ -767,6 +834,11 @@ export class FillSession {
         if (remembered.pick) choice.pick = remembered.pick;
       }
       if (key === 'gpa' && values) choice.pick = options => bestGpaOption(values!, options);
+      if (key === 'location' || key === 'city' || key === 'cityState') {
+        choice.pick = options => pickApplicantLocation(options, profile, key === 'location' && !/\b(city|current)\b/i.test(field.label));
+        choice.search = true;
+        choice.queries = applicantLocationQueries(profile);
+      }
       const first = values?.[0];
       if (savedAnswer !== undefined && field.maxLength && savedAnswer.length > field.maxLength) {
         rec.outcome = 'nomatch';
@@ -798,7 +870,7 @@ export class FillSession {
             input.inputMode === 'numeric' ||
             /^dateSection/.test(input.getAttribute('data-automation-id') ?? '');
           const typed = numeric ? (values.find((v) => /^\d+$/.test(v)) ?? first.replace(/[^\d.]/g, '')) : first;
-          rec.outcome = isTypeahead ? await fillTypeahead(field, values) : fillText(field, typed);
+          rec.outcome = isTypeahead ? await fillTypeahead(field, values, choice) : fillText(field, typed);
           break;
         }
         case 'textarea':
@@ -899,6 +971,7 @@ export class FillSession {
     const missingLabels: string[] = [];
     const missingQuestions: (string | null)[] = [];
     const reviewFields: ReviewField[] = [];
+    const fieldFeedback: FieldFeedback[] = [];
     const memoryQuestions = new Set<string>();
     for (const [el, rec] of this.records) {
       if (!el.isConnected) {
@@ -913,10 +986,20 @@ export class FillSession {
       const selected = mode === 'multiple' ? selectedValues(field) : [];
       // Workday keeps its upload box empty once a file is attached, so a file the page already lists counts as present.
       const has = mode === 'multiple' ? selected.length > 0 : fieldHasValue(field) || (weFilled && ((field.kind === 'yesno' && !yesNoExposesState(field)) || field.kind === 'file')) || (field.kind === 'file' && uploadedAlready(field.el as HTMLInputElement));
+      // Only read back values this run wrote. Existing page answers need presence
+      // feedback, not a value snapshot or capture.
+      const currentValue = weFilled ? fieldValueSignature(field) : undefined;
+      const changed = weFilled && rec.writtenValue !== undefined && currentValue !== rec.writtenValue;
       const incomplete = rec.saved?.target.kind === 'answers' && rec.outcome !== 'already' &&
-        (rec.outcome !== 'filled' || !sameSelections(selected, rec.selectionLabels ?? []));
+        !changed && (rec.outcome !== 'filled' || !sameSelections(selected, rec.selectionLabels ?? []));
+      const geographicChoice = rec.cls.kind === 'profile' && ['location', 'city', 'cityState'].includes(rec.cls.key) &&
+        ['combobox', 'select', 'listbox', 'prompt'].includes(field.kind);
+      const locationMismatch = geographicChoice && !changed && (weFilled || rec.outcome === 'failed') && has &&
+        pickApplicantLocation([displayedValue(field)], this.deps.context.profile,
+          rec.cls.kind === 'profile' && rec.cls.key === 'location' && !/\b(city|current)\b/i.test(field.label)) !== 0;
       let state: ReviewState | null = null;
-      if (incomplete) state = 'missing';
+      if (incomplete || locationMismatch) state = 'missing';
+      else if (changed && has) state = 'entered';
       else if (rec.ai && has) state = 'ai';
       else if (weFilled && has) state = 'filled';
       else if (!has && (field.required || rec.flag)) state = 'missing';
@@ -928,14 +1011,48 @@ export class FillSession {
         missingQuestions.push(canRemember(rec) ? field.label : null);
         if (canRemember(rec)) rec.review = true;
       }
-      if (rec.review && canRemember(rec)) reviewFields.push({ token: rec.token!, label: field.label, answered: has, selectionMode: mode, ...(mode === 'multiple' ? { selectedCount: selected.length } : {}), ...(rec.selectionReason ? { reason: rec.selectionReason } : {}), ...(rec.suggestionId ? { suggestionId: rec.suggestionId } : {}) });
+      const reviewReason = has && !incomplete && !locationMismatch && (changed || !weFilled) ? undefined : geographicChoice && (locationMismatch || !has)
+        ? 'No unambiguous location matched your saved city, state and country. Choose the correct location on the page.' : rec.selectionReason;
+      if (changed && has && canRemember(rec)) rec.review = true;
+      if (rec.review && canRemember(rec)) reviewFields.push({ token: rec.token!, label: field.label, answered: has, selectionMode: mode, ...(mode === 'multiple' ? { selectedCount: selected.length } : {}), ...(reviewReason ? { reason: reviewReason } : {}), ...(rec.suggestionId ? { suggestionId: rec.suggestionId } : {}) });
+
+      if (field.label.trim() && field.label.length <= 700) {
+        const readable = currentValue !== undefined;
+        const status: FieldFeedback['status'] = state === 'missing' ? 'missing' : !has ? 'optional' :
+          changed || !weFilled ? 'entered' : rec.ai || !readable || rec.writtenValue === undefined ? 'review' : 'verified';
+        const source: FieldFeedback['source'] = !has ? 'none' : status === 'entered' ? 'page' : rec.ai ? 'ai' :
+          rec.saved ? 'memory' : rec.cls.kind === 'saved_answer' ? 'preset' : rec.cls.kind === 'profile' ? 'profile' : 'none';
+        const reason = reviewReason || (status === 'missing' || status === 'optional' ?
+          field.kind === 'file' ? 'Upload this document on the application page.' : rec.cls.kind === 'consent' ? 'Read and confirm this agreement on the website.' :
+          rec.suggestionId ? 'A similar Memory needs your confirmation before reuse.' :
+          rec.cls.kind === 'profile' ? 'A saved Profile answer or a matching option was unavailable. Answer on the page, then confirm where to save it.' :
+          'Answer this question on the page. Reusable answers can be confirmed and saved here.' :
+          status === 'entered' ? 'Your page answer was preserved. It has not been verified against a saved answer.' :
+          status === 'review' ? rec.ai ? 'Review this AI draft or interpretation before submitting.' : 'The widget does not expose enough information to verify the complete answer. Check it on the website.' :
+          source === 'memory' ? 'An approved Memory was applied and its current selection was verified.' : source === 'preset' ? 'Your prepared preset response was applied and read back.' :
+          'Your saved Profile answer was applied and read back. Check that the saved fact is current.');
+        fieldFeedback.push({ token: rec.token!, label: field.label, required: field.required, status, source, reason });
+        if (status === 'review') state = rec.ai ? 'ai' : 'review';
+        else if (status === 'entered') state = 'entered';
+      }
 
       if (state) outline(field.outlineTarget, state);
       else if (field.outlineTarget.hasAttribute('data-jaf-state')) clearOutline(field.outlineTarget);
     }
-    return { filledCount, aiAnswers, missingLabels, missingQuestions, reviewFields: reviewFields.slice(0, 200), memoryQuestions: [...memoryQuestions].slice(0, 200),
-      usedMappingIds: [...new Set([...this.records.values()].filter(r => r.saved && r.outcome === 'filled' && fieldHasValue(r.field) && (r.saved.target.kind !== 'answers' || sameSelections(selectedValues(r.field), r.selectionLabels ?? []))).map(r => r.saved!.id))].slice(0, 200), aiNote: this.aiNote };
+    return { filledCount, aiAnswers, missingLabels, missingQuestions, reviewFields: reviewFields.slice(0, 200), fieldFeedback: fieldFeedback.sort((a, b) => feedbackPriority(a) - feedbackPriority(b)).slice(0, 200), memoryQuestions: [...memoryQuestions].slice(0, 200),
+      usedMappingIds: [...new Set([...this.records.values()].filter(r => r.saved && r.outcome === 'filled' && r.writtenValue !== undefined && fieldValueSignature(r.field) === r.writtenValue && fieldHasValue(r.field) && (r.saved.target.kind !== 'answers' || sameSelections(selectedValues(r.field), r.selectionLabels ?? []))).map(r => r.saved!.id))].slice(0, 200), aiNote: this.aiNote };
   }
+}
+
+function fieldValueSignature(field: ScannedField): string | undefined {
+  if (field.kind === 'file') {
+    const files = (field.el as HTMLInputElement).files;
+    return files?.length ? JSON.stringify([...files].map(f => [f.name, f.size, f.lastModified])) : undefined;
+  }
+  if (field.kind === 'checkbox' || field.kind === 'checkboxGroup' || field.kind === 'radio') return JSON.stringify(field.members.map(m => (m as HTMLInputElement).checked));
+  if (field.kind === 'yesno' && !yesNoExposesState(field)) return undefined;
+  const values = selectedValues(field);
+  return values.length ? JSON.stringify([...values].sort()) : undefined;
 }
 
 /** The scanned label still names the question, or is just the answer the page now shows (Workday dropdowns relabel to "No"). */

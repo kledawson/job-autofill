@@ -1,10 +1,153 @@
 # Proposal: a cohesive application workflow
 
-**Status:** Proposal for owner and collaborator review. Implementation requires approval of this plan.
+**Status:** Approved by the owner for incremental implementation on `codex/application-queue` on October 17, 2026. Review each checkpoint before proceeding to the next. This document includes work that is still planned.
 
-**Updated:** October 16, 2026
+**Updated:** October 19, 2026. Publication review started at 13:21 PDT (UTC−07:00).
 
 **Purpose:** Align contributors on how Job Autofill should behave when filling one application or preparing a queue of applications. This document describes intended behavior and acceptance criteria; it is not a claim that these features have shipped.
+
+## Implementation checkpoints
+
+Deliver these increments on the feature branch, with actual validation results and user testing instructions for each. Keep `main` unchanged until a separate merge request.
+
+| Increment | Scope | User checkpoint |
+| --- | --- | --- |
+| 1. Shared workflow presentation and permanent Fill | Reuse persisted application/queue state for consistent actions, pin Fill above optional sections, compact the summary, reveal missing answers, allow independent manual filling during queue work. | Fill remains available after scrolling/reopening; manually fill another job while the queue is busy; existing Memories still capture. |
+| 2. Login and resume | Explicit login/loading/blocked states, safe navigation and resume, bounded waiting. | Sign in on the website and resume without losing the job or affecting other applications. |
+| 3. Review and learning | Clear field priorities, Show field, simple confirmed Profile/Memory destinations. | Complete gaps, save one or all answers, then verify appropriate future reuse. |
+| 4. Live queue controls | Visible capacity changes, adding links, status-aware duplicates, pause/retry/abandon. | Increase three to five, decrease safely, add jobs, and recover a blocked job. |
+| 5. Submission and tracking | Shared supported confirmation, manual fallback, owned-tab handoff, independent Sheets retry. | Successful submission advances once; validation errors never close or advance. |
+| 6. Recovery and release | Restart/cancellation races, accessibility, measured overhead, benchmark and packaging. | Resume after interruption and reproduce the documented supported workflow. |
+
+Increment 1 begins with a shared **derived view** of existing persisted state. It does not yet replace the background transition controller, add login detection, or expand automatic submission support. Those changes belong to later increments.
+
+**Current checkpoint:** Increments 1–5 are implemented in this feature-branch snapshot. Reload the
+rebuilt extension and refresh existing application tabs. Recovery, performance measurement and
+release packaging remain checkpoint 6; the broader proposal below still includes planned work.
+This snapshot is for collaborator review on `codex/application-queue`, not a release on `main`.
+
+### Dated implementation record
+
+Dates below are the documented checkpoint dates in America/Los_Angeles. Exact coding times were
+not recorded; the publication-review timestamp above is separate from those implementation dates.
+
+| Date | Completed checkpoint | Main affected areas |
+| --- | --- | --- |
+| 2026-10-17 | 1. Permanent Fill, shared status/actions, compact summary and location corrections | Sidebar, workflow view, geographic option matching and read-back verification |
+| 2026-10-17 | 2. Login and safe resume | Form readiness, content-script watchers, bounded queue waiting and attempt ownership |
+| 2026-10-17 | 3. Review and learning | Field feedback, Show field, user-edit preservation and Profile/Memory confirmation |
+| 2026-10-18 | 4. Live queue controls | Capacity, add-links intake, explicit resume/retry, abandonment and stale-control guards |
+| 2026-10-19 | 5. Submission and tracking | Supported confirmation, manual fallback, owned-tab handoff and independent Sheets recovery |
+
+Continue with checkpoint 6 after reviewing this snapshot. Passing the controlled checks below does
+not establish that every employer form is supported or that performance targets have been measured.
+
+Individual and queued fills now share supported Greenhouse, Lever and Ashby confirmation checks.
+Submit on the website yourself: a click alone never counts. Validation failures show **Submission
+needs attention** and keep the tab open. Individual success stays open with **Close application tab**;
+queue success records once and closes only its owned tab when automatic confirmation is enabled.
+Background completion preserves focus; foreground completion hands off to another prepared job.
+Unfamiliar result/navigation keeps **I submitted this application** (or **Submitted — close tab**)
+available for explicit confirmation. Save Memories before submitting.
+
+Sheets writes follow the local outcome independently, are serialized across applications, and recover
+pending intent after a worker interruption. A failed write stays Submitted with **Retry sheet sync**
+in Applications history. Existing sheets require a Job Posting URL column to recognize retry identity.
+A lost successful-write response is checked against that URL before another row is added. Sheets is
+optional: no connection does not show a submission warning. A paused queue becomes Complete when its
+last confirmed/abandoned tab closes and nothing is waiting.
+
+Validation for increment 5 (October 19): repository checks, type checking, production build and all
+481 unit tests passed. The final fresh Chromium suite completed successfully: **58 passed, 1 skipped**
+in 11.1 minutes. The skip is the missing-OAuth setup case, which does not apply to this OAuth-configured
+build. An earlier run exposed an incorrectly renamed Track without autofill test selector; the selector
+was restored before the clean full rerun. The final build covers the earlier checkpoints as well.
+
+Five new browser cases cover standalone supported confirmations and source metadata, validation and
+unfamiliar-result fallback, the active job remaining accessible beyond 50 history entries, forged/stale
+confirmation rejection, mixed-platform queue handoff without background focus stealing, confirmation
+while paused, lost Sheets responses, independent retries, concurrent row selection and duplicate clicks.
+New unit cases cover evidence/route/intent bounds, idempotent dates/sources, paused completion, lost-write
+retry and rejecting sheets without a URL identity column. Synthetic screenshots are in
+`local-data/workflow-increment-5/`, outside version control. Controlled fictional forms and simulated
+Google responses exercise these paths; live employer submissions and personal Google-account OAuth are
+outside this automated validation.
+
+During an active continuous queue, **Open application limit** is always visible. Increase three to
+five to open up to two more waiting jobs immediately. Reducing the limit keeps existing tabs and shows
+why replacements wait. Sign-in, blocked and closing tabs occupy slots; closed blocked jobs keep a
+Retry action without consuming capacity. **Add job links** appends jobs to the same pinned preset,
+including while paused. The total cap is 100 jobs, including finished entries. **Pause queue** holds
+new openings, and **Queue options → Stop queue** keeps opened pages.
+
+The link preview distinguishes new jobs, current queue entries, unfinished history, abandoned history
+and submitted history. Resume/retry requires an explicit checkbox and opens a new owned tab using
+saved Profile/Memories; it does not transfer unsaved page answers. Submitted history stays excluded.
+**More → Abandon — close tab** stops a stalled writer, records Abandoned and closes only its owned
+tab before releasing space. A failed closure remains visible for retry. Queue controls bind to the
+current token, and concurrent additions deduplicate in the same storage transaction.
+
+Validation for increment 4 (October 18): repository checks, type checking, production build and all
+474 unit tests passed. The broad Chromium run had 52 passes, one configuration-specific OAuth skip,
+and a failure in the abandonment test's earlier held-network fixture. After correcting that fixture,
+all three new queue cases passed against the final build. Thus all 53 applicable browser cases passed
+across the regression and focused runs; a single fresh full-suite green run is not claimed here.
+New cases cover live 3→5→2 limits, paused additions, worker restart, concurrent duplicate additions,
+stale tokens, the 100-job cap, closed-tab capacity, explicit history resume/retry, submitted exclusions,
+and abandonment with a delayed AI response and an unrelated tab. Synthetic screenshots live under
+`local-data/workflow-increment-4/`, outside version control. Employer-specific pages and live Google
+account/Sheet writes were not exercised by these controlled browser fixtures.
+
+After filling, open **Review & remember**. Required gaps and failed writes come first, then amber
+review items and optional gaps. Green **Verified** indicates a saved answer was applied and read back;
+neutral **Entered by you** preserves page answers and manual edits. Expand **Verified & entered
+answers** to inspect completed controls. These labels reflect evidence, not probability scores.
+
+Use **Show field** to scroll once to the live question. Answer on the website, then **Save this answer**
+or **Save all answered questions**. The confirmation moves into view and names **Profile** or **Memory**
+as its destination. Profile replacement still needs explicit confirmation, and contextual Memories
+retain their reuse scope. Changes to verified answers lose their green status; partial writer failures
+remain incomplete. Tests also cover wrapping labels that previously included dropdown options, textarea
+answers or unrelated preceding headings. Autofill focus avoids scrolling the job page.
+
+Validation for increment 3 (October 17): all 469 unit tests, repository checks, type checking and the
+production build passed. The full Chromium suite completed with 50 passed and one configuration-specific
+skip: the missing-OAuth setup case does not apply to this OAuth-configured build. Coverage spans the
+earlier workflow increments, presets, Memories, backup/restore, simulated Sheets connection, location
+matching, queue recovery and submission safeguards. New review cases cover priorities, one-action
+field location, stale navigation, manual edits, save destinations, replacement confirmation and AI review.
+The final panel refinements were rechecked with both focused review cases after rebuilding.
+Synthetic evidence is kept under `local-data/workflow-increment-3/`, outside version control.
+
+Try a queue containing one application requiring sign-in and another with an accessible form. The
+first should show **Sign in required → Open to sign in** while the second fills. Complete sign-in
+on the website and return to the original job in the same queue tab: its form should fill automatically.
+Account creation and verification remain manual too. Stop/Skip cancel waiting. A fixed 30-minute
+deadline offers retry instead of leaving the queue stuck. Pause prevents new jobs from opening;
+already opened jobs may finish signing in and filling.
+
+For an individual application, click **Fill this page**. If sign-in is needed, complete it yourself,
+then click **Fill this page** on the application. Same-document login transitions show **Application
+ready**. External login popups and unsupported redirects require returning to the original tab/job;
+the extension never signs in, fills credentials, or transfers this attempt to another job.
+
+Validation for increment 2 (October 17): repository checks, type checking, production build, all 461
+unit tests, and 22 focused Chromium extension tests passed (15 existing queue/review regressions and
+7 login/resume tests). New browser cases cover independent filling while another job waits, dynamic
+and full-navigation resume, worker recovery, an unrelated-job redirect, manual standalone login,
+Stop/Skip, account creation, verification and persisted wait expiry. Synthetic screenshot:
+`local-data/workflow-increment-2/login-required.png` (ignored local evidence). Employer-specific login
+pages and external identity-provider integrations are not claimed universally supported.
+
+Validation for increment 1 (October 17): repository checks, type checking, production build,
+435 unit tests, and 12 focused Chromium extension tests passed. Browser coverage includes a separate
+manual fill during a stalled queue AI request, confirmed Memory reuse, cancellation, restart recovery,
+and the pinned Fill action during scrolling, legacy collapse preferences, and section reordering.
+Tests use fictional applications and do not establish universal coverage of employer websites.
+
+Checkpoint 1 follow-up: a reported wrong-city selection is addressed with geographic matching and
+committed-value verification. Location dropdowns no longer guess the first search result. This is a
+correctness fix within checkpoint 1, separate from the subsequent login and sidebar redesigns.
 
 ## Contents
 
@@ -403,6 +546,6 @@ Recommended defaults for owner and collaborator approval:
 7. Keep Sheets synchronization independent from local completion and queue progress.
 8. Deliver the work in the phases above, validating each phase before expanding scope.
 
-Agree on these defaults, any changed priorities, and module ownership before implementing this restructuring. Publishing this proposal is for communication and review, not approval of the implementation itself.
+The owner has authorized incremental implementation. Use the checkpoints above to collect feedback, agree on module ownership, and adjust later increments before proceeding. Publication of this document alone was not implementation approval; the subsequent owner request supplied that approval.
 
 Related project guidance: [shared instructions](../AGENTS.md), [architecture](ARCHITECTURE.md), [contracts](CONTRACTS.md), [roadmap](ROADMAP.md), and [collaboration](COLLABORATION.md).

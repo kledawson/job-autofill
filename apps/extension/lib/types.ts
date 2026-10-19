@@ -202,6 +202,11 @@ export interface Application {
   tabId?: number;
   filledAt: number;
   submittedAt?: number;
+  /** Additive submission metadata; legacy records may have no evidence source. */
+  submitIntentAt?: number;
+  submissionIssue?: 'validation';
+  submissionSource?: 'user' | import('./submission-confirmation').SubmissionEvidence;
+  sheetSyncPending?: boolean;
   aiAnswers: number;
   filledCount: number;
   missingCount: number;
@@ -210,6 +215,7 @@ export interface Application {
   missingQuestions?: (string | null)[];
   /** Selected-field identities, never applicant answers. Stale tokens are rejected after navigation. */
   reviewFields?: import('./remembered-mappings').ReviewField[];
+  fieldFeedback?: import('./field-feedback').FieldFeedback[];
   /** Current eligible questions, including completed fields; never contains page answers. */
   memoryQuestions?: string[];
   /** "City, State" read from the posting; blank when the page doesn't say. */

@@ -44,4 +44,23 @@ describe('sheet tab targeting and request flow', () => {
     fetchMock.mockResolvedValueOnce(reply({ error: { message: 'Permission denied' } }, 403));
     await expect(openSheet('fictional')).rejects.toThrow('Permission denied');
   });
+  it('recovers a committed write whose response was lost without adding another row', async () => {
+    let rows: string[][] = [], writes = 0;
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
+      if (init.method === 'POST') {
+        writes++; rows = [[app.company, app.role, app.url]];
+        throw new Error('Connection interrupted after write');
+      }
+      return reply(!url.includes('/values/') ? metadata : url.includes('A1:AZ10') ? { values: [['Company', 'Position', 'Posting URL']] } : { values: rows });
+    });
+    await expect(appendApplication('fictional', app, 42)).rejects.toThrow('Connection interrupted');
+    expect(await appendApplication('fictional', app, 42)).toBe(2);
+    expect(writes).toBe(1);
+  });
+  it('refuses unsafe automatic writes/retries when the sheet has no job URL column', async () => {
+    fetchMock.mockImplementation(async () => reply({ values: [['Company', 'Position']], ...metadata }));
+    await expect(appendApplication('fictional', app, 42)).rejects.toThrow('Job Posting URL');
+    await expect(testSheetConnection('fictional', 42)).rejects.toThrow('Job Posting URL');
+    expect(fetchMock.mock.calls.every(call => call[1].method === 'GET')).toBe(true);
+  });
 });

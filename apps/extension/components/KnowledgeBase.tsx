@@ -138,6 +138,7 @@ export function MappingEditor({ initial, id, capture, context, onSaved, onCancel
         <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">{capture ? 'Confirm your answer' : id ? 'Editing memory' : 'New memory'}</p>
         <p className="mt-1 font-medium text-slate-900 break-words">{capture?.label ?? (question || 'New question')}</p>
         {capture && <p className="mt-1 text-xs text-slate-600">{capture.value || capture.values?.length ? 'Read from the field you selected. Save only if this is reusable.' : 'Answer on the page and capture again, or choose an answer below.'}</p>}
+        {capture && <p className="mt-2 rounded-lg bg-white p-2 text-xs text-indigo-800"><strong>Destination: Memory.</strong> Confirm the answer and where to reuse it below.</p>}
         {capture && id && question !== capture.label && <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-slate-700"><p className="font-semibold">Compare with your saved question:</p><p className="mt-1">{question}</p><p className="mt-1">Save only if both questions need the same answer. Saving approves the new wording for future use.</p></div>}
       </div>
       {!capture && id === undefined && <Field label="Question" required><Textarea value={question} maxLength={700} required onChange={e => setQuestion(e.target.value)} /></Field>}

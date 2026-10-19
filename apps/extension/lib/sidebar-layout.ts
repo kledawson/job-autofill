@@ -33,5 +33,6 @@ export function readSidebarOrder(value: unknown): SidebarId[] {
     const following = SIDEBAR_ORDER.slice(SIDEBAR_ORDER.indexOf(id) + 1).find(next => result.includes(next));
     result.splice(following ? result.indexOf(following) : result.length, 0, id);
   }
-  return result;
+  // Fill is fixed above the sortable layout, including for older saved orders.
+  return ['fill', ...result.filter(id => id !== 'fill')];
 }

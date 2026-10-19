@@ -137,6 +137,16 @@ export function cleanLabel(raw: string): string {
 }
 
 function textOf(el: Element | null | undefined): string {
+  // A wrapping label can contain a select/textarea. Its choices or answer are not
+  // part of the question; including them breaks Memory reuse and classification.
+  if (el?.tagName === 'LABEL' && el.querySelector('select, textarea, [role="listbox"]')) {
+    const labelText = (node: Node): string => {
+      if (node.nodeType === 3) return node.textContent ?? '';
+      if (node instanceof Element && node.matches('input, select, textarea, [role="listbox"], [role="option"]')) return '';
+      return Array.from(node.childNodes).map(labelText).join(' ');
+    };
+    return cleanLabel(labelText(el));
+  }
   return el ? cleanLabel((el as HTMLElement).innerText ?? el.textContent ?? '') : '';
 }
 
@@ -146,7 +156,7 @@ const CHROME = 'header, nav, [role="banner"], [role="navigation"]';
 /** Workday date boxes sit under a drawn "MM/YYYY" display, tiny or marked aria-hidden, but they are the real fields. */
 const isDatePart = (el: HTMLElement) => /^dateSection(Month|Day|Year)/.test(el.getAttribute('data-automation-id') ?? '');
 
-function isHidden(el: HTMLElement): boolean {
+export function isHidden(el: HTMLElement): boolean {
   if (composedClosest(el, `[${OWN_ATTR}]`)) return true;
   if (composedClosest(el, CHROME)) return true;
   if (isDatePart(el)) return isDisplayNone(el);
@@ -337,6 +347,14 @@ export function findLabel(el: HTMLElement, group: HTMLElement[] = [el]): { text:
     }
   }
 
+  // A real wrapping label is stronger evidence than nearby headings or prior labels.
+  const wrap = el.closest('label');
+  if (wrap && !isGroup && wrap.querySelectorAll(CONTROLS).length === 1) {
+    const caption = Array.from(wrap.querySelectorAll(LABELISH)).find(node => !node.querySelector(CONTROLS));
+    const t = textOf(caption ?? wrap);
+    if (t) return { text: t, labelEl: wrap };
+  }
+
   const preceding = precedingLabel(el, group);
   if (preceding.text) {
     // One label over several boxes (JazzHR: "Address" over street, City, State, Postal): a label that names a
@@ -347,13 +365,6 @@ export function findLabel(el: HTMLElement, group: HTMLElement[] = [el]): { text:
       return { text: cleanLabel(placeholder), labelEl: null };
     }
     return preceding;
-  }
-
-  // Lever wraps the whole question in a <label>: use its text minus the control's own text.
-  const wrap = el.closest('label');
-  if (wrap && !isGroup) {
-    const t = textOf(wrap);
-    if (t) return { text: t, labelEl: wrap };
   }
 
   const placeholder = el.getAttribute('placeholder');
@@ -491,6 +502,7 @@ export function scanFields(root: ParentNode): ScannedField[] {
     const tag = el.tagName;
     const type = (el.getAttribute('type') ?? '').toLowerCase();
     const name = el.getAttribute('name') ?? '';
+    if (/^(?:one-time-code|current-password|new-password)$/i.test(el.getAttribute('autocomplete') ?? '')) continue;
     if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'reset' || type === 'image') continue;
     if (/captcha/i.test(name) || /captcha/i.test(el.id)) continue;
     // The search box inside a dropdown's menu (a phone country list) is part of that dropdown, not a question.
@@ -598,12 +610,29 @@ export function promptContainer(el: HTMLElement): HTMLElement {
 }
 
 /**
- * A sign-in or create-account page: a password box with only a few other fields. Filling stops there; the
- * person signs in themselves, and filling continues on the form that appears next.
+ * Authentication is identified by visible controls and their purpose, regardless of field count.
+ * A form's heading may sit just outside the form element.
  */
-export function isSignInPage(root: ParentNode, fields: ScannedField[] = scanFields(root)): boolean {
-  const passwords = deepAll(root, 'input[type="password"]').filter((p) => !isHidden(p));
-  return passwords.length > 0 && fields.filter((f) => f.kind !== 'checkbox' && f.kind !== 'yesno').length <= 3;
+export function authenticationStep(root: ParentNode): 'login' | 'account' | 'verification' | null {
+  const visible = (selector: string) => deepAll<HTMLElement>(root, selector).filter(el => !isHidden(el));
+  const headingRoot = root instanceof HTMLFormElement ? root.parentElement ?? root : root;
+  const headings = deepAll<HTMLElement>(headingRoot, 'h1, h2, h3, [role="heading"], legend').filter(el => !isHidden(el)).map(el => el.textContent ?? '').join(' ');
+  if (visible('input[autocomplete="one-time-code"]').length) return 'verification';
+  if (visible('input[type="password"]').length) {
+    return visible('input[autocomplete="new-password"]').length || /create (?:an? )?account|sign up|register/i.test(headings) ? 'account' : 'login';
+  }
+  // Headings plus an authentication control: job descriptions and ordinary Sign in links
+  // are not enough to block a real application. No values are read here.
+  const controls = visible('button, input[type="submit"], [role="button"]').map(el => el.textContent || el.getAttribute('value') || '').join(' ');
+  if (/verification code|verify (?:your )?(?:email|identity)|two.factor|security code/i.test(headings) && visible('input').length) return 'verification';
+  const email = visible('input[type="email"], input[autocomplete="username"], input[autocomplete="email"]').length;
+  if (email && /sign in|log in|login/i.test(headings) && /sign in|log in|continue|next/i.test(controls)) return 'login';
+  if (email && /create (?:an? )?account|sign up|register/i.test(headings) && /create|sign up|register|continue/i.test(controls)) return 'account';
+  return null;
+}
+
+export function isSignInPage(root: ParentNode, _fields?: ScannedField[]): boolean {
+  return authenticationStep(root) !== null;
 }
 
 /** The radios of one question when they share no name or fieldset: those in the nearest container with several. */

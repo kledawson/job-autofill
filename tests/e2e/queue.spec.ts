@@ -8,7 +8,13 @@ import { join, resolve } from 'node:path';
 declare const chrome: any;
 let context: BrowserContext, server: Server, panel: Page, extensionId: string;
 let userDataDir: string, launchOptions: Parameters<typeof chromium.launchPersistentContext>[1];
-const request = (type: string, data: object = {}) => panel.evaluate(payload => chrome.runtime.sendMessage(payload), { type, ...data });
+const request = async (type: string, data: object = {}) => {
+  if (type === 'controlQueue' && !('token' in data)) {
+    const result = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'getQueue' }));
+    data = { ...data, token: result.queue?.token };
+  }
+  return panel.evaluate(payload => chrome.runtime.sendMessage(payload), { type, ...data });
+};
 const url = (n: string | number) => 'https://jobs.lever.co/contoso/queue-' + n;
 const rows = (table: string) => panel.evaluate(table => new Promise<any[]>((resolve, reject) => {
   const req = indexedDB.open('job-autofill'); req.onerror = () => reject(req.error); req.onsuccess = () => {
@@ -23,7 +29,8 @@ async function shot(name: string) {
   if (!process.env.SCREENSHOTS) return;
   await panel.setViewportSize({width:400,height:960});
   mkdirSync(process.env.SCREENSHOTS, { recursive: true });
-  await panel.screenshot({ path: join(process.env.SCREENSHOTS, name + '.png'), fullPage: true });
+  await panel.evaluate(() => window.scrollTo(0, 0));
+  await panel.screenshot({ path: join(process.env.SCREENSHOTS, name + '.png'), fullPage: false });
 }
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
@@ -64,6 +71,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await context?.close(); await new Promise<void>(r => server?.close(()=>r())); });
 
 test('bounded review batches pin role/documents, preserve edits and survive worker restarts', async () => {
+  await panel.getByRole('checkbox', { name: 'Open the next job when an application finishes', exact: true }).uncheck();
   await panel.getByLabel('Job links', { exact:true }).fill([url(1),url(2),url(3),url(4),url(5),url(1)+'/apply?utm_source=x','https://linkedin.com/jobs/42'].join('\n'));
   const region=panel.getByRole('region',{name:'Application queue'});
   await expect(region).toContainText('5 new applications ready'); await expect(region).toContainText('1 duplicate link removed');
@@ -87,7 +95,7 @@ test('bounded review batches pin role/documents, preserve edits and survive work
   await expect(card.getByRole('button',{name:'Fill this step',exact:true})).toBeHidden();
   await card.getByRole('button',{name:'More',exact:false}).click();
   await expect(card.getByRole('button',{name:'Fill this step',exact:true})).toBeVisible();
-  await expect(card.getByRole('button',{name:'Skip — close tab',exact:true})).toBeVisible();
+  await expect(card.getByRole('button',{name:'Abandon — close tab',exact:true})).toBeVisible();
   await card.getByRole('button',{name:'Less',exact:false}).click();
   await shot('queue-batch-review');
   await form(2).evaluate(()=>{for(let i=0;i<30;i++)document.querySelector('form')!.insertAdjacentHTML('beforeend','<label for="extra-'+i+'">Fictional extra review field '+i+'</label><input id="extra-'+i+'" required>');});
@@ -96,10 +104,10 @@ test('bounded review batches pin role/documents, preserve edits and survive work
   await panel.getByRole('button',{name:/^Review & remember \(/}).click();
   const remembered=panel.getByRole('list',{name:'Questions to review',exact:true}).getByRole('listitem').filter({hasText:'Fictional project reference'});
   await expect(remembered.getByRole('button',{name:'Save this answer',exact:true})).toBeVisible();
-  await expect(panel.locator('#sidebar-fill-body').getByRole('list',{name:'Questions to review',exact:true})).toHaveCount(0);
+  await expect(panel.locator('#sidebar-fill').getByRole('list',{name:'Questions to review',exact:true})).toHaveCount(0);
   await expect.poll(()=>panel.getByRole('list',{name:'Questions to review',exact:true}).getByRole('listitem').count()).toBeGreaterThan(25);
   const reviewList=panel.getByRole('list',{name:'Questions to review',exact:true});
-  expect((await panel.locator('#sidebar-fill-body').boundingBox())!.height).toBeLessThan(400);
+  expect((await panel.locator('#sidebar-fill').boundingBox())!.height).toBeLessThan(400);
   expect((await reviewList.boundingBox())!.height).toBeLessThanOrEqual(322);
   expect(await reviewList.evaluate(element=>element.scrollHeight>element.clientHeight)).toBe(true);
   await shot('sidebar-review-separated');
@@ -154,7 +162,7 @@ test('closed tabs and missing forms need action, retry safely, and Stop preserve
   expect((await rows('applications')).filter(a=>a.url.includes('login')&&a.status==='Submitted')).toHaveLength(0);
   await action(0,'open');
   const previousRun=(await rows('applications')).find(a=>a.url.includes('queue-closed')).runId;
-  await panel.getByRole('region',{name:'Current page review'}).getByRole('button',{name:'Fill this page',exact:true}).click();
+  await panel.getByRole('region',{name:'Fill this page',exact:true}).getByRole('button',{name:'Fill this page',exact:true}).click();
   await expect.poll(async()=> (await rows('applications')).find(a=>a.url.includes('queue-closed')).runId).not.toBe(previousRun);
   expect((await state()).status).toBe('stopped');
   for(const p of context.pages().filter(p=>p.url().includes('/queue-'))) await p.close();
@@ -221,11 +229,18 @@ test('fills a whole background batch while one AI response stalls; restart prese
   const q=await state();expect(q.items[0].state).toBe('filling');expect(q.items[3].batch).toBe(0);
   expect(context.pages().filter(p=>p.url().includes('/queue-parallel')).length).toBe(3);
   await expect(form('parallel-slow').locator('#first')).toHaveValue('Morgan');
+  // Standalone filling stays available while an unrelated queue attempt is waiting on AI.
+  const independent = await context.newPage(); await independent.goto(url('parallel-independent') + '/apply'); await independent.bringToFront();
+  await panel.getByRole('region',{name:'Fill this page',exact:true}).getByRole('button',{name:'Fill this page',exact:true}).click();
+  await expect(independent.locator('#first')).toHaveValue('Morgan');
+  await expect.poll(async()=> (await rows('applications')).find(a=>a.url.includes('parallel-independent'))?.status).toBe('Ready for review');
+  expect((await state()).items[0].state).toBe('filling');
+  await independent.close();
   await form('parallel-slow').locator('#first').fill('Keep my correction');
   await shot('compact-queue-background');
   await request('controlQueue',{action:'pause'});
   await action(0,'open');
-  await panel.getByRole('region',{name:'Current page review'}).getByRole('button',{name:'Restart autofill',exact:true}).click();
+  await panel.getByRole('region',{name:'Fill this page',exact:true}).getByRole('button',{name:'Restart autofill',exact:true}).click();
   release();await ready(0);
   expect((await state()).status).toBe('paused');
   await expect(form('parallel-slow').locator('#slow-essay')).toHaveValue('Current fictional answer');
@@ -240,21 +255,23 @@ test('compact sidebar defaults and user layout/link drafts survive reopening', a
   await panel.evaluate(()=>chrome.storage.local.remove(['sidebarVisibility','sidebarSection:review','sidebarOrder','sidebarSection:fill','sidebarSection:queue','sidebarSection:setup','sidebarSection:track','sidebarSection:history','sidebarSection:presets']));
   await panel.reload();
   const toggle=(name:string)=>panel.locator('#sidebar-'+name+'-toggle');
-  await expect(toggle('fill')).toHaveAttribute('aria-expanded','true');
+  await expect(toggle('fill')).toHaveCount(0);
+  await expect(panel.locator('#sidebar-fill').getByRole('button',{name:'Fill this page',exact:true})).toBeVisible();
+  await expect(panel.locator('#sidebar-fill-move')).toHaveCount(0);
   await expect(toggle('queue')).toHaveAttribute('aria-expanded','true');
   await expect(panel.locator('#sidebar-setup')).toBeHidden();
   await expect(panel.locator('#sidebar-track')).toBeHidden();
   for(const name of ['review','history','presets'])await expect(toggle(name)).toHaveAttribute('aria-expanded','false');
   const order=await panel.locator('[id^="sidebar-"][id$="-toggle"]:visible').evaluateAll(nodes=>nodes.map(n=>n.id));
-  expect(order[0]).toBe('sidebar-fill-toggle');expect(order[1]).toBe('sidebar-queue-toggle');expect(order.at(-1)).toBe('sidebar-history-toggle');
+  expect(order[0]).toBe('sidebar-queue-toggle');expect(order.at(-1)).toBe('sidebar-history-toggle');
   await panel.getByLabel('Job links',{exact:true}).fill(url('draft-test'));
-  await panel.getByLabel('Applications per batch',{exact:true}).selectOption('2');
+  await panel.getByRole('combobox',{name:/^Applications (?:per batch|open at once)$/}).selectOption('2');
   await toggle('queue').click();await toggle('presets').click();
   await expect.poll(()=>panel.evaluate(async()=> (await chrome.storage.local.get('sidebarSection:queue'))['sidebarSection:queue'])).toBe(false);
   await panel.reload();
   await expect(toggle('queue')).toHaveAttribute('aria-expanded','false');await expect(toggle('presets')).toHaveAttribute('aria-expanded','true');
   await toggle('queue').click();await expect(panel.getByLabel('Job links',{exact:true})).toHaveValue(url('draft-test'));
-  await expect(panel.getByLabel('Applications per batch',{exact:true})).toHaveValue('2');
+  await expect(panel.getByRole('combobox',{name:/^Applications (?:per batch|open at once)$/})).toHaveValue('2');
   expect(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await shot('compact-sidebar-preferences');
 });
@@ -265,32 +282,39 @@ test('drag and keyboard section ordering preserve live drafts, open sections and
   const handle=(id:string)=>panel.locator('#sidebar-'+id+'-move');
   await panel.getByLabel('Job links',{exact:true}).evaluate((input:HTMLTextAreaElement)=>input.dataset.layoutProof='stays-mounted');
   await panel.locator('#sidebar-queue-toggle').click(); // Collapse without discarding the link draft.
-  await handle('presets').dragTo(panel.locator('#sidebar-fill-toggle'),{targetPosition:{x:90,y:8}});
-  await expect.poll(order).toEqual(['presets','fill','queue','review','history']);
+  await handle('presets').dragTo(panel.locator('#sidebar-queue-toggle'),{targetPosition:{x:90,y:8}});
+  await expect.poll(order).toEqual(['presets','queue','review','history']);
   await expect(panel.locator('#sidebar-presets-toggle')).toHaveAttribute('aria-expanded','true');
   await expect(panel.locator('#sidebar-queue-toggle')).toHaveAttribute('aria-expanded','false');
   await expect(panel.getByLabel('Job links',{exact:true})).toHaveAttribute('data-layout-proof','stays-mounted');
   await handle('presets').focus();await handle('presets').press('ArrowDown');
-  await expect.poll(order).toEqual(['fill','presets','queue','review','history']);
+  await expect.poll(order).toEqual(['queue','presets','review','history']);
   await expect(handle('presets')).toBeFocused();
   await handle('presets').click();
   await panel.locator('#sidebar-presets-arrange').getByRole('button',{name:'Move down'}).click();
-  await expect.poll(order).toEqual(['fill','queue','presets','review','history']);
+  await expect.poll(order).toEqual(['queue','review','presets','history']);
   await panel.locator('#sidebar-presets-arrange').getByRole('button',{name:'Done',exact:true}).click();
-  await expect.poll(()=>panel.evaluate(async()=> (await chrome.storage.local.get('sidebarOrder')).sidebarOrder.order.filter((id:string)=>!['setup','track'].includes(id)))).toEqual(['fill','queue','presets','review','history']);
-  await panel.reload();await expect.poll(order).toEqual(['fill','queue','presets','review','history']);
+  await expect.poll(()=>panel.evaluate(async()=> (await chrome.storage.local.get('sidebarOrder')).sidebarOrder.order.filter((id:string)=>!['setup','track'].includes(id)))).toEqual(['fill','queue','review','presets','history']);
+  await panel.reload();await expect.poll(order).toEqual(['queue','review','presets','history']);
   await expect(panel.locator('#sidebar-presets-toggle')).toHaveAttribute('aria-expanded','true');
   await panel.locator('#sidebar-queue-toggle').click();
   await expect(panel.getByLabel('Job links',{exact:true})).toHaveValue(url('draft-test'));
-  await expect(panel.getByLabel('Applications per batch',{exact:true})).toHaveValue('2');
+  await expect(panel.getByRole('combobox',{name:/^Applications (?:per batch|open at once)$/})).toHaveValue('2');
   await shot('sidebar-reordered');
   await panel.getByRole('button',{name:'Reset order',exact:true}).click();
-  await expect.poll(order).toEqual(['fill','queue','review','presets','history']);
+  await expect.poll(order).toEqual(['queue','review','presets','history']);
   await panel.evaluate(()=>chrome.storage.local.set({sidebarOrder:{version:1,order:['fill',42]}}));
-  await panel.reload();await expect.poll(order).toEqual(['fill','queue','review','presets','history']);
+  await panel.reload();await expect.poll(order).toEqual(['queue','review','presets','history']);
   // Older/removed IDs cannot hide sections or mount the same form twice.
-  await panel.evaluate(()=>chrome.storage.local.set({sidebarOrder:{version:1,order:['queue','retired-section','queue','fill']}}));
-  await expect.poll(order).toEqual(['queue','fill','review','presets','history']);
+  await panel.evaluate(()=>chrome.storage.local.set({'sidebarSection:fill':false,sidebarOrder:{version:1,order:['queue','retired-section','queue','fill']}}));
+  await expect.poll(order).toEqual(['queue','review','presets','history']);
+  await panel.setViewportSize({width:400,height:420});
+  await panel.evaluate(()=>window.scrollTo(0,document.documentElement.scrollHeight));
+  expect(await panel.evaluate(()=>window.scrollY)).toBeGreaterThan(0);
+  await expect(panel.locator('#sidebar-fill').getByRole('button',{name:'Fill this page',exact:true})).toBeInViewport();
+  await expect(panel.locator('#sidebar-fill')).toBeInViewport();
+  expect(await panel.locator('#sidebar-fill').evaluate(el => getComputedStyle(el).position)).toBe('sticky');
+  await panel.setViewportSize({width:400,height:960});
   await expect(panel.getByLabel('Job links',{exact:true})).toHaveCount(1);
   await panel.getByRole('button',{name:'Reset order',exact:true}).click();
   expect(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -329,4 +353,119 @@ test('Sidebar settings toggle optional categories live, preserve drafts, and kee
   await expect(panel.locator('#sidebar-fill')).toBeVisible();await expect(panel.locator('#sidebar-queue')).toBeVisible();await expect(panel.locator('#sidebar-setup')).toBeHidden();
   await panel.evaluate(()=>chrome.storage.local.remove('sidebarVisibility'));await settings.close();
   await shot('sidebar-clean-default');
+});
+
+test('live queue controls add links, change 3→5→2 capacity and survive pause/restart without duplicate claims', async () => {
+  test.setTimeout(150000);
+  await panel.getByRole('checkbox', { name: 'Open the next job when an application finishes', exact: true }).check();
+  await panel.getByLabel('Job links', { exact: true }).fill([0,1,2,3,4].map(i => url('live-' + i)).join('\n'));
+  await panel.getByLabel('Applications open at once', { exact: true }).selectOption('3');
+  await panel.getByRole('button', { name: 'Start queue', exact: true }).click();
+  await ready(0); await ready(1); await ready(2);
+  const initial = await state(), region = panel.getByRole('region', { name: 'Application queue' });
+  const activeTabs = () => context.pages().filter(p => p.url().includes('/queue-live-'));
+  expect(activeTabs()).toHaveLength(3);
+  await region.getByLabel('Open application limit', { exact: true }).selectOption('5');
+  await ready(3); await ready(4); expect(activeTabs()).toHaveLength(5);
+  expect(new Set((await state()).items.map((i:any) => i.attempt)).size).toBe(5);
+  await region.getByLabel('Open application limit', { exact: true }).selectOption('2');
+  await expect(region).toContainText('Above the new limit'); expect(activeTabs()).toHaveLength(5);
+  await region.getByRole('button', { name: 'Pause queue', exact: true }).click();
+  for (const i of [0,1,2]) expect(await action(i, 'skip')).toMatchObject({ ok: true });
+  expect(activeTabs()).toHaveLength(2);
+  await region.getByText('Add job links', { exact: true }).click();
+  await region.getByLabel('More job links', { exact: true }).fill([url('live-5'),url('live-6'),url('live-5')+'/apply?utm_source=test',url('live-0')].join('\n'));
+  await expect(region).toContainText('1 duplicate link removed'); await expect(region).toContainText('Already in this queue');
+  await region.getByRole('button', { name: 'Add to queue (2)', exact: true }).click();
+  await expect(region).toContainText('2 jobs added. They will open after you resume.');
+  expect((await state()).items).toHaveLength(7); expect(activeTabs()).toHaveLength(2);
+  expect((await rows('queueContexts'))).toHaveLength(1); expect((await state()).token).toBe(initial.token);
+  const cdp = await context.newCDPSession(panel); await cdp.send('ServiceWorker.enable'); await cdp.send('ServiceWorker.stopAllWorkers'); await cdp.detach();
+  expect((await request('getQueue')).queue.status).toBe('paused');
+  expect(await action(3, 'skip')).toMatchObject({ ok: true }); expect((await state()).items[5].batch).toBe(0);
+  await region.getByRole('button', { name: 'Resume queue', exact: true }).click();
+  await ready(5); expect((await state()).items[6].batch).toBe(0); expect(activeTabs()).toHaveLength(2);
+  const token = (await state()).token;
+  const concurrent = await Promise.all([request('addQueueLinks', { token, urls: [url('live-7')] }), request('addQueueLinks', { token, urls: [url('live-7')] })]);
+  expect(concurrent.every(r => r.ok)).toBe(true); expect(concurrent.map(r => r.added).sort()).toEqual([0,1]);
+  expect((await state()).items.filter((i:any) => i.url === url('live-7'))).toHaveLength(1);
+  const stale = '00000000-0000-4000-8000-000000000000';
+  expect(await request('controlQueue', { token: stale, action: 'size', batchSize: 5 })).toMatchObject({ ok: false });
+  expect(await request('addQueueLinks', { token: stale, urls: [url('live-stale')] })).toMatchObject({ ok: false });
+  expect((await state()).batchSize).toBe(2); expect((await state()).items).toHaveLength(8);
+  const overflow = await request('addQueueLinks', { token, urls: Array.from({ length: 93 }, (_, i) => url('overflow-' + i)) });
+  expect(overflow).toMatchObject({ ok: false }); expect(overflow.error).toContain('92 more jobs');
+  expect((await state()).items).toHaveLength(8);
+  await shot('queue-live-capacity');
+  await request('controlQueue', { action: 'pause' });
+  // A closed application releases its slot, but Retry cannot exceed the live limit.
+  await form('live-4').close();
+  await expect.poll(async () => (await state()).items[4].tabId).toBeUndefined();
+  await request('controlQueue', { action: 'resume' }); await ready(6);
+  expect(await action(4, 'retry')).toMatchObject({ ok: false });
+  expect(activeTabs()).toHaveLength(2);
+  await request('controlQueue', { action: 'pause' });
+  for (const [index, item] of (await state()).items.entries()) if (!['submitted','skipped'].includes(item.state)) await action(index, 'skip');
+  await request('controlQueue', { action: 'resume' });
+  await expect.poll(async () => (await state()).status).toBe('complete');
+});
+
+test('tracked jobs have explicit resume/retry choices while submitted history stays excluded', async () => {
+  const history = ['history-submitted','history-unfinished','history-abandoned'];
+  const ids = await panel.evaluate(async urls => new Promise<number[]>((resolve, reject) => {
+    const r = indexedDB.open('job-autofill'); r.onsuccess = () => {
+      const d = r.result, tx = d.transaction('applications','readwrite'), ids: number[] = [];
+      urls.forEach((url, i) => { const r = tx.objectStore('applications').add({ url, jobKey: url.replace('https://',''), company: 'Fictional history', role: ['Submitted role','Unfinished role','Abandoned role'][i], platform: 'lever', status: ['Submitted','Ready for review','Abandoned'][i], filledAt: 1, filledCount: 0, missingCount: 0, missingLabels: [], aiAnswers: 0 }); r.onsuccess = () => ids[i] = Number(r.result); });
+      tx.oncomplete = () => { d.close(); resolve(ids); }; tx.onabort = () => reject(tx.error);
+    };
+  }), history.map(url));
+  // Raw fixture writes bypass Dexie's live-query notifications; reopen the UI to read the fixture.
+  await panel.reload();
+  await expect(panel.locator('#sidebar-fill').getByRole('button', { name: 'Fill this page', exact: true })).toBeEnabled();
+  await panel.getByLabel('Job links', { exact: true }).fill([...history.map(url),url('history-new')].join('\n'));
+  const region = panel.getByRole('region', { name: 'Application queue' });
+  await expect(region).toContainText('Previously submitted jobs are excluded');
+  await expect(region.getByRole('checkbox', { name: 'Resume in queue (new tab)', exact: true })).not.toBeChecked();
+  await region.getByRole('checkbox', { name: 'Resume in queue (new tab)', exact: true }).check();
+  await region.getByRole('checkbox', { name: 'Retry in queue (new tab)', exact: true }).check();
+  await shot('queue-history-choices');
+  await panel.getByLabel('Applications open at once', { exact: true }).selectOption('3');
+  await region.getByRole('button', { name: 'Start queue', exact: true }).click(); await ready(0); await ready(1); await ready(2);
+  const q = await state(); expect(q.items.map((i:any) => i.url)).not.toContain(url(history[0]!));
+  expect(q.items[0].applicationId).toBe(ids[1]); expect(q.items[1].applicationId).toBe(ids[2]);
+  expect((await rows('applications')).filter(a => a.jobKey === url(history[1]!).replace('https://',''))).toHaveLength(1);
+  expect(await request('addQueueLinks', { token: q.token, urls: [url(history[0]!)], resumeApplicationIds: [ids[0]] })).toMatchObject({ ok: false });
+  expect((await rows('applications')).find(a => a.id === ids[0]).status).toBe('Submitted');
+  for (const i of [0,1,2]) await action(i, 'skip');
+});
+
+test('abandon cancels a stalled writer and advances exactly once without closing unrelated tabs', async () => {
+  let release!: () => void, asked = false;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  await context.route('https://generativelanguage.googleapis.com/**', async route => {
+    const firstRequest = !asked; asked = true; if (firstRequest) await delayed;
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ candidates: [{ content: { parts: [{ text: firstRequest ? 'Late fictional answer' : 'Current fictional answer' }] } }] }) }).catch(() => undefined);
+  });
+  await panel.evaluate(() => chrome.storage.local.set({ geminiApiKey: 'synthetic-key' }));
+  const other = await context.newPage(); await other.goto(url('unrelated') + '/apply');
+  await panel.getByLabel('Job links', { exact: true }).fill([url('parallel-slow-abandon'),url('abandon-next')].join('\n'));
+  await panel.getByLabel('Applications open at once', { exact: true }).selectOption('1');
+  await panel.getByRole('button', { name: 'Start queue', exact: true }).click();
+  await expect.poll(() => asked).toBe(true);
+  const before = await state(), first = form('parallel-slow-abandon');
+  expect(before.items[0].state).toBe('filling');
+  const card = panel.locator('[data-queue-item]').first(); await card.getByRole('button', { name: 'More', exact: false }).click();
+  await card.getByRole('button', { name: 'Abandon — close tab', exact: true }).click();
+  await panel.getByRole('dialog').getByRole('button', { name: 'Abandon — close tab', exact: true }).click();
+  await expect.poll(async () => ['opening','filling','review'].includes((await state()).items[1].state)).toBe(true);
+  await expect.poll(() => !!form('abandon-next')).toBe(true);
+  await expect(form('abandon-next').locator('#first')).not.toHaveValue('');
+  expect(first.isClosed()).toBe(true); expect(other.isClosed()).toBe(false);
+  expect((await rows('applications')).find(a => a.id === before.items[0].applicationId).status).toBe('Abandoned');
+  // Known fields in the replacement do not wait for the old optional network response.
+  release(); await ready(1);
+  expect(await request('queueFinished', { runId: before.items[0].attempt, applicationId: before.items[0].applicationId })).toMatchObject({ ok: false });
+  expect((await state()).items[0].state).toBe('skipped'); expect((await state()).items[1].state).toBe('review');
+  await action(1, 'skip'); await other.close(); await panel.evaluate(() => chrome.storage.local.set({ geminiApiKey: '' }));
+  await context.unroute('https://generativelanguage.googleapis.com/**');
 });
