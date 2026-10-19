@@ -183,17 +183,19 @@ export default defineContentScript({
           onProgress: (summary) => { if (session === s && !filling && !s.processing) void report(summary); },
         });
         session = s;
-        const id =
-          applicationId ??
-          (
-            await sendToBackground('fillStarted', {
-              url: location.href,
-              company: s.info.company,
-              role: s.info.role,
-              platform,
-              runId: context.runId,
-            })
-          ).applicationId;
+        let id = applicationId;
+        if (id === undefined) {
+          const started = await sendToBackground('fillStarted', {
+            url: location.href,
+            company: s.info.company,
+            role: s.info.role,
+            platform,
+            runId: context.runId,
+          }) as { applicationId?: number; error?: string };
+          // Without an application record the result has nowhere to go; say so instead of staying on Filling.
+          if (started.applicationId === undefined) throw new Error(started.error || 'Could not record this application. Refresh the page and try again.');
+          id = started.applicationId;
+        }
         currentId = id;
         void s.jobDetails().then(() => {
           if (session === s && currentId === id && !filling) void report(s.summary());
@@ -202,6 +204,7 @@ export default defineContentScript({
         console.debug(`[Job Autofill] build ${__BUILD__}: filling started`);
         showStatus({ title: 'Filling application…', lines: ['Filling fields from your profile.', `Build ${__BUILD__.slice(5, 16).replace('T', ' ')}`], tone: 'working' });
         const summary = await s.run();
+        console.debug(`[Job Autofill] fill pass finished${run !== generation ? ' (superseded by a newer fill or cancel)' : ''}`);
         if (run !== generation) return;
         currentId = id;
         // The writer has finished. Review/capture must not wait on optional job metadata.
@@ -213,7 +216,7 @@ export default defineContentScript({
         }
         if (run === generation) await report(summary);
       } catch (err) {
-        if (run !== generation) return;
+        if (run !== generation) { console.debug('[Job Autofill] superseded fill stopped:', String((err as Error)?.message ?? err)); return; }
         if (runId && run === generation) await sendToBackground('queueFinished', { runId, note: String((err as Error)?.message ?? 'Autofill stopped.').slice(0, 500) }).catch(() => undefined);
         console.error('[Job Autofill]', err);
         showStatus({ title: 'Autofill stopped', lines: [String((err as Error)?.message ?? err)], tone: 'done' });
@@ -270,6 +273,7 @@ export default defineContentScript({
       if (queueRun) lines.push('Review and submit yourself. For later steps, use Fill this step in the queue.');
       else if (adapter.multiStep) lines.push('Review this page, then continue. Each next page is filled when it opens.');
       showStatus({ title: 'Ready for review', lines, tone: 'done' });
+      console.debug('[Job Autofill] reporting result');
       const details = owner.knownDetails;
       if (owner !== session || ownerRun !== currentRunId || ownerGeneration !== generation) return;
       await sendToBackground('fillFinished', {
@@ -334,7 +338,7 @@ export default defineContentScript({
       }
       if (msg.type === 'cancelQueue') {
         void (async () => {
-          if (msg.runId === queueRun || msg.runId === currentRunId) {
+          if (msg.runId && (msg.runId === queueRun || msg.runId === currentRunId)) {
             if (waiting && waiting.runId === msg.runId && !waiting.controller.signal.aborted) showStatus({ title: 'Automatic resume stopped', lines: ['Your page was kept. Finish this step, then use Fill this page or retry the queue job.'], tone: 'attention' });
             generation++; session?.disconnect(); aborter?.abort(); waiting?.controller.abort();
             // Wait for the old widget writer to stop before a retry can touch this form.

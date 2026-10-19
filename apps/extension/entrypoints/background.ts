@@ -278,15 +278,15 @@ async function applicationForCapture(id: number, token: string, sender: Sender) 
   const field = app?.reviewFields?.find(f => f.token === token);
   if (!app || app.tabId === undefined || !field) throw new Error('This field is no longer available. Fill the current page again.');
   const tab = await browser.tabs.get(app.tabId);
-  if (!tab.url || applicationKey(tab.url) !== applicationKey(app.topUrl ?? app.url)) throw new Error('The application page changed. Fill it again before remembering an answer.');
+  if (!tab.url || jobKey(tab.url) !== jobKey(app.topUrl ?? app.url)) throw new Error('The application page changed. Fill it again before remembering an answer.');
   return { app, field, context: { platform: app.platform, company: app.company, url: app.url } satisfies MappingContext };
 }
 
 async function pageContext(sender: Sender): Promise<MappingContext> {
   if (sender.id !== browser.runtime.id || sender.tab?.id === undefined || !sender.url || !isWebUrl(sender.url) || !(await canAccess(sender.url))) throw new Error('Only an authorised application page can request memories.');
-  const app = (await db.applications.where('tabId').equals(sender.tab.id).toArray()).find(a => a.frameId === (sender.frameId ?? 0) && applicationKey(a.url) === applicationKey(sender.url!));
+  const app = (await db.applications.where('tabId').equals(sender.tab.id).toArray()).find(a => a.frameId === (sender.frameId ?? 0) && jobKey(a.url) === jobKey(sender.url!));
   return { platform: platformFor(sender.url), url: sender.url,
-    company: app?.frameId === (sender.frameId ?? 0) && applicationKey(app.url) === applicationKey(sender.url) ? app.company : '' };
+    company: app?.frameId === (sender.frameId ?? 0) && jobKey(app.url) === jobKey(sender.url) ? app.company : '' };
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +557,8 @@ const handlers: Handlers = {
   },
 
   async fillStarted(req, sender) {
-    if (sender.id !== browser.runtime.id || !sender.url || applicationKey(sender.url) !== applicationKey(req.url)) throw new Error('Invalid application sender.');
+    // Compare jobs, not exact URLs: a site can rewrite tracking parameters (utm_source) in place, so the sender URL and location.href may differ.
+    if (sender.id !== browser.runtime.id || !sender.url || jobKey(sender.url) !== jobKey(req.url)) throw new Error('Invalid application sender.');
     if (sender.tab?.id !== undefined) fillingFrames.set(sender.tab.id, Date.now());
     const run = req.runId ? await ownedRun(req.runId, sender) : undefined;
     if (run?.context.queue && req.runId) await queueOwns(req.runId, sender, true);

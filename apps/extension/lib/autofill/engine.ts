@@ -298,8 +298,10 @@ export class FillSession {
     // pass runs, before observe() starts, so keep scanning until a pass finds nothing new.
     for (let round = 0; round < 5; round++) {
       await sleep(timing.settle);
+      console.debug(`[Job Autofill] rescan round ${round + 1}`);
       if (!(await this.processNew())) break;
     }
+    console.debug('[Job Autofill] rescans done');
     // Hydration/options can finish after the first pass. Retry only empty local facts;
     // essays, uploads and user-entered values are never replayed here.
     if (!this.stopped) {
@@ -307,6 +309,7 @@ export class FillSession {
         ['failed', 'nomatch'].includes(rec.outcome ?? '') &&
         !['free_response', 'challenge', 'consent'].includes(rec.cls.kind) && !rec.ai && rec.field.kind !== 'file');
       if (retry.length) {
+        console.debug(`[Job Autofill] retrying ${retry.length} empty field(s)`);
         await sleep(timing.settle);
         const before = new Map(retry.map(rec => [rec, { el: rec.field.el, label: rec.field.label, kind: rec.field.kind, options: JSON.stringify(rec.field.options), saved: rec.saved?.id }]));
         const current = new Map(scanFields(this.root()).map(field => [field.el, field]));
@@ -328,6 +331,7 @@ export class FillSession {
         }
       }
     }
+    console.debug('[Job Autofill] verifying');
     return this.verify();
   }
 

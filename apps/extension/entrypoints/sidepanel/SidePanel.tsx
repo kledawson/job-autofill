@@ -1,5 +1,3 @@
-import { useSidebarVisibility } from '@/components/SidebarPreferences';
-import { readSidebarVisibility, SIDEBAR_VISIBILITY_KEY, type SidebarId } from '@/lib/sidebar-layout';
 import { SidebarLayout } from '@/components/SidebarLayout';
 import { SidebarSection } from '@/components/SidebarSection';
 import { ApplicationQueue } from '@/components/ApplicationQueue';
@@ -110,7 +108,6 @@ const HISTORY_FILTERS: [HistoryFilter, string, ApplicationStatus?][] = [
 
 export default function SidePanel() {
   const { settings } = usePublicSettings();
-  const visibility = useSidebarVisibility();
   const profile = useLiveQuery(() => getProfile());
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
   const applications = useLiveQuery(() => {
@@ -125,7 +122,6 @@ export default function SidePanel() {
   const pageStatus = usePageStatus(tabId, tabUrl);
   const queue = useLiveQuery(() => db.applicationQueue.get('current'));
   const [presetId, setPresetId] = useState<string>();
-  const preset = useLiveQuery(() => presetId ? db.presets.get(presetId) : Promise.resolve(undefined), [presetId]);
   const queueItem = queue && ['running', 'paused'].includes(queue.status) ? queue.items.find(i => i.tabId === tabId && !['submitted', 'skipped'].includes(i.state)) : undefined;
   const workflow = applicationWorkflow(current, queueItem);
 
@@ -160,15 +156,6 @@ export default function SidePanel() {
     }
   }, [showing, current?.id, workflow.canRemember]);
 
-  async function revealSection(id: SidebarId) {
-    const stored = await browser.storage.local.get(SIDEBAR_VISIBILITY_KEY);
-    const next = readSidebarVisibility(stored[SIDEBAR_VISIBILITY_KEY]);
-    if (!next[id]) await browser.storage.local.set({ [SIDEBAR_VISIBILITY_KEY]: { version: 1, categories: { ...next, [id]: true } } });
-    const toggle = document.getElementById('sidebar-' + id + '-toggle');
-    if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
-    requestAnimationFrame(() => { toggle?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); toggle?.focus({ preventScroll: true }); });
-  }
-
   async function fillThisPage() {
     setError('');
     if (!presetId) return;
@@ -196,11 +183,7 @@ export default function SidePanel() {
 
       <section aria-label="Fill this page" className="space-y-2">
         {settings && !settings.onboardingComplete && <p className="text-xs text-slate-600">New here? <button className="font-medium text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button> to add your profile.</p>}
-        <div className="flex items-center justify-between gap-2 text-xs text-slate-500"><span className="truncate">Preset: {queueItem ? queue?.presetName + ' · locked' : preset?.name || 'Default'}</span>
-          <button className="shrink-0 text-indigo-700 underline" onClick={() => {
-            if (visibility.presets) void revealSection('presets');
-            else void browser.tabs.create({ url: browser.runtime.getURL('/options.html#presets' as never) });
-          }}>Change preset</button></div>
+        <PresetSelector onSelected={setPresetId} locked={queueItem ? queue?.presetName ?? '' : undefined} />
         <Button className="w-full" disabled={!presetId} onClick={fillThisPage}>
           {queueItem && ['opening', 'filling'].includes(queueItem.state) ? 'Restart autofill' : 'Fill this page'}
         </Button>
@@ -309,9 +292,6 @@ export default function SidePanel() {
           </ul>
         )}
       </section>
-      </SidebarSection>
-      <SidebarSection id="presets" title="Application Preset" summary={preset?.name || 'Default'}>
-        <PresetSelector onSelected={setPresetId} />
       </SidebarSection>
       </SidebarLayout>
     </div>
