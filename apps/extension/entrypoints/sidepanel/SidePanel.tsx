@@ -212,19 +212,19 @@ export default function SidePanel() {
           (queueItem?.state === 'needs-action' && !current ? <PageStatusBox status={{ title: workflow.title, lines: [queueItem.note || 'Finish this step on the website, then retry autofill.'], tone: 'attention' }} /> : current ? (
             <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl}
               queueItem={queueItem}
-              queueEntry={queueItem && queue ? { token: queue.token, itemId: queueItem.id, ready: queueItem.state === 'review', autoDetectSubmission: queue.autoDetectSubmission } : undefined} onReview={() => void revealSection('review')} />
+              queueEntry={queueItem && queue ? { token: queue.token, itemId: queueItem.id, ready: queueItem.state === 'review', autoDetectSubmission: queue.autoDetectSubmission } : undefined} />
           ) : (
             <PageStatusBox status={pageStatus ?? { title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' }} />
           ))}
       </section>
       <SidebarLayout>
-      <SidebarSection id="queue" title="Application queue" defaultOpen summary={queue && !['stopped','complete'].includes(queue.status) ? queue.mode === 'continuous' ? 'Next job after each finish' : 'Batch ' + (queue.batch || 1) : undefined}>
+      <SidebarSection id="queue" title="Application Queue" defaultOpen summary={queue && !['stopped','complete'].includes(queue.status) ? queue.mode === 'continuous' ? 'Next job after each finish' : 'Batch ' + (queue.batch || 1) : undefined}>
         <ApplicationQueue presetId={presetId} activeTabId={tabId} />
       </SidebarSection>
-      <SidebarSection id="review" title="Review & remember" summary={showing && current ? current.status === 'Submitted' ? 'Completed' : (current.reviewFields?.filter(field => field.answered).length || 0) + ' ready to save · ' + current.missingCount + ' need you' : undefined}>
+      <SidebarSection id="review" title="Review & Remember" summary={showing && current ? current.status === 'Submitted' ? 'Completed' : (current.reviewFields?.filter(field => field.answered).length || 0) + ' ready to save · ' + current.missingCount + ' need you' : undefined}>
         {showing && current ? <ApplicationReview key={current.id} app={current} canRemember={workflow.canRemember} /> : <p className="text-xs text-slate-500">Fill an application to review missing questions and remember answers here.</p>}
       </SidebarSection>
-      <SidebarSection id="setup" title="Setup & connections">
+      <SidebarSection id="setup" title="Setup & Connections">
         <div className="space-y-2 text-xs text-slate-600">
           <p>{settings?.onboardingComplete ? profile && missingRequired(profile).length ? missingRequired(profile).length + ' required profile fields missing.' : 'Your profile is ready.' : 'Finish setup to add your profile.'}</p>
           {!settings?.onboardingComplete && <button className="text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button>}
@@ -234,7 +234,7 @@ export default function SidePanel() {
           <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#connections' as never)} target="_blank" rel="noreferrer">Manage connections</a>
         </div>
       </SidebarSection>
-      <SidebarSection id="track" title="Track without autofill">
+      <SidebarSection id="track" title="Track Without Autofill">
         <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
       </SidebarSection>
 
@@ -310,7 +310,7 @@ export default function SidePanel() {
         )}
       </section>
       </SidebarSection>
-      <SidebarSection id="presets" title="Application preset" summary={preset?.name || 'Default'}>
+      <SidebarSection id="presets" title="Application Preset" summary={preset?.name || 'Default'}>
         <PresetSelector onSelected={setPresetId} />
       </SidebarSection>
       </SidebarLayout>
@@ -381,6 +381,15 @@ function TrackOnly({ tabUrl, sheetUrl }: { tabUrl?: string; sheetUrl?: string })
   );
 }
 
+function Stat({ value, label, color }: { value: number; label: string; color: string }) {
+  return (
+    <div className="rounded-lg bg-slate-50 px-2 py-2">
+      <p className={cx('text-lg font-semibold', color)}>{value}</p>
+      <p className="text-xs text-slate-500">{label}</p>
+    </div>
+  );
+}
+
 function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: boolean }) {
   if (hideTitle && !status.lines.length) return null;
   return (
@@ -398,11 +407,10 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
   );
 }
 
-function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, onReview }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean }; onReview(): void }) {
+function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean } }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const workflow = applicationWorkflow(app, queueItem);
-  const toCheck = app.fieldFeedback?.filter(f => f.status === 'review').length ?? app.aiAnswers;
   const attentionCount = app.fieldFeedback?.filter(f => ['missing', 'review', 'optional'].includes(f.status) || app.reviewFields?.some(r => r.token === f.token)).length ?? (app.reviewFields?.length || app.missingCount);
   return (
     <div className="space-y-2">
@@ -415,31 +423,39 @@ function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, 
         <span className={cx('inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', workflow.writing ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-700')}>{workflow.title}</span>
       </div>
 
-      {!workflow.writing && app.status !== 'Submitted' && <p className="text-xs text-slate-600">{[app.missingCount ? `${app.missingCount} missing` : '', toCheck ? `${toCheck} to review` : ''].filter(Boolean).join(' · ') || 'Review the filled answers on the website.'}</p>}
       {/* The pill already names the status, so a matching title is left out. */}
       {workflow.writing && pageStatus?.tone === 'working' && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
-      {!workflow.writing && <details className="text-xs text-slate-500"><summary className="cursor-pointer">Fill details</summary><p>{app.filledCount} filled in the latest attempt{app.aiAnswers > 0 && ` · ${app.aiAnswers} AI-written`}</p>{pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}{app.resumeName && <p className="mt-1">Resume: {app.resumeName}</p>}</details>}
+      {!workflow.writing && (
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <Stat value={app.filledCount} label="Autofilled" color="text-green-700" />
+          <Stat value={app.aiAnswers} label="AI-written" color="text-blue-700" />
+          <Stat value={attentionCount} label="Need review" color={attentionCount ? 'text-red-700' : 'text-slate-400'} />
+        </div>
+      )}
+      {!workflow.writing && pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
+      {!workflow.writing && app.resumeName && <p className="text-xs text-slate-500">Resume: {app.resumeName}</p>}
 
-      {app.status !== 'Submitted' && (app.missingCount > 0 || !!app.reviewFields?.length || !!app.fieldFeedback?.length) && <button className="text-xs font-medium text-indigo-700 underline" onClick={onReview}>{attentionCount ? `Review & remember (${attentionCount})` : 'Review filled answers'}</button>}
       {app.submissionIssue === 'validation' && <Notice tone="warn">Submission needs attention. Fix the website’s missing or invalid answers, then submit again. This application has stayed open.</Notice>}
       {workflow.canConfirmSubmission && (
         <>
-          <p className="text-xs text-slate-500">{queueEntry?.autoDetectSubmission && ['greenhouse', 'lever', 'ashby'].includes(app.platform) ? 'Save Memories before submitting on the website. Recognized success confirmations close this tab; use Submitted below if detection misses it.' : 'Submit on the website. If the result is not detected, confirm successful submission below.'}</p>
+          {queueEntry?.autoDetectSubmission && ['greenhouse', 'lever', 'ashby'].includes(app.platform) && <p className="text-xs text-slate-500">Save Memories before submitting on the website. Recognized success confirmations close this tab; use Submitted below if detection misses it.</p>}
           <Button
             className="w-full" disabled={busy}
             onClick={async () => {
               setBusy(true); setError('');
-              try { const res = await sendToBackground('markSubmitted', { applicationId: app.id! }); if (!res.ok) setError(res.error); }
+              try {
+                const res = await sendToBackground('markSubmitted', { applicationId: app.id! });
+                if (!res.ok) setError(res.error);
+              }
               catch { setError('Could not confirm submission. Try again.'); } finally { setBusy(false); }
             }}
           >
-            {busy ? 'Confirming…' : queueEntry ? 'Submitted — close tab' : 'I submitted this application'}
+            {busy ? 'Confirming…' : queueEntry ? 'Submitted — close tab' : 'Add Applied Position to Spreadsheet'}
           </Button>
         </>
       )}
       {workflow.writing && <p className="text-xs text-slate-500">Known answers fill first. Optional AI responses may take longer.</p>}
       {workflow.phase === 'blocked' && queueItem?.note && <Notice tone="warn">{queueItem.note} Use the queue's Retry autofill action to continue.</Notice>}
-      {app.status === 'Submitted' && <div role="status" className="space-y-2 rounded-lg bg-green-50 p-2 text-xs text-green-800"><p>{app.submissionSource && app.submissionSource !== 'user' ? 'Successful submission detected.' : 'Submission confirmed by you.'}</p>{!queueEntry && app.tabId !== undefined && <Button variant="secondary" disabled={busy} onClick={async () => { setBusy(true); const res = await sendToBackground('closeSubmittedTab', { applicationId: app.id! }); if (!res.ok) setError(res.error); setBusy(false); }}>Close application tab</Button>}</div>}
       {app.sheetSyncPending && <p role="status" className="text-xs text-slate-600">Submitted · Updating your sheet…</p>}
       {app.status === 'Submitted' && app.sheetRow && sheetUrl && (
         <Notice tone="success">

@@ -69,7 +69,7 @@ Then, in onboarding or Settings → Connections → Google Sheets tracking:
 Create a sheet in Google Sheets, paste its link, and choose **Connect sheet** and approve access. There is nothing
 else to configure. Keep a Job Posting URL column so retries can identify applications; the other headers decide what is saved.
 
-When you click **I submitted this application** or the queue's **Submitted — close tab** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
+When you click **Add Applied Position to Spreadsheet** or the queue's **Submitted — close tab** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
 no company or position, and the side panel shows the row number with a link. The extension reads the header row and
 fills the columns it recognizes, whatever their order: company name, position, date applied (and a "Found" column,
 which gets the same date), link, location, work model, base pay (the pay range posted on the job page, when it
@@ -336,8 +336,7 @@ Drag a dotted handle to reorder sections, or click it for Move up/down buttons; 
 
 Profile and integrations stay in Settings; the optional Setup & connections category offers quick links and status. Unfinished onboarding offers **Continue setup** within Fill. Your pasted link draft and batch size survive reopening the panel.
 
-Below Fill, a compact application summary shows attention counts; expand **Fill details** for latest-attempt
-statistics and resume information. **Review & remember** holds missing questions, single-answer capture
+Below Fill, a compact application summary shows Autofilled, AI-written and Need review counts and the resume used. **Review & remember** holds missing questions, single-answer capture
 and Save all confirmation. Its question list scrolls within the section. Queue cards show **Review** and
 **Submitted** first; **More** contains Fill this step/Restart, Abandon and document/link details. **Submitted**
 records your confirmation and closes the owned tab; it never submits on the website.
@@ -350,6 +349,6 @@ Both queued and manual fills wait briefly for stable controls before scanning. A
 
 ## Submission and sheet recovery (workflow increment 5)
 
-Submit applications on the website yourself. Supported Greenhouse, Lever and Ashby confirmations can record success after your submit action. Validation errors keep the tab open and show **Submission needs attention**. For an unfamiliar result, use **I submitted this application** (or **Submitted — close tab** in the queue) only after verifying success. Individual tabs stay open; **Close application tab** is optional. Automatic queue closure follows its checkbox preference and advances only after confirmation. Save Memories before submitting.
+Submit applications on the website yourself. Supported Greenhouse, Lever and Ashby confirmations can record success after your submit action. Validation errors keep the tab open and show **Submission needs attention**. For an unfamiliar result, use **Add Applied Position to Spreadsheet** (or **Submitted — close tab** in the queue) only after verifying success. Individual tabs stay open; **Close application tab** is optional. Automatic queue closure follows its checkbox preference and advances only after confirmation. Save Memories before submitting.
 
 A failed Sheets write leaves the application Submitted and the queue continues. Expand **Applications** and choose **Retry sheet sync**; this retries tracking without submitting again. Existing sheets need a **Job Posting URL** column to recognize retries safely. Writes from different applications are serialized and pending writes recover when the worker restarts. Supported confirmation patterns and fictional API tests do not guarantee every website variant or Google account configuration.

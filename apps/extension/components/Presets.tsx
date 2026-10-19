@@ -56,12 +56,8 @@ export function PresetsSection({ onDirtyChange }: { onDirtyChange?: (dirty: bool
   if (editing) return <PresetEditor key={editing.draft.id} initial={editing.draft} expected={editing.expected}
     onDirtyChange={onDirtyChange} files={files} sharedFiles={sharedFiles} profileLinks={profile ? { portfolio: profile.portfolio, github: profile.github, website: profile.website } : { portfolio: '', github: '', website: '' }}
     onCancel={() => setEditing(undefined)} onSaved={p => { setEditing(undefined); setNotice(p.name + ' saved and selected for your next application.'); }} />;
-  return <Card title="Application presets" description="Choose a resume and responses for each kind of role. Your personal Profile stays shared.">
+  return <Card title="Application presets" description="Choose a resume and responses for each kind of role. Your personal Profile stays shared." actions={<Button onClick={() => start()}>Create preset</Button>}>
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-md text-sm text-slate-600">Create Software Engineer and Hardware Engineer presets, then switch between them in the sidebar.</p>
-        <Button onClick={() => start()}>Create preset</Button>
-      </div>
       <div className="rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">
         <strong className="text-slate-800">Shared from your Profile:</strong> name, contact details, education, work history, skills and eligibility answers. Personal Memories and transcript are shared too.
       </div>

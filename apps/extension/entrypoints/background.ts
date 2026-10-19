@@ -590,19 +590,32 @@ const handlers: Handlers = {
     const app = await db.applications.get(req.applicationId);
     if (!app?.id || sender.id !== browser.runtime.id || app.tabId !== sender.tab?.id || (app.frameId ?? 0) !== (sender.frameId ?? 0) || (app.runId && req.runId !== app.runId)) return {};
     if (req.runId) await ownedRun(req.runId, sender);
-    const memoryQuestions = req.memoryQuestions === undefined ? undefined : parseQuestionList(req.memoryQuestions);
-    const fieldFeedback = req.fieldFeedback === undefined ? undefined : parseFieldFeedback(req.fieldFeedback);
-    const reviewFields = req.reviewFields === undefined ? undefined : parseReviewFields(req.reviewFields);
-    if (req.missingQuestions !== undefined && (!Array.isArray(req.missingQuestions) ||
-      req.missingQuestions.length !== req.missingLabels.length || req.missingQuestions.length > 200 ||
-      req.missingQuestions.some((q) => q !== null && (typeof q !== 'string' || !q.trim() || q.length > 700)))) {
-      throw new Error('Invalid remembered question metadata.');
-    }
+    // One odd label (blank, or a long consent paragraph) must not discard the whole result and leave the application stuck on Filling.
+    const lenient = <T,>(items: unknown, parse: (one: unknown) => T): T[] | undefined => {
+      if (items === undefined) return undefined;
+      if (!Array.isArray(items)) throw new Error('Invalid fill result.');
+      const kept: T[] = [];
+      for (const item of items.slice(0, 200)) { try { kept.push(parse(item)); } catch { /* skip an unusable entry */ } }
+      return kept;
+    };
+    const memoryQuestions = lenient(req.memoryQuestions, q => parseQuestionList([q])[0]!);
+    const seenFeedback = new Set<string>();
+    const fieldFeedback = lenient(req.fieldFeedback, f => {
+      const [one] = parseFieldFeedback([f]);
+      if (seenFeedback.has(one!.token)) throw new Error('duplicate');
+      seenFeedback.add(one!.token);
+      return one!;
+    });
+    const reviewFields = lenient(req.reviewFields, f => parseReviewFields([f])[0]!);
+    if (!Array.isArray(req.missingLabels)) throw new Error('Invalid fill result.');
+    const missingQuestions = req.missingQuestions === undefined ? undefined : (Array.isArray(req.missingQuestions) ? req.missingQuestions : []).slice(0, req.missingLabels.length)
+      .map(q => typeof q === 'string' && q.trim() && q.length <= 700 ? q : null);
+    while (missingQuestions && missingQuestions.length < req.missingLabels.length) missingQuestions.push(null);
     const first = app.status === 'Filling';
     if (req.usedMappingIds !== undefined) {
-      if (!Array.isArray(req.usedMappingIds) || req.usedMappingIds.length > 200 || req.usedMappingIds.some(id => !Number.isSafeInteger(id) || id < 1)) throw new Error('Invalid used answer IDs.');
+      const usedIds = Array.isArray(req.usedMappingIds) ? req.usedMappingIds.filter(id => Number.isSafeInteger(id) && id >= 1).slice(0, 200) : [];
       const context = { platform: app.platform, company: app.company, url: app.url };
-      const valid = (await getRememberedMappings()).filter(m => req.usedMappingIds!.includes(m.id) && scopeRank(m.scope, context) >= 0);
+      const valid = (await getRememberedMappings()).filter(m => usedIds.includes(m.id) && scopeRank(m.scope, context) >= 0);
       await db.transaction('rw', db.rememberedMappings, async () => {
         for (const m of valid) await db.rememberedMappings.update(m.id, { lastUsed: Date.now() });
       });
@@ -614,7 +627,7 @@ const handlers: Handlers = {
       aiAnswers: req.aiAnswers,
       missingCount: req.missingLabels.length,
       missingLabels: req.missingLabels,
-      missingQuestions: req.missingQuestions,
+      missingQuestions,
       reviewFields,
       fieldFeedback,
       memoryQuestions,

@@ -101,7 +101,7 @@ test('bounded review batches pin role/documents, preserve edits and survive work
   await form(2).evaluate(()=>{for(let i=0;i<30;i++)document.querySelector('form')!.insertAdjacentHTML('beforeend','<label for="extra-'+i+'">Fictional extra review field '+i+'</label><input id="extra-'+i+'" required>');});
   await form(2).locator('#custom').fill('My later manual answer');
   await action(1,'open');
-  await panel.getByRole('button',{name:/^Review & remember \(/}).click();
+  await panel.evaluate(() => { const t = document.getElementById('sidebar-review-toggle')!; if (t.getAttribute('aria-expanded') === 'false') t.click(); });
   const remembered=panel.getByRole('list',{name:'Questions to review',exact:true}).getByRole('listitem').filter({hasText:'Fictional project reference'});
   await expect(remembered.getByRole('button',{name:'Save this answer',exact:true})).toBeVisible();
   await expect(panel.locator('#sidebar-fill').getByRole('list',{name:'Questions to review',exact:true})).toHaveCount(0);
