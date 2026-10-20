@@ -86,9 +86,11 @@ Create a free key at [Google AI Studio](https://aistudio.google.com/app/apikey) 
 and paste it into onboarding or Settings → Connections. The default model is `gemini-flash-latest`;
 you can change it there. Without a key, free-response questions are outlined for you to answer.
 
-Setup can fill empty profile fields from your PDF resume (**Fill my profile from resume**). The resume
+Setup can fill your profile from your PDF resume (**Fill my profile from resume**). The resume
 is read on your computer with [pdf.js](https://mozilla.github.io/pdf.js/): name, contact details, links,
-current position, education, experience, and skills. Contact details are reliable; the other sections are
+current and previous position, education, experience, and skills. Running it again with an updated resume
+adds jobs, schools, and skills that aren't saved yet, fills empty details of saved entries, and marks a saved
+current job (and the current position) as ended when the resume shows an end date; other typed values are kept. Contact details are reliable; the other sections are
 best-effort because layouts vary. If a section isn't found (or the PDF is a scan), you can have Gemini read
 just that part, which sends the resume text to Gemini. Work authorization, preferences, and
 self-identification are never inferred.

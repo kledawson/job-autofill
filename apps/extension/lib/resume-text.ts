@@ -2,6 +2,7 @@
 // education, experience, and skills are best-effort because resume layouts vary.
 import { sanitizeDraft, type ResumeDraft } from './resume';
 import { parseDegreeLine } from './degree';
+import { isJobLocation, splitJobLocation } from './job-location';
 import type { Education, Experience } from './types';
 
 // --- Dates -------------------------------------------------------------------
@@ -179,12 +180,6 @@ function parseEducation(lines: string[]): Education[] {
 const TITLE_RE =
   /\b(engineer|intern|developer|analyst|manager|assistant|associate|scientist|designer|researcher|lead|director|consultant|specialist|coordinator|founder|co-founder|president|officer|fellow|tutor|teacher|instructor|representative|administrator|architect|technician|programmer|strategist|head|member|volunteer|ambassador|captain|chair)\b/i;
 
-const TRAILING_LOCATION_RE = new RegExp(`^(.*?)[,\\s]+((?:[A-Z][A-Za-z.'-]+ ?){1,3}, *(?:${STATES})\\b(?: +\\d{5})?)$`);
-
-function isLocation(s: string): boolean {
-  return LOCATION_RE.test(s) && s.replace(LOCATION_RE, '').replace(/[\s,]/g, '').length < 3 || /^(remote|hybrid|on-?site)$/i.test(s.trim());
-}
-
 interface RawEntry {
   headers: string[];
   bullets: string[];
@@ -203,7 +198,7 @@ function parseExperience(lines: string[]): Experience[] {
       continue;
     }
     const prev = cur?.bullets[cur.bullets.length - 1];
-    const looksLikeHeader = hasDate || /\t/.test(line) || isLocation(line.split(SEPARATORS).pop() ?? '') || (line.length < 70 && TITLE_RE.test(line) && !/\.$/.test(line));
+    const looksLikeHeader = hasDate || /\t/.test(line) || isJobLocation(line.split(SEPARATORS).pop() ?? '') || (line.length < 70 && TITLE_RE.test(line) && !/\.$/.test(line));
     if (cur && prev !== undefined && !looksLikeHeader && (/^[a-z(]/.test(line) || !/[.!?]$/.test(prev))) {
       cur.bullets[cur.bullets.length - 1] = `${prev} ${line.trim()}`;
       continue;
@@ -237,15 +232,15 @@ function parseExperience(lines: string[]): Experience[] {
         .flatMap((s) => s.split(/\s+at\s+/))
         .map((s) => s.trim().replace(/^[,\s]+|[,\s]+$/g, ''))
         .filter(Boolean);
-      let location = segments.find(isLocation) ?? '';
-      segments = segments.filter((s) => !isLocation(s));
-      // "Acme Corp, San Francisco, CA" in one segment: the location is the tail, not part of the company.
+      let location = segments.find(isJobLocation) ?? '';
+      segments = segments.filter((s) => !isJobLocation(s));
+      // "Acme Corp, San Francisco, CA" or "Majorly, Remote" in one segment: the location is the tail, not part of the company.
       if (!location) {
         segments = segments.map((s) => {
-          const m = TRAILING_LOCATION_RE.exec(s);
-          if (!m || !m[1]!.trim()) return s;
-          location = m[2]!.trim();
-          return m[1]!.replace(/[,\s-]+$/, '').trim();
+          const split = splitJobLocation(s);
+          if (!split.location || location) return s;
+          location = split.location;
+          return split.name;
         });
       }
       // "Software Engineer, Acme Corp" on one line

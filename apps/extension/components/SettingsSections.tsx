@@ -182,8 +182,9 @@ function ResumeImport({
     <div className="rounded-lg bg-indigo-50/60 p-4">
       <p className="text-sm font-medium text-slate-800">Fill your profile from this resume</p>
       <p className="mt-0.5 text-sm text-slate-600">
-        Reads your resume on this computer and fills your name, contact details, links, current position, education,
-        experience, and skills. Only empty fields are filled.
+        Reads your resume on this computer and fills your name, contact details, links, current and previous position,
+        education, experience, and skills. Empty fields are filled and new jobs, schools, and skills are added. Your current
+        position moves to previous only when the resume shows that job has ended.
       </p>
       {!isPdf ? (
         <p className="mt-2 text-sm text-amber-800">This works with PDF resumes. Upload a PDF to use it.</p>
