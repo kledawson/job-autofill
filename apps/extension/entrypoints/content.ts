@@ -6,6 +6,7 @@ import { FillSession, waitForForm, type FillSummary } from '@/lib/autofill/engin
 import { sendToBackground, type ContentMessage, type PageStatus } from '@/lib/messages';
 import { ATS_MATCHES, platformFor } from '@/lib/platforms';
 import { readJobDetails } from '@/lib/job-details';
+import { fetchPostingDescription, findPostingLink } from '@/lib/posting-link';
 import { hasSubmissionErrors, readSubmissionEvidence } from '@/lib/submission-confirmation';
 import { isSubmitControl } from '@/lib/autofill/fill';
 import { pageReadiness, readinessDelay } from '@/lib/autofill/page-readiness';
@@ -171,8 +172,12 @@ export default defineContentScript({
             catch (err) { return { ok: false, error: err instanceof Error ? err.message : 'AI response unavailable.' }; }
           },
           onPhase: phase => { if (run === generation) showStatus({ title: 'Filling application…', lines: [phase], tone: 'working' }); },
-          jobDescription: async (info) =>
-            info.remote ? remote(sendToBackground('jobDescription', info.remote), 10000) : (await remote(adapter.fetchDescription?.(document) ?? Promise.resolve(''), 10000)) ?? '',
+          jobDescription: async (info) => {
+            const found = info.remote ? await remote(sendToBackground('jobDescription', info.remote), 10000) : (await remote(adapter.fetchDescription?.(document) ?? Promise.resolve(''), 10000)) ?? '';
+            if (found) return found;
+            // The form page shows no description: read it from the posting the form links back to on this site.
+            return remote(fetchPostingDescription(findPostingLink(document, location.href), location.href, controller.signal), 10000).catch(() => '');
+          },
           jobDetails: (target) => remote(sendToBackground('jobDetails', target), 10000),
           mapFields: (fields) => remote(sendToBackground('mapFields', { fields })),
           matchSavedAnswers: async (fields) => {
@@ -304,6 +309,16 @@ export default defineContentScript({
           session.showField(msg.token, msg.question); sendResponse({ ok: true });
         } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not locate this field.' }); }
         return false;
+      }
+      if (msg.type === 'draftRequest' || msg.type === 'applyDraft') {
+        void (async () => {
+          try {
+            if (!session || filling || msg.runId !== currentRunId) throw new Error('Wait for this fill to finish or refresh the application results.');
+            if (msg.type === 'draftRequest') sendResponse({ ok: true, request: await session.draftRequest(msg.token, msg.question) });
+            else sendResponse({ ok: true, note: session.applyDraft(msg.token, msg.question, msg.text) });
+          } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not use this field.' }); }
+        })();
+        return true;
       }
       if (msg.type === 'captureAnswer' || msg.type === 'applyAnswer' || msg.type === 'captureAnswers' || msg.type === 'validateCaptures' || msg.type === 'finishRemembering') {
         void (async () => {

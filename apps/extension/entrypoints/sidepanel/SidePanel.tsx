@@ -5,6 +5,10 @@ import { PresetSelector } from '@/components/Presets';
 import { ProfileAnswer } from '@/components/ProfileAnswer';
 import { useEffect, useRef, useState } from 'react';
 import { FieldReviewList } from '@/components/FieldReviewList';
+import { ChatDraftCard } from '@/components/ChatDraftCard';
+import { NeedsAnswerList } from '@/components/NeedsAnswerList';
+import { FreeResponsePicker } from '@/components/FreeResponsePicker';
+import { chatProviderFor, type ChatProvider } from '@/lib/chat-providers';
 import { browser } from 'wxt/browser';
 import { useLiveQuery, usePublicSettings } from '@/components/hooks';
 import { Button, cx, Input, Notice, Select } from '@/components/ui';
@@ -17,7 +21,7 @@ import { draftForCapture, MappingEditor } from '@/components/KnowledgeBase';
 import { confirmDelete } from '@/components/confirm-delete';
 import { BatchRemember } from '@/components/BatchRemember';
 import type { CapturedAnswer, MappingDraft, ReviewField } from '@/lib/remembered-mappings';
-import { applicationWorkflow } from '@/lib/application-workflow';
+import { applicationWorkflow, needReviewCount, showsFillResults } from '@/lib/application-workflow';
 import type { QueueItem } from '@/lib/application-queue';
 
 const STATUS_STYLE: Record<ApplicationStatus, string> = {
@@ -131,7 +135,8 @@ export default function SidePanel() {
   /** Set by Open and fill, whose new tab has no id yet: its details open once the application exists. */
   const [opened, setOpened] = useState(false);
   const here = tabId !== undefined && tabUrl ? { tabId, key: jobKey(tabUrl) } : undefined;
-  const showing = !!here && ((shown?.tabId === here.tabId && shown.key === here.key) || !!queue?.items.some(i => i.tabId === here.tabId && i.applicationId === current?.id) || !!current && ['Ready for review', 'Submitted'].includes(current.status));
+  // A reload clears what was filled: the page then looks as it did before the first fill.
+  const showing = !!here && (!current || showsFillResults(current)) && ((shown?.tabId === here.tabId && shown.key === here.key) || !!queue?.items.some(i => i.tabId === here.tabId && i.applicationId === current?.id) || !!current && ['Ready for review', 'Submitted'].includes(current.status));
   useEffect(() => {
     if (opened && current && here) {
       setShown(here);
@@ -184,16 +189,18 @@ export default function SidePanel() {
       <section aria-label="Fill this page" className="space-y-2">
         {settings && !settings.onboardingComplete && <p className="text-xs text-slate-600">New here? <button className="font-medium text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button> to add your profile.</p>}
         <PresetSelector onSelected={setPresetId} locked={queueItem ? queue?.presetName ?? '' : undefined} />
+        <FreeResponsePicker settings={settings} />
         <Button className="w-full" disabled={!presetId} onClick={fillThisPage}>
           {queueItem && ['opening', 'filling'].includes(queueItem.state) ? 'Restart autofill' : 'Fill this page'}
         </Button>
         {error && <Notice tone="error">{error}</Notice>}
       </section>
       </div>
+      <ChatDraftCard />
       <section id="current-page-review" aria-label="Current page review" className="scroll-mt-40 rounded-xl border border-slate-200 bg-white p-3 shadow-sm" hidden={!showing}>
         {showing &&
           (queueItem?.state === 'needs-action' && !current ? <PageStatusBox status={{ title: workflow.title, lines: [queueItem.note || 'Finish this step on the website, then retry autofill.'], tone: 'attention' }} /> : current ? (
-            <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl}
+            <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} chat={chatProviderFor(settings?.answerSource)}
               queueItem={queueItem}
               queueEntry={queueItem && queue ? { token: queue.token, itemId: queueItem.id, ready: queueItem.state === 'review', autoDetectSubmission: queue.autoDetectSubmission } : undefined} />
           ) : (
@@ -212,7 +219,7 @@ export default function SidePanel() {
           <p>{settings?.onboardingComplete ? profile && missingRequired(profile).length ? missingRequired(profile).length + ' required profile fields missing.' : 'Your profile is ready.' : 'Finish setup to add your profile.'}</p>
           {!settings?.onboardingComplete && <button className="text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button>}
           <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#profile' as never)} target="_blank" rel="noreferrer">Edit profile</a>
-          <p>AI responses: {settings?.hasGeminiKey ? 'Connected' : 'Not connected'}</p>
+          <p>Free responses: {chatProviderFor(settings?.answerSource) ? `Drafted in ${chatProviderFor(settings?.answerSource)!.name}` : settings?.answerSource === 'gemini-api' ? settings.hasGeminiKey ? 'Gemini API' : 'Gemini API (no key yet)' : 'Answered by you'}</p>
           <p>Google Sheets: {settings?.sheetUrl ? 'Connected' : 'Not connected'}</p>
           <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#connections' as never)} target="_blank" rel="noreferrer">Manage connections</a>
         </div>
@@ -387,11 +394,11 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
   );
 }
 
-function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean } }) {
+function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, chat }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean }; chat?: ChatProvider }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const workflow = applicationWorkflow(app, queueItem);
-  const attentionCount = app.fieldFeedback?.filter(f => ['missing', 'review', 'optional'].includes(f.status) || app.reviewFields?.some(r => r.token === f.token)).length ?? (app.reviewFields?.length || app.missingCount);
+  const attentionCount = needReviewCount(app);
   return (
     <div className="space-y-2">
       <div className="flex items-start justify-between gap-2">
@@ -412,6 +419,7 @@ function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry }
           <Stat value={attentionCount} label="Need review" color={attentionCount ? 'text-red-700' : 'text-slate-400'} />
         </div>
       )}
+      {!workflow.writing && app.status === 'Ready for review' && <NeedsAnswerList app={app} chat={chat} disabled={busy} />}
       {!workflow.writing && pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
       {!workflow.writing && app.resumeName && <p className="text-xs text-slate-500">Resume: {app.resumeName}</p>}
 

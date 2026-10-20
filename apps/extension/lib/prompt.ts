@@ -7,9 +7,57 @@ export const PROMPT_PLACEHOLDERS = [
   '{role}',
   '{profile}',
   '{characterLimit}',
+  '{jobUrl}',
 ] as const;
 
 export const DEFAULT_PROMPT_TEMPLATE = `You are filling out a job application on behalf of the candidate described below. Write the candidate's answer to one application question.
+
+Company: {company}
+Role: {role}
+Job posting: {jobUrl}
+
+Question:
+{question}
+
+Job description (copied from the posting):
+{jobDescription}
+
+Candidate profile:
+{profile}
+
+Rules:
+- Write in the first person, as the candidate, in a warm and specific but professional voice.
+- Only mention employers, schools, projects, skills, and numbers that appear in the candidate profile. Never invent experience, metrics, or credentials.
+- Connect the candidate's real experience to what the job description asks for.
+- Write 3 to 5 sentences, unless the question asks for a different length.
+- Stay under the question's character limit.
+- Output only the answer as plain text: no markdown, no headings, no placeholders, no preamble.`;
+
+const INTERIM_DEFAULT_PROMPT_TEMPLATE = `You are filling out a job application on behalf of the candidate described below. Write the candidate's answer to one application question.
+
+Company: {company}
+Role: {role}
+Job posting: {jobUrl}
+
+Question:
+{question}
+
+Job description (copied from the posting):
+{jobDescription}
+
+Candidate profile:
+{profile}
+
+Rules:
+- Write in the first person, as the candidate, in a warm and specific but professional voice.
+- Only mention employers, schools, projects, skills, and numbers that appear in the candidate profile. Never invent experience, metrics, or credentials.
+- Connect the candidate's real experience to what the job description asks for.
+- Write 3 to 5 sentences, unless the question asks for a different length.
+- Stay under the question's character limit of {characterLimit} characters.
+- Output only the answer as plain text: no markdown, no headings, no placeholders, no preamble.`;
+
+/** The default before the posting link and the 3–5 sentence rule; a saved copy of it is upgraded. */
+export const PREVIOUS_DEFAULT_PROMPT_TEMPLATE = `You are filling out a job application on behalf of the candidate described below. Write the candidate's answer to one application question.
 
 Company: {company}
 Role: {role}
@@ -37,6 +85,8 @@ export interface PromptContext {
   company: string;
   role: string;
   characterLimit: number;
+  /** The job posting's address, when known. */
+  jobUrl?: string;
 }
 
 export function renderPrompt(template: string, ctx: PromptContext, profile: Profile): string {
@@ -47,8 +97,11 @@ export function renderPrompt(template: string, ctx: PromptContext, profile: Prof
     '{role}': ctx.role || '(unknown role)',
     '{profile}': profileForPrompt(profile),
     '{characterLimit}': String(ctx.characterLimit),
+    '{jobUrl}': ctx.jobUrl || '(not available)',
   };
-  return template.replace(/\{(question|jobDescription|company|role|profile|characterLimit)\}/g, (m) => values[m] ?? m);
+  const rendered = template.replace(/\{(question|jobDescription|company|role|profile|characterLimit|jobUrl)\}/g, (m) => values[m] ?? m);
+  // A template written before {jobUrl} existed still names the posting, so a chat assistant can open it.
+  return ctx.jobUrl && !template.includes('{jobUrl}') ? `${rendered}\n\nJob posting: ${ctx.jobUrl}` : rendered;
 }
 
 /**
@@ -96,11 +149,51 @@ export function profileForPrompt(p: Profile): string {
 
 /** Trim a model answer to a hard limit, preferring to cut at a sentence end. */
 export function clampToLimit(text: string, limit: number): string {
-  const clean = text.replace(/^\s*(answer|response)\s*:\s*/i, '').replace(/\*\*/g, '').trim();
+  const clean = text.replace(/\*\*/g, '').replace(/^\s*(answer|response)\s*:\s*/i, '').trim();
   if (clean.length <= limit) return clean;
   const cut = clean.slice(0, limit);
-  const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  // One character more, so a sentence that ends exactly at the limit counts.
+  const ahead = clean.slice(0, limit + 1);
+  const lastStop = Math.max(ahead.lastIndexOf('. '), ahead.lastIndexOf('! '), ahead.lastIndexOf('? '));
   if (lastStop > limit * 0.4) return cut.slice(0, lastStop + 1);
   const lastSpace = cut.lastIndexOf(' ');
   return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).replace(/[,;:]$/, '');
+}
+
+export interface BatchQuestion {
+  question: string;
+  characterLimit: number;
+}
+
+/**
+ * One prompt for several free responses on the same application: the person's template with the questions
+ * numbered in place of {question}, plus a reply format that {@link splitBatchReply} can take apart.
+ */
+export function renderBatchPrompt(template: string, questions: BatchQuestion[], ctx: Omit<PromptContext, 'question' | 'characterLimit'>, profile: Profile): string {
+  const list = questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n');
+  const limit = Math.min(...questions.map(q => q.characterLimit));
+  const example = questions.map((_, i) => `Answer ${i + 1}\n<your answer to question ${i + 1}>`).join('\n\n');
+  return renderPrompt(template, { ...ctx, question: list, characterLimit: limit }, profile) +
+    `\n\nThere are ${questions.length} questions above. Write a separate answer to each one, following the rules above for every answer and keeping each under its question's character limit. ` +
+    `Format the reply exactly like this, with each marker on its own line and nothing before the first marker:\n\n${example}`;
+}
+
+const ANSWER_MARKER = /^[\s>#*_=-]*answer\s+(\d{1,2})\b[\s:.)*_=-]*$/gim;
+
+/** The answers in a reply to {@link renderBatchPrompt}, by question number; '' where an answer is missing. */
+export function splitBatchReply(text: string, count: number): string[] {
+  const answers = Array.from({ length: count }, () => '');
+  const marks = [...text.matchAll(ANSWER_MARKER)];
+  marks.forEach((m, i) => {
+    const n = Number(m[1]);
+    if (n < 1 || n > count || answers[n - 1]) return;
+    const end = i + 1 < marks.length ? marks[i + 1]!.index! : text.length;
+    answers[n - 1] = text.slice(m.index! + m[0].length, end).trim();
+  });
+  return answers;
+}
+
+/** Earlier built-in defaults; a template saved unchanged from one of them follows the current default. */
+export function isPreviousDefaultTemplate(template: string): boolean {
+  return template === PREVIOUS_DEFAULT_PROMPT_TEMPLATE || template === INTERIM_DEFAULT_PROMPT_TEMPLATE;
 }

@@ -80,6 +80,28 @@ side panel offers **Retry adding to sheet**.
 
 Connections shows the linked tab name. **Test connection** reads its headers through the extension’s OAuth connection without adding a row. A renamed tab keeps working because its numeric ID is saved; a deleted tab requires reconnecting. Existing connections without a tab ID use the first tab until tested or reconnected.
 
+## Free responses in your own chat app (optional)
+
+Pick who writes free responses in the **Free responses** menu above **Fill this page** (also in Settings →
+Connections): **None** (you answer them; the default for new installs), **Gemini API**, or, to avoid using
+API credits, ChatGPT, Claude, Gemini (website) or Perplexity. Filling then leaves those questions
+empty. They are listed under **Needs your answer** below the fill counts (click a question to jump to it).
+**Draft all N in ChatGPT** asks every free response in one prompt; pasting the whole reply fills a box per
+question for you to check. **Draft in ChatGPT** (for example) on one question copies your prompt (from the Prompt tab) and
+opens a new chat. If you allowed Job Autofill to access that site when choosing it, the prompt is already
+in the message box; otherwise paste it with ⌘V / Ctrl+V. Read it, press **Send**, copy the reply with
+the chat's copy button, paste it into the **Drafting in …** card and click **Use answer**. The answer goes
+into that question (if it is still empty), outlined amber for review, and you are taken back to the
+application.
+
+The prompt includes the job posting's link and its description; when the application form doesn't show the
+description, it is read from the posting the form links to on the same site.
+
+Job Autofill never presses Send, never reads the chat's replies, and never replaces text already in the
+message box, so you use the chat service the normal way under your own account. The prompt contains the
+question, the job description and your education, experience and skills, never your contact details or
+self-identification answers; it reaches the chat service only when you send it.
+
 ## Gemini (optional)
 
 Create a free key at [Google AI Studio](https://aistudio.google.com/app/apikey) without enabling billing,

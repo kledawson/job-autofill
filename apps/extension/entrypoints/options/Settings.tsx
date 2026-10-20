@@ -12,7 +12,7 @@ import {
   SkillsSection,
   WorkAuthSection,
 } from '@/components/ProfileSections';
-import { DataSection, DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
+import { AnswerSourceSection, DataSection, DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
 import { Button, SELECT_ARROW, cx } from '@/components/ui';
 import { mergeResumeDraft } from '@/lib/resume';
 import { PresetsSection } from '@/components/Presets';
@@ -138,6 +138,7 @@ export default function Settings() {
         )}
         {tab === 'connections' && settings && (
           <>
+            <AnswerSourceSection settings={settings} />
             <GeminiSection settings={settings} />
             <SheetsSection settings={settings} />
           </>

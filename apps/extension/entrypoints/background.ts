@@ -11,15 +11,20 @@ import { mappingPrompt, mappingSchema, parseMappings, questionKey } from '@/lib/
 import { parseCapture, parseMappingDraft, parseQuestionList, selectRememberedMappings, SavedAnswerIndex, scopeRank, parseReviewFields, parseSavedFields, applicationKey, type MappingContext } from '@/lib/remembered-mappings';
 import { sanitizeDraft, sectionRequest } from '@/lib/resume';
 import {
+  CHAT_DRAFT_KEY,
+  chatInsertKey,
   fileToPayload,
   pageStatusKey,
   type BackgroundMessage,
   type BackgroundMessages,
+  type ChatDraft,
   type ContentMessage,
+  type FillContext,
   type FilePayload,
 } from '@/lib/messages';
+import { CHAT_PROVIDERS, chatProviderFor, composerSelectors, insertPrompt, onProviderSite, type InsertResult } from '@/lib/chat-providers';
 import { detectPlatform, platformFor, isWebUrl, jobKey, toApplicationUrl } from '@/lib/platforms';
-import { clampToLimit, renderPrompt } from '@/lib/prompt';
+import { clampToLimit, renderBatchPrompt, renderPrompt, type PromptContext } from '@/lib/prompt';
 import { getSettings, updateSettings, type PublicSettings } from '@/lib/settings';
 import { appendApplication, SHEET_COLUMNS, parseSheetUrl, sheetTabId, testSheetConnection, sheetsConfigured } from '@/lib/sheets';
 import type { Application, StoredFile } from '@/lib/types';
@@ -289,6 +294,121 @@ async function pageContext(sender: Sender): Promise<MappingContext> {
     company: app?.frameId === (sender.frameId ?? 0) && jobKey(app.url) === jobKey(sender.url) ? app.company : '' };
 }
 
+/** A rendered prompt plus the preset's writing emphasis. */
+function answerPrompt(rendered: string, context: FillContext): string {
+  const guidance = context.preset?.emphasis?.trim();
+  return rendered +
+    (guidance ? '\n\nRole emphasis selected by the applicant:\n' + guidance + '\nUse this only to prioritize verified profile facts. Do not invent qualifications or change applicant facts.' : '');
+}
+
+// ---------------------------------------------------------------------------
+// Chat drafts: a free response written on a chat website the person uses. The extension opens the chat
+// and puts the prompt in its message box; the person sends it and pastes the reply back in the side panel.
+// ---------------------------------------------------------------------------
+
+const DRAFT_MAX_AGE = 2 * 60 * 60_000;
+/** How long an opened chat tab keeps waiting for its message box, e.g. while the person signs in. */
+const INSERT_WAIT = 10 * 60_000;
+
+async function activeChatDraft(id: unknown): Promise<ChatDraft> {
+  const draft = (await browser.storage.session.get(CHAT_DRAFT_KEY))[CHAT_DRAFT_KEY] as ChatDraft | undefined;
+  if (typeof id !== 'string' || !draft || draft.id !== id || Date.now() - draft.createdAt > DRAFT_MAX_AGE) throw new Error('This draft was replaced or has expired. Click Draft again.');
+  return draft;
+}
+
+async function updateChatDraft(id: string, patch: Partial<ChatDraft>) {
+  const draft = (await browser.storage.session.get(CHAT_DRAFT_KEY))[CHAT_DRAFT_KEY] as ChatDraft | undefined;
+  if (draft?.id === id) await browser.storage.session.set({ [CHAT_DRAFT_KEY]: { ...draft, ...patch } });
+}
+
+async function clearChatInserts(draftId?: string) {
+  const all = await browser.storage.session.get(null);
+  const keys = Object.keys(all).filter(k => k.startsWith('chatInsert:') && (!draftId || (all[k] as { draftId?: string })?.draftId === draftId));
+  if (keys.length) await browser.storage.session.remove(keys);
+}
+
+/** The application a draft belongs to, still open on its own tab and not finished. */
+async function draftApplication(id: number) {
+  if (!Number.isSafeInteger(id)) throw new Error('Invalid field request.');
+  const app = await db.applications.get(id);
+  if (!app) throw new Error('This application is no longer in your history. Fill it again, then draft the answer.');
+  if (app.status === 'Submitted' || app.status === 'Abandoned') throw new Error(`This application is marked ${app.status.toLowerCase()}, so its answers can no longer be changed here.`);
+  if (app.status === 'Filling') throw new Error('Autofill is still running on this application. Wait for it to finish, then try again.');
+  const tab = app.tabId === undefined ? undefined : await browser.tabs.get(app.tabId).catch(() => undefined);
+  if (!tab?.url) throw new Error('The application tab was closed. Open the application and click Fill this page again.');
+  if (applicationKey(tab.url) !== applicationKey(app.topUrl ?? app.url)) throw new Error('The application tab now shows a different page. Go back to the application and click Fill this page again.');
+  return app;
+}
+
+/** A posting address read from the page, only when it is a plain http(s) URL of reasonable length. */
+function safeJobUrl(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= 2000 && /^https?:\/\/[^\s]+$/i.test(value) ? value : undefined;
+}
+
+function parseDraftRequest(value: unknown): PromptContext {
+  const r = value as PromptContext | undefined;
+  const text = (v: unknown, max: number) => typeof v === 'string' && v.length <= max;
+  if (!r || !text(r.question, 700) || !r.question.trim() || !text(r.company, 300) || !text(r.role, 300) || !text(r.jobDescription, 20000) ||
+    !Number.isSafeInteger(r.characterLimit) || r.characterLimit < 1 || r.characterLimit > 20000) throw new Error('Invalid question details.');
+  const jobUrl = safeJobUrl(r.jobUrl);
+  return { question: r.question, company: r.company, role: r.role, jobDescription: r.jobDescription, characterLimit: r.characterLimit, ...(jobUrl ? { jobUrl } : {}) };
+}
+
+/**
+ * A reload of an application page clears what was filled, so the side panel stops showing that fill's results
+ * (as before the first fill). Moving on to another page, such as a confirmation, keeps them: the person may
+ * still need to confirm the submission. Reads only the page's own load timing.
+ */
+async function noticePageReload(tabId: number, url: string | undefined) {
+  if (!url || !isWebUrl(url)) return;
+  const apps = await db.applications.where('tabId').equals(tabId).toArray();
+  const app = apps.filter(a => !a.pageCleared && (a.status === 'Ready for review' || a.status === 'Filling') && jobKey(a.topUrl ?? a.url) === jobKey(url)).at(-1);
+  if (!app?.id || !(await canAccess(url))) return;
+  const [run] = await browser.scripting.executeScript({
+    target: { tabId },
+    func: () => ({ loadedAt: performance.timeOrigin, type: (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined)?.type ?? '' }),
+  }).catch(() => []);
+  const page = run?.result as { loadedAt: number; type: string } | undefined;
+  // A page loaded before the fill finished is the page that was filled (or the fill is still running on it).
+  if (!page || !(page.loadedAt > Math.max(app.filledAt, app.fillStartedAt ?? 0)) || (page.type !== 'reload' && url !== (app.topUrl ?? app.url))) return;
+  const cleared = await db.transaction('rw', db.applications, async () => {
+    const now = await db.applications.get(app.id!);
+    if (!now || now.runId !== app.runId || now.status !== app.status || now.tabId !== tabId || now.pageCleared) return false;
+    await db.applications.update(app.id!, { pageCleared: true });
+    return true;
+  });
+  if (!cleared) return;
+  await browser.storage.session.remove(pageStatusKey(tabId));
+  const draft = (await browser.storage.session.get(CHAT_DRAFT_KEY))[CHAT_DRAFT_KEY] as ChatDraft | undefined;
+  if (draft?.applicationId === app.id) { await browser.storage.session.remove(CHAT_DRAFT_KEY); await clearChatInserts(draft.id); }
+}
+
+const insertingTabs = new Set<number>();
+
+/** Puts the active draft's prompt in a chat tab opened for it, once that tab shows the chat (not a sign-in page). */
+async function insertChatPrompt(tabId: number, url: string | undefined) {
+  const key = chatInsertKey(tabId);
+  const pending = (await browser.storage.session.get(key))[key] as { draftId: string; expires: number } | undefined;
+  if (!pending || insertingTabs.has(tabId)) return;
+  const draft = (await browser.storage.session.get(CHAT_DRAFT_KEY))[CHAT_DRAFT_KEY] as ChatDraft | undefined;
+  if (!draft || draft.id !== pending.draftId || Date.now() > pending.expires) { await browser.storage.session.remove(key); return; }
+  const provider = CHAT_PROVIDERS[draft.provider];
+  if (!onProviderSite(provider, url)) return;
+  insertingTabs.add(tabId);
+  try {
+    const [run] = await browser.scripting.executeScript({ target: { tabId }, func: insertPrompt, args: [draft.prompt, composerSelectors(provider), 15000] });
+    const result = run?.result as InsertResult | undefined;
+    if (!result || result === 'busy') return;
+    // No message box yet (still signing in, or a redesign): keep waiting for the next page load.
+    if (result !== 'missing') await browser.storage.session.remove(key);
+    await updateChatDraft(draft.id, { insertResult: result });
+  } catch (err) {
+    console.warn('[Job Autofill] could not put the prompt in the chat', errorText(err));
+  } finally {
+    insertingTabs.delete(tabId);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Message handlers
 // ---------------------------------------------------------------------------
@@ -440,6 +560,93 @@ const handlers: Handlers = {
     return { ok: true, count: counts.memoryCount, profileCount: counts.profileCount, note: counts.profileCount + ' profile field' + (counts.profileCount === 1 ? '' : 's') + ' updated; ' + counts.memoryCount + ' memor' + (counts.memoryCount === 1 ? 'y' : 'ies') + ' saved. ' + (finished?.ok ? 'Your page answers were kept.' : 'The page changed; refresh the review list with Fill this page.') };
   },
 
+  async startChatDraft(req, sender) {
+    requireExtensionPage(sender);
+    const settings = await getSettings();
+    const provider = chatProviderFor(settings.answerSource);
+    if (!provider) throw new Error('Choose a chat website for free responses in Settings → Connections first.');
+    if (!Array.isArray(req.tokens) || !req.tokens.length || req.tokens.length > 20 || req.tokens.some(t => typeof t !== 'string') || new Set(req.tokens).size !== req.tokens.length) throw new Error('Choose up to 20 questions to draft.');
+    const app = await draftApplication(req.applicationId);
+    const fields = req.tokens.map(token => app.fieldFeedback?.find(f => f.token === token));
+    if (fields.some(f => !f?.draft)) throw new Error('A question already has an answer or changed on the page. Click Fill this page to refresh it.');
+    const requests: PromptContext[] = [];
+    for (const field of fields) {
+      const result = await browser.tabs.sendMessage(app.tabId!, { type: 'draftRequest', token: field!.token, question: field!.label, runId: app.runId } satisfies ContentMessage, { frameId: app.frameId ?? 0 }).catch(() => null);
+      if (!result?.ok) throw new Error(result?.error ?? 'The application page is not ready. Fill it again first.');
+      requests.push(parseDraftRequest(result.request));
+    }
+    const run = app.runId ? await db.fillRuns.get(app.runId) : undefined;
+    const context = run && run.tabId === app.tabId ? run.context : await buildPresetContext();
+    const [first] = requests;
+    const prompt = requests.length === 1 ? answerPrompt(renderPrompt(settings.promptTemplate, first!, context.profile), context)
+      : answerPrompt(renderBatchPrompt(settings.promptTemplate, requests, { company: first!.company, role: first!.role, jobDescription: first!.jobDescription, jobUrl: first!.jobUrl }, context.profile), context);
+    const draft: ChatDraft = {
+      id: crypto.randomUUID(), applicationId: app.id!, questions: fields.map((f, i) => ({ token: f!.token, question: f!.label, required: f!.required, number: i + 1 })),
+      ...(requests.length > 1 ? { batch: true } : {}), company: app.company, role: app.role, provider: provider.id, prompt, createdAt: Date.now(),
+    };
+    await clearChatInserts();
+    await browser.storage.session.set({ [CHAT_DRAFT_KEY]: draft });
+    return { ok: true, draft };
+  },
+
+  async openChatDraft(req, sender) {
+    requireExtensionPage(sender);
+    const draft = await activeChatDraft(req.draftId);
+    const provider = CHAT_PROVIDERS[draft.provider];
+    const allowed = await browser.permissions.contains({ origins: provider.origins }).catch(() => false);
+    const app = await db.applications.get(draft.applicationId);
+    const opener = app?.tabId !== undefined ? await browser.tabs.get(app.tabId).catch(() => undefined) : undefined;
+    const tab = await browser.tabs.create({ url: provider.url, active: true, ...(opener ? { windowId: opener.windowId, index: opener.index + 1, openerTabId: opener.id } : {}) });
+    await updateChatDraft(draft.id, { inserting: allowed, insertResult: undefined });
+    if (allowed && tab.id !== undefined) {
+      await browser.storage.session.set({ [chatInsertKey(tab.id)]: { draftId: draft.id, expires: Date.now() + INSERT_WAIT } });
+      const loaded = await browser.tabs.get(tab.id).catch(() => undefined);
+      if (loaded?.status === 'complete') void insertChatPrompt(tab.id, loaded.url);
+    }
+    return { ok: true, inserting: allowed };
+  },
+
+  async useChatAnswer(req, sender) {
+    requireExtensionPage(sender);
+    const draft = await activeChatDraft(req.draftId);
+    if (!Array.isArray(req.answers) || !req.answers.length || req.answers.length > draft.questions.length) throw new Error('Paste a reply first.');
+    const answers = req.answers.map(a => {
+      const question = draft.questions.find(q => q.token === a?.token);
+      if (!question || typeof a.answer !== 'string' || !a.answer.trim() || a.answer.length > 20000) throw new Error('Paste a reply for each answer you use (up to 20,000 characters).');
+      return { ...question, answer: a.answer };
+    });
+    if (new Set(answers.map(a => a.token)).size !== answers.length) throw new Error('Invalid answers.');
+    // The stored review list may already hold a newer token for a question (the page redrew it, or it was
+    // filled again); the page session finds it by the draft's token or its exact wording.
+    const app = await draftApplication(draft.applicationId);
+    const frame = { frameId: app.frameId ?? 0 };
+    const results: { token: string; ok: boolean; note: string }[] = [];
+    for (const a of answers) {
+      const result = await browser.tabs.sendMessage(app.tabId!, { type: 'applyDraft', token: a.token, question: a.question, text: a.answer, runId: app.runId } satisfies ContentMessage, frame).catch(() => null);
+      const note = typeof result?.note === 'string' ? result.note : typeof result?.error === 'string' ? result.error : 'The application page stopped responding. Refresh it, click Fill this page, then use the answer again (your reply is still here).';
+      results.push({ token: a.token, ok: !!result?.ok, note: note.slice(0, 300) });
+    }
+    const used = results.filter(r => r.ok);
+    const remaining = draft.questions.filter(q => !used.some(r => r.token === q.token));
+    if (remaining.length) await updateChatDraft(draft.id, { questions: remaining });
+    else { await browser.storage.session.remove(CHAT_DRAFT_KEY); await clearChatInserts(draft.id); }
+    const last = answers.find(a => a.token === used.at(-1)?.token);
+    if (last) {
+      const tab = await browser.tabs.update(app.tabId!, { active: true }).catch(() => undefined);
+      if (tab?.windowId !== undefined) await browser.windows.update(tab.windowId, { focused: true }).catch(() => undefined);
+      await browser.tabs.sendMessage(app.tabId!, { type: 'showField', token: last.token, question: last.question, runId: app.runId } satisfies ContentMessage, frame).catch(() => undefined);
+    }
+    return { ok: true, results };
+  },
+
+  async cancelChatDraft(req, sender) {
+    requireExtensionPage(sender);
+    const draft = (await browser.storage.session.get(CHAT_DRAFT_KEY))[CHAT_DRAFT_KEY] as ChatDraft | undefined;
+    if (draft && draft.id === req.draftId) await browser.storage.session.remove(CHAT_DRAFT_KEY);
+    await clearChatInserts(typeof req.draftId === 'string' ? req.draftId : undefined);
+    return { ok: true };
+  },
+
   async applySavedAnswer(req, sender) {
     const { app, context } = await applicationForCapture(req.applicationId, req.token, sender);
     const mapping = (await getRememberedMappings()).find(m => m.id === req.mappingId);
@@ -505,9 +712,7 @@ const handlers: Handlers = {
     try {
       const context = req.runId ? (await ownedRun(req.runId, sender)).context : await buildPresetContext();
       if (context.queue && req.runId) await queueOwns(req.runId, sender, true);
-      const guidance = context.preset?.emphasis?.trim();
-      const prompt = renderPrompt(settings.promptTemplate, req, context.profile) +
-        (guidance ? '\n\nRole emphasis selected by the applicant:\n' + guidance + '\nUse this only to prioritize verified profile facts. Do not invent qualifications or change applicant facts.' : '');
+      const prompt = answerPrompt(renderPrompt(settings.promptTemplate, { ...req, jobUrl: safeJobUrl(req.jobUrl) }, context.profile), context);
       const text = await generateText(settings.geminiApiKey, settings.geminiModel, prompt, AbortSignal.timeout(45000));
       if (req.runId) await ownedRun(req.runId, sender);
       return { ok: true, answer: clampToLimit(text, req.characterLimit) };
@@ -566,7 +771,7 @@ const handlers: Handlers = {
     const key = jobKey(req.url);
     const existing = await db.applications.where('jobKey').equals(key).last();
     if (run?.id && sender.tab?.id !== undefined) await bindSubmissionTab(sender.tab.id, run.id);
-    const patch = { submitIntentAt: undefined, submissionIssue: undefined, presetId: preset?.id, presetName: preset?.name, presetRevision: preset?.revision, resumeName: run?.context.resume?.name, runId: run?.id, company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [], fieldFeedback: [], memoryQuestions: [] };
+    const patch = { submitIntentAt: undefined, submissionIssue: undefined, presetId: preset?.id, presetName: preset?.name, presetRevision: preset?.revision, resumeName: run?.context.resume?.name, runId: run?.id, company: req.company, role: req.role, tabId: sender.tab?.id, url: req.url, frameId: sender.frameId ?? 0, topUrl: sender.tab?.url, reviewFields: [], fieldFeedback: [], memoryQuestions: [], pageCleared: undefined, fillStartedAt: Date.now() };
     if (existing?.id && existing.status !== 'Submitted') {
       await db.applications.update(existing.id, { ...patch, status: 'Filling' });
       if (run?.context.queue && req.runId) await queueStarted(req.runId, sender, existing.id);
@@ -992,7 +1197,15 @@ export default defineBackground(() => {
     await injectContentScript(tabId).catch((err) => console.warn('[Job Autofill] could not load into the opened tab', errorText(err)));
   });
 
+  // A chat tab opened for a draft gets the prompt once the chat itself (not a sign-in page) has loaded.
+  browser.tabs.onUpdated.addListener((tabId, change, tab) => {
+    if (change.status !== 'complete') return;
+    void insertChatPrompt(tabId, tab.url);
+    void noticePageReload(tabId, tab.url).catch(err => console.warn('[Job Autofill] could not check the reloaded page', errorText(err)));
+  });
+
   browser.tabs.onRemoved.addListener(async (tabId) => {
+    await browser.storage.session.remove(chatInsertKey(tabId));
     await forgetSubmissionTab(tabId);
     await queueRemoved(tabId);
     fillingFrames.delete(tabId);

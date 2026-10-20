@@ -19,9 +19,13 @@ describe('prompt', () => {
       { question: 'Why Acme?', jobDescription: 'Build things', company: 'Acme', role: 'SWE', characterLimit: 500 },
       p,
     );
-    expect(out).not.toMatch(/\{(question|jobDescription|company|role|profile|characterLimit)\}/);
+    expect(out).not.toMatch(/\{(question|jobDescription|company|role|profile|characterLimit|jobUrl)\}/);
     expect(out).toContain('Why Acme?');
-    expect(out).toContain('under 500 characters');
+    // Limits differ per application, so the default rule names the question's limit rather than a number.
+    expect(out).toContain("- Stay under the question's character limit.\n");
+    expect(out).not.toContain('500');
+    expect(out).toContain('Write 3 to 5 sentences');
+    expect(out).toContain('Job posting: (not available)');
     const profileText = profileForPrompt(p);
     expect(profileText).toContain('Acme Corp');
     expect(profileText).not.toMatch(/Female|Asian|veteran|disability/i);

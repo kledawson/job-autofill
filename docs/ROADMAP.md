@@ -31,6 +31,23 @@ manual fallback and independent Sheets retry. Recovery and release hardening rem
 
 Future work: refine the supported-form benchmark and measure coverage and review time.
 
+## Implemented chat-website free responses
+
+- A Free responses menu above Fill this page (and in Settings): None (first-time default), Gemini API,
+  ChatGPT, Claude, Gemini (web) or Perplexity.
+- Need review counts required questions only; optional ones are listed and outlined yellow.
+- **Draft in …** per free response: prompt template rendered locally, copied, and placed in the chat's empty
+  message box when its optional site permission is granted. The person sends it and pastes the reply.
+- A draft card shown on every tab; **Use answer** fills only the still-empty field as an amber AI draft.
+
+- **Draft all** asks every free response in one prompt; the pasted reply is split into one box per question.
+- Clickable Need review list under the fill counts; answered questions leave it.
+- Reloading an application page hides that fill's results until the next fill.
+- Prompts include the posting link and, when the form lacks it, the description from the same-site posting.
+  The default asks for 3–5 sentences within the question's character limit.
+
+Later: Copilot once its new-chat address settles.
+
 ## Implemented application presets
 
 - Role presets with shared personal facts, independent resumes/cover letters and portfolio links.

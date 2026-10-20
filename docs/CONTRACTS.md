@@ -335,3 +335,31 @@ submissionIntent, submissionContext, submissionBlocked and submissionConfirmed a
 Application records add optional submitIntentAt, submissionIssue (validation), submissionSource (user or a supported platform confirmation), and sheetSyncPending. Old records remain valid; no IndexedDB index/version migration is needed for these optional properties. Duplicate completion preserves the original timestamp/source. A new fill clears old intent/issues. Browser-session markers are not durable ownership across browser restarts.
 
 markSubmitted, retrySheet and closeSubmittedTab require trusted extension pages and positive integer application IDs. Manual confirmation also settles its current queue item when applicable. retrySheet never changes application status/date or closes a tab. Explicit standalone closure requires Submitted status, the current session/run marker and a supported same-job URL. Queue closure retains its owned-tab checks. Existing nonempty sheets require a Job Posting URL header for retry deduplication; canonical posting identity is checked before writing only blank cells. Pending sync survives worker interruption and does not block queue capacity. No new permissions, dependency or export format is introduced.
+
+## Chat-website draft contract
+
+- `Settings.answerSource` is `'none'`, `'gemini-api'` or a `ChatProviderId` (`chatgpt`, `claude`, `gemini`,
+  `perplexity`). Unset or unknown stored values read back as `'gemini-api'` when a key is saved, otherwise
+  `'none'`. `FillContext.freeResponses: 'none'` makes fills skip free responses. `FillContext.chatProvider` is the chosen
+  provider's display name; queue snapshots omit it and each attempt reads the current setting.
+- `FieldFeedback.draft` is optional and only `true`: an empty text/textarea free response, offered for
+  drafting whenever a chat website is chosen. Older records without it remain valid.
+- `startChatDraft({applicationId, tokens})` (1–20 distinct tokens; more than one builds one numbered prompt),
+  `openChatDraft({draftId})`, `useChatAnswer({draftId, answers: [{token, answer}]})` → `{results: [{token, ok, note}]}`
+  and `cancelChatDraft({draftId})` accept trusted extension pages only. Start requires a Ready for review
+  application on its unchanged tab and a `draft` feedback token; use requires the same application and tab
+  but not the stored token. Answers are 1–20,000 characters.
+- Content messages `draftRequest` and `applyDraft` are bound to the live fill run and token/question.
+  `draftRequest` returns `{question, characterLimit, company, role, jobDescription}` (validated by the
+  worker, never page answers). `applyDraft` writes only an empty free response and returns a short note. Both fall back to a single
+  free response with the same wording when the page redrew the question under a new token.
+- Session storage `chatDraft` holds one `ChatDraft` (`id`, `applicationId`, `questions: [{token, question,
+  required, number}]`, optional `batch`, company/role, `provider`, rendered `prompt`, `inserting`,
+  `insertResult`, `createdAt`; two-hour lifetime). Used questions are removed; the draft ends with the last.
+- Application records add optional `pageCleared` (page reloaded after this fill) and `fillStartedAt`. Older
+  records remain valid; `fillStarted` resets both.
+  `chatInsert:<tabId>` marks a chat tab opened for that draft (`{draftId, expires}`, ten minutes). Both are
+  cleared by use/cancel/tab close and Delete all local data. Session storage is not readable by page scripts.
+- Optional host permissions are the provider's own origins, requested from a click; no manifest change.
+- `AnswerRequest` and draft requests add optional `jobUrl`; the worker keeps it only as a plain http(s) URL of
+  up to 2,000 characters. `{jobUrl}` is a prompt placeholder.
