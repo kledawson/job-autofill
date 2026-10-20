@@ -208,14 +208,50 @@ function shortHeading(doc: Document): string {
   return h1.length > 0 && h1.length < 120 ? h1 : '';
 }
 
-/** "Software Engineer at Acme | Handshake" or "Engineer - Acme - Handshake" → role and company; blanks when the title doesn't say. */
+/** Job boards and applicant tracking systems: they host the posting but are not the employer. */
+const JOB_BOARD = /^(?:handshake|indeed|glassdoor|linkedin|ziprecruiter|monster|simplyhired|wellfound|angellist|built ?in(?: \w+)?|dice|careerbuilder|greenhouse|lever|ashby|workday|smartrecruiters|icims|jobvite|taleo|workable|bamboohr|recruitee|breezy(?: hr)?|jazzhr|teamtailor|personio|myworkdayjobs|ripplematch|wayup|otta|welcome to the jungle)$/i;
+
+/**
+ * Title parts that describe the job rather than name the employer: "2027 (US)", "Job ID: 10583340",
+ * "Austin, TX", "Remote", "Early Career", "Full-time".
+ */
+function notEmployer(part: string): boolean {
+  return (
+    /\b(?:19|20)\d{2}\b/.test(part) ||
+    /\b(?:job|req(?:uisition)?|posting)\s*(?:id|#|no\.?|number)\b|#\s*\d|\b[A-Z]{1,3}[-_]?\d{4,}\b/i.test(part) ||
+    /^\([^)]*\)$|^(?:US|USA|UK|EU|EMEA|APAC|LATAM|AMER|NA)$/.test(part) ||
+    /,\s*(?:[A-Z]{2}|USA?|United States|United Kingdom|UK|Canada|India|Germany|Ireland|Remote)\s*(?:,|$)/.test(part) ||
+    /^(?:remote|hybrid|on-?site|in[- ]office)\b/i.test(part) ||
+    /\b(?:intern(?:ship)?s?|co-?op|early career|new grad(?:uate)?|entry[- ]level|full[- ]time|part[- ]time|contract(?:or)?|temporary|seasonal|(?:summer|fall|autumn|winter|spring)(?: term)?)\b/i.test(part) ||
+    /^(?:careers?|jobs?|apply|application|job (?:details|posting|description)|open positions?|search jobs)$/i.test(part)
+  );
+}
+
+/**
+ * An employer name as a title part or site name states it: "Careers at Airbnb" → "Airbnb", "Amazon.jobs" → "Amazon",
+ * "Stripe Careers" → "Stripe". Blank for job boards and for parts that describe the job instead.
+ */
+export function employerName(raw: string): string {
+  const name = raw
+    .trim()
+    .replace(/^(?:careers?|jobs?|work|working|join us|life)\s+(?:at|with|for)\s+/i, '')
+    .replace(/\.(?:jobs|careers|com|io|co|ai|org|net)$/i, '')
+    .replace(/\s+(?:careers?|jobs?|job board|careers? site|recruiting|talent)$/i, '')
+    .trim();
+  return name && !JOB_BOARD.test(name) && !notEmployer(name) ? name : '';
+}
+
+/**
+ * "Software Engineer at Acme | Handshake" or "Engineer - Acme - Handshake" → role and company; blanks when the title doesn't say.
+ * The employer is the last part that names one, so "Engineer, Early Career - 2027 (US) - Job ID: 1 | Amazon.jobs" reads Amazon
+ * and "Engineer, Early Career - 2027 (US)" reads no company at all.
+ */
 export function splitTitle(title: string): { role: string; company: string } {
-  const parts = title.split(/\s+[|–—]\s+|\s+-\s+/).map((p) => p.trim()).filter((p) => p && !/^(handshake|jobs?|careers?|apply|application)$/i.test(p));
+  const parts = title.split(/\s+[|–—]\s+|\s+-\s+/).map((p) => p.trim()).filter((p) => p && !JOB_BOARD.test(p) && !/^(jobs?|careers?|apply|application)$/i.test(p));
   const first = parts[0] ?? '';
   const at = /^(.+?)\s+at\s+(.+)$/i.exec(first);
-  if (at) return { role: at[1]!.trim(), company: at[2]!.trim() };
-  // "Careers at Airbnb", "Jobs at Acme": the employer is what follows.
-  const company = (parts[1] ?? '').replace(/^(?:careers?|jobs?|work|working)\s+(?:at|with|for)\s+/i, '');
+  if (at && employerName(at[2]!)) return { role: at[1]!.trim(), company: employerName(at[2]!) };
+  const company = parts.slice(1).reverse().map(employerName).find(Boolean) ?? '';
   return { role: first, company };
 }
 
@@ -279,9 +315,10 @@ const other: Adapter = {
       data?.description ||
       longText(doc, '[itemprop="description"], [class*="job-description" i], [class*="jobDescription" i], [id*="job-description" i], [id*="jobDescription" i]').slice(0, 8000);
     const fromTitle = splitTitle(meta(doc, 'og:title') || doc.title);
-    const siteName = meta(doc, 'og:site_name');
-    // A site name like "Handshake" names the job board, not the employer, so a company in the title wins.
-    const company = data?.company || fromTitle.company || siteName || companyFromHost(doc.location.hostname);
+    // og:title often names only the job ("Engineer - 2027 (US)") while the tab title adds the employer ("... | Amazon.jobs").
+    const titleCompany = fromTitle.company || splitTitle(doc.title).company;
+    // A site name like "Handshake" names the job board, not the employer, so it never counts as the company.
+    const company = data?.company || titleCompany || employerName(meta(doc, 'og:site_name')) || companyFromHost(doc.location.hostname);
     return {
       role: data?.title || shortHeading(doc) || fromTitle.role || meta(doc, 'og:title') || title,
       company,
@@ -371,7 +408,7 @@ const workday: Adapter = {
     return {
       location: segments.length > 1 ? workdayLocation(segments[0]!) : '',
       role: text(doc, '[data-automation-id="jobPostingHeader"]') || fromPath || shortHeading(doc),
-      company: meta(doc, 'og:site_name') || (tenant ? tenant.charAt(0).toUpperCase() + tenant.slice(1) : ''),
+      company: employerName(meta(doc, 'og:site_name')) || (tenant ? tenant.charAt(0).toUpperCase() + tenant.slice(1) : ''),
       description: longText(doc, '[data-automation-id="jobPostingDescription"]'),
     };
   },
