@@ -961,6 +961,14 @@ export function comboboxSelectedValues(field: ScannedField): string[] {
   }).filter(Boolean);
 }
 
+/** A combobox's committed answer: its React-select labels, or the closed box's own text where the widget keeps the choice there (Rippling's location search). */
+export function comboboxCommittedValues(field: ScannedField): string[] {
+  const selected = comboboxSelectedValues(field);
+  if (selected.length) return selected;
+  const shown = displayedValue(field).trim();
+  return shown ? [shown] : [];
+}
+
 export function comboboxHasValue(field: ScannedField): boolean {
   return comboboxSelectedValues(field).length > 0 || !!(field.el as HTMLInputElement).value.trim();
 }
@@ -1073,7 +1081,7 @@ export async function fillCombobox(
   // Give the page time to commit the choice to its own state before the next field is touched.
   await sleep(timing.settle);
   if (opts.search && opts.pick) {
-    const selected = comboboxSelectedValues(field);
+    const selected = comboboxCommittedValues(field);
     return selected.length === 1 && opts.pick(selected) === 0 ? 'filled' : 'failed';
   }
   return comboboxHasValue(field) || !input.isConnected ? 'filled' : 'failed';

@@ -1,6 +1,6 @@
 import type { ScannedField } from './scan';
 import { scanFields } from './scan';
-import { clickSafely, closeMenu, comboboxContainer, comboboxSelectedValues, displayedValue,
+import { clickSafely, closeMenu, comboboxCommittedValues, comboboxContainer, comboboxSelectedValues, displayedValue,
   indicatorFor, dispatchSelectionChange, openSelectionMenu, setNativeValueKeepFocus, sleep, timing } from './fill';
 import { isPlaceholderOption } from './match';
 import { resolveRememberedSelections, sameSelections } from '../selection-matching';
@@ -31,7 +31,8 @@ export function selectionMode(field: ScannedField): SelectionMode {
 export function selectedValues(field: ScannedField): string[] {
   if (field.kind === 'select' && (field.el as HTMLSelectElement).multiple) return Array.from((field.el as HTMLSelectElement).options).filter(o => o.selected && !isPlaceholderOption(o.text)).map(o => o.text.trim());
   if (field.kind === 'checkboxGroup') return field.members.flatMap((m, i) => (m as HTMLInputElement).checked ? [field.options[i]!] : []);
-  if (field.kind === 'combobox') return comboboxSelectedValues(field);
+  // A multiple-choice box's typed text is only a search; a single-choice box may keep its answer as that text.
+  if (field.kind === 'combobox') return selectionMode(field) === 'multiple' ? comboboxSelectedValues(field) : comboboxCommittedValues(field);
   const value = displayedValue(field).trim();
   return value ? [value] : [];
 }

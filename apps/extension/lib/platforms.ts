@@ -108,6 +108,19 @@ export function postingUrl(raw: string): string {
     url.search = '';
   } else if ((platform === 'lever' && parts[2] === 'apply') || (platform === 'ashby' && parts[2] === 'application')) {
     url.pathname = '/' + parts.slice(0, 2).join('/');
+  } else if (!platform) {
+    // Company boards put the form one route below the posting ("/jobs/<id>/apply?jobId=<id>&step=application").
+    // The posting is the path before it; query values that only repeat that path, or name the form step, go too.
+    const form = parts.findIndex((p, i) => i > 0 && /^(apply|application)$/i.test(p));
+    if (form > 0 && form >= parts.length - 2) {
+      const posting = parts.slice(0, form);
+      url.pathname = '/' + posting.join('/');
+      const decode = (p: string) => { try { return decodeURIComponent(p); } catch { return p; } };
+      const kept = new Set(posting.map((p) => decode(p).toLowerCase()));
+      for (const [key, value] of [...url.searchParams]) {
+        if (/^step$/i.test(key) || kept.has(value.toLowerCase())) url.searchParams.delete(key);
+      }
+    }
   }
   return url.href;
 }

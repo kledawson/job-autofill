@@ -176,6 +176,13 @@ export function isHidden(el: HTMLElement): boolean {
   return false;
 }
 
+/** A styled choice hides its native radio or checkbox inside the drawn row people click (Rippling's role="radio"); the input still takes the answer. */
+function shownByStandIn(el: HTMLElement): boolean {
+  if (!/^(radio|checkbox)$/i.test(el.getAttribute('type') ?? '')) return false;
+  const standIn = el.parentElement?.closest<HTMLElement>('[role="radio"], [role="checkbox"]');
+  return !!standIn && !isHidden(standIn);
+}
+
 function isDisplayNone(el: HTMLElement): boolean {
   for (let node: HTMLElement | null = el, depth = 0; node && depth < 16; depth++, node = composedParent(node)) {
     if (node.hidden || node.ownerDocument.defaultView?.getComputedStyle(node).display === 'none') return true;
@@ -350,6 +357,11 @@ export function findLabel(el: HTMLElement, group: HTMLElement[] = [el]): { text:
   // A real wrapping label is stronger evidence than nearby headings or prior labels.
   const wrap = el.closest('label');
   if (wrap && !isGroup && wrap.querySelectorAll(CONTROLS).length === 1) {
+    // A drop zone label names its question by reference (Rippling: "Résumé"); its own text is the
+    // "Drop or select" button. The upload count read out beside it is status, not the question.
+    const named = (wrap.getAttribute('aria-labelledby') ?? '').split(/\s+/).map((id) => doc.getElementById(id))
+      .map((e) => (e && e !== wrap ? textOf(e) : '')).filter((t) => t && !/^(total\s+)?\d+\s+files?\s+selected$/i.test(t));
+    if (withoutPrompt(named.join(' '))) return { text: cleanLabel(named.join(' ')), labelEl: wrap };
     const caption = Array.from(wrap.querySelectorAll(LABELISH)).find(node => !node.querySelector(CONTROLS));
     const t = textOf(caption ?? wrap);
     if (t) return { text: t, labelEl: wrap };
@@ -408,6 +420,9 @@ function optionText(input: HTMLInputElement): string {
   }
   const wrap = input.closest('label');
   if (wrap && textOf(wrap)) return textOf(wrap);
+  const labelledBy = (input.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean);
+  const named = cleanLabel(labelledBy.map((id) => textOf(doc.getElementById(id))).join(' '));
+  if (named) return named;
   const aria = input.getAttribute('aria-label');
   if (aria) return cleanLabel(aria);
   const next = input.nextElementSibling;
@@ -521,7 +536,7 @@ export function scanFields(root: ParentNode): ScannedField[] {
       }
       continue;
     }
-    if (type !== 'file' && isHidden(el)) continue;
+    if (type !== 'file' && isHidden(el) && !shownByStandIn(el)) continue;
     if ((el as HTMLInputElement).disabled) continue;
 
     if (type === 'file') {
@@ -535,7 +550,7 @@ export function scanFields(root: ParentNode): ScannedField[] {
       // surrounding fieldset or radiogroup is then the only thing tying the choices together.
       const wrapper = el.closest<HTMLElement>('fieldset, [role="radiogroup"], [role="group"]');
       const inWrapper = wrapper
-        ? Array.from(wrapper.querySelectorAll<HTMLInputElement>(`input[type="${type}"]`)).filter((m) => !isHidden(m))
+        ? Array.from(wrapper.querySelectorAll<HTMLInputElement>(`input[type="${type}"]`)).filter((m) => !isHidden(m) || shownByStandIn(m))
         : [];
       const grouped = inWrapper.length > 1 && (type === 'radio' ? !name : true);
       // Unnamed radios outside any fieldset: the choices are the radios in the nearest container holding several.
@@ -554,7 +569,7 @@ export function scanFields(root: ParentNode): ScannedField[] {
         ? inWrapper
         : name
           ? Array.from(scope.querySelectorAll<HTMLInputElement>(`input[type="${type}"][name="${CSS.escape(name)}"]`)).filter(
-              (m) => !isHidden(m),
+              (m) => !isHidden(m) || shownByStandIn(m),
             )
           : [el as HTMLInputElement];
       const options = members.map(optionText);
