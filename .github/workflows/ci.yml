@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels its older, now-outdated run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   repository-checks:
     name: Repository checks
@@ -18,6 +23,11 @@ jobs:
         with:
           node-version-file: .node-version
       - run: npm run check
+      - name: Every e2e spec runs in a browser test group
+        run: |
+          for spec in tests/e2e/*.spec.ts; do
+            grep -q "$spec" .github/workflows/ci.yml || { echo "::error file=$spec::Add $spec to a browser test group in .github/workflows/ci.yml"; exit 1; }
+          done
 
   extension:
     name: Extension
@@ -31,5 +41,40 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+
+  # Browser tests are split across machines that run at the same time. Each spec keeps its own
+  # serial order and browser profile. Groups are balanced by measured run time.
+  e2e:
+    name: Browser tests (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: extension
+            specs: tests/e2e/extension.spec.ts
+          - group: queue
+            specs: tests/e2e/queue.spec.ts
+          - group: review and presets
+            specs: tests/e2e/queue-review.spec.ts tests/e2e/presets.spec.ts
+          - group: submission, login and backup
+            specs: tests/e2e/submission.spec.ts tests/e2e/login-resume.spec.ts tests/e2e/memory-backup.spec.ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - id: browser-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - if: steps.browser-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - if: steps.browser-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - run: npm run test:e2e -- ${{ matrix.specs }}

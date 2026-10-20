@@ -64,6 +64,7 @@ The current extension also implements multiple adapters, confirmed Memories, res
 ## Validation and completion
 
 - Current repository checks: `npm run check` (repository/documentation), `npm run typecheck`, `npm test` (Vitest), `npm run build`, and `npm run test:e2e` (Playwright Chromium with fictional forms). See the extension README for installation prerequisites.
+- While developing, run only the e2e spec files related to the change (for example `npm run test:e2e -- tests/e2e/presets.spec.ts`), not the full suite. CI runs every spec on each PR in parallel groups; when adding a spec file, add it to a group in `.github/workflows/ci.yml`.
 - When adding the extension scaffold, provide and document real commands for type checking, unit tests, browser tests, and builds. Add them to CI; do not introduce placeholder passing tests or empty checks.
 - Test risky behavior with meaningful cases: ambiguous labels, malformed imports, rerenders, duplicate fills, and preservation of user edits. Run relevant checks for each change.
 - Before a PR, inspect the final diff and staged files for accidental data or unrelated edits. Keep architecture/contracts/roadmap consistent with implemented behavior.

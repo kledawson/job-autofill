@@ -268,7 +268,7 @@ test('tracking without autofill still reads the posting and deletes its record w
   await appearance.getByRole('checkbox',{name:/^Track without autofill/}).check();
   await expect(appearance.getByRole('status')).toContainText('Track without autofill shown');
   await appearance.close();
-  await sidebar.getByRole('button', { name: 'Toggle Track without autofill', exact: true }).click();
+  await sidebar.getByRole('button', { name: 'Toggle Track Without Autofill', exact: true }).click();
   const tracking = sidebar.locator('#sidebar-track-body');
   await tracking.getByLabel('Application Link', { exact: true }).fill(url);
   await tracking.getByRole('button', { name: 'Mark as submitted', exact: true }).click();
