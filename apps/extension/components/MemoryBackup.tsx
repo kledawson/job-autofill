@@ -115,6 +115,7 @@ export function MemoryBackupControls({ disabled, count, onActiveChange, onReview
     </li>;
   }
   return <div ref={root} className={'space-y-4 rounded-xl border p-4 ' + (preview ? 'border-indigo-200 bg-slate-50' : 'border-slate-200 bg-slate-50')}>
+    <input ref={input} aria-label="Choose Memories backup" type="file" accept="application/json,.json" className="hidden" onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; void chooseFile(file); }} />
     {!preview && <>
       <h3 className="text-sm font-semibold text-slate-900">Backup and restore</h3>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -123,7 +124,6 @@ export function MemoryBackupControls({ disabled, count, onActiveChange, onReview
       </div>
       <details className="text-xs text-slate-600"><summary className="cursor-pointer">What does a backup include?</summary><p className="mt-2">Your answers, question variations and reuse limits. Profile links use the Profile in the destination browser. Your Profile, documents and connection credentials are separate. <a className="underline text-indigo-700" href="#data">Back up your Profile in Data.</a> Keep backup files private because they contain your answers.</p></details>
     </>}
-    <input ref={input} aria-label="Choose Memories backup" type="file" accept="application/json,.json" className="hidden" onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; void chooseFile(file); }} />
     {busy && <p role="status" className="text-sm text-indigo-700">{progress}</p>}
     {preview && <section ref={previewRoot} tabIndex={-1} aria-label="Review Memories restore" className="space-y-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-lg">
       <div className="space-y-1"><p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Restore a backup · Review before saving</p><h3 className="text-lg font-semibold text-slate-900">Choose what to restore</h3><p className="text-sm text-slate-600">Nothing changes until you apply your choices. Your saved answers are kept unless you choose the backup version.</p><p className="text-xs text-slate-500 break-words">File: {fileName} · Created {new Date(preview.createdAt).toLocaleString()}</p></div>
