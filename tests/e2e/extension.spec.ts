@@ -1152,7 +1152,10 @@ test('merged history controls confirm clearing older records without deleting Pr
     target: { kind: 'answer', value: 'Retain this answer' },
   } }));
   expect(keptMemory.ok).toBe(true);
+  // An earlier test's Lever fill can finish after this seeding and stamp its record with the current
+  // time, so the fixtures are dated a minute ahead to stay the newest rows.
   await panel.evaluate(async profile => {
+    const newest = Date.now() + 60_000;
     await chrome.storage.local.set({ 'sidebarSection:history': true });
     await new Promise<void>((resolve, reject) => {
       const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
@@ -1162,7 +1165,7 @@ test('merged history controls confirm clearing older records without deleting Pr
         for (let i = 0; i < 51; i++) tx.objectStore('applications').add({
           jobKey: `fictional-history-${i}`, url: `https://jobs.example.test/history/${i}`,
           company: 'Fictional History Company', role: `Fictional role ${i}`, platform: 'greenhouse',
-          status: 'Submitted', filledAt: Date.now() + i, filledCount: 0, missingCount: 0, aiAnswers: 0,
+          status: 'Submitted', filledAt: newest + i, filledCount: 0, missingCount: 0, aiAnswers: 0,
         });
         tx.oncomplete = () => { d.close(); resolve(); }; tx.onabort = () => { d.close(); reject(tx.error); };
       };
