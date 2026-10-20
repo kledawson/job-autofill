@@ -17,6 +17,18 @@ describe('postingUrl', () => {
     expect(postingUrl('https://jobs.ashbyhq.com/acme/abc-123/application#x')).toBe('https://jobs.ashbyhq.com/acme/abc-123');
     expect(postingUrl('https://job-boards.greenhouse.io/acme/jobs/123?gh_jid=123')).toBe('https://job-boards.greenhouse.io/acme/jobs/123?gh_jid=123');
   });
+  it('links a company board posting rather than its separate application route', () => {
+    expect(postingUrl('https://ats.rippling.com/contoso/jobs/b1af21a2-0000/apply?jobBoardSlug=contoso&jobId=b1af21a2-0000&step=application'))
+      .toBe('https://ats.rippling.com/contoso/jobs/b1af21a2-0000');
+    expect(postingUrl('https://apply.example.com/contoso/j/ABC123/apply/')).toBe('https://apply.example.com/contoso/j/ABC123');
+    // A query that identifies something else stays.
+    expect(postingUrl('https://careers.example.com/jobs/42/apply?lang=en')).toBe('https://careers.example.com/jobs/42?lang=en');
+  });
+  it('keeps a company form that is the posting itself', () => {
+    expect(postingUrl('https://careers.example.com/apply?id=42')).toBe('https://careers.example.com/apply?id=42');
+    expect(postingUrl('https://careers.example.com/jobs/42')).toBe('https://careers.example.com/jobs/42');
+    expect(postingUrl('https://careers.example.com/jobs/42/apply/step-2/review')).toBe('https://careers.example.com/jobs/42/apply/step-2/review');
+  });
 });
 
 describe('location formatting', () => {

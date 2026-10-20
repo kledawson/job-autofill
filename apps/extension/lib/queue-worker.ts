@@ -3,6 +3,7 @@ import { db, getProfile } from './db';
 import { buildPresetContext } from './preset-db';
 import { defaultPreset, parsePreset, profileForPreset } from './presets';
 import { getSettings } from './settings';
+import { chatProviderFor } from './chat-providers';
 import { detectPlatform, jobKey, toApplicationUrl } from './platforms';
 import { batchSize, inFlight, nextQueueItem, queueKey, queueSchema, queueUrl, settled, queueLinkChoices, queueOccupancy, validateQueueResumes, type QueueItem, type QueueRecord, type QueueSnapshot } from './application-queue';
 import type { ContentMessage, FillContext } from './messages';
@@ -78,7 +79,7 @@ export async function queueStart(urls: string[], size: number, presetId?: string
   }
   const context = await buildPresetContext(presetId);
   if (!context.profile.firstName || !context.profile.email) throw new Error('Finish your profile first (at least name and email).');
-  const { profile: _profile, hasGeminiKey: _key, runId: _run, queue: _queue, ...snapshot } = context;
+  const { profile: _profile, hasGeminiKey: _key, chatProvider: _chat, freeResponses: _free, runId: _run, queue: _queue, ...snapshot } = context;
   await db.transaction('rw', db.applicationQueue, db.queueContexts, db.applications, async () => {
     const existing = valid(await db.applicationQueue.get('current'));
     if (existing && !['complete', 'stopped'].includes(existing.status)) throw new Error('Finish or stop the current queue first.');
@@ -164,8 +165,9 @@ async function prepare(token: string, item: QueueItem, snapshot: QueueSnapshot) 
   if (item.tabId === undefined || !item.attempt) throw new Error('Missing application tab.');
   const profile = await getProfile();
   if (!profile.firstName || !profile.email) throw new Error('Finish your profile (name and email), then retry this application.');
-  const context: FillContext = { ...snapshot, profile: profileForPreset(profile, snapshot.preset!), hasGeminiKey: !!(await getSettings()).geminiApiKey,
-    runId: item.attempt, queue: { token, itemId: item.id, attempt: item.attempt } };
+  const settings = await getSettings(), chat = chatProviderFor(settings.answerSource);
+  const context: FillContext = { ...snapshot, profile: profileForPreset(profile, snapshot.preset!), hasGeminiKey: !!settings.geminiApiKey,
+    ...(chat ? { chatProvider: chat.name } : {}), ...(settings.answerSource === 'none' ? { freeResponses: 'none' as const } : {}), runId: item.attempt, queue: { token, itemId: item.id, attempt: item.attempt } };
   await db.transaction('rw', db.applicationQueue, db.fillRuns, async () => {
     const q = valid(await db.applicationQueue.get('current')), current = q?.items.find(i => i.attempt === item.attempt);
     if (!q || q.token !== token || !current || current.state !== 'opening' || q.status === 'stopped') throw new Error('Queue attempt was cancelled.');

@@ -2,6 +2,7 @@ import { db, getProfile } from './db';
 import { defaultPreset, DEFAULT_PRESET_ID, parsePreset, presetId, profileForPreset, type ApplicationPreset, type PresetDocument } from './presets';
 import { fileToPayload, type FillContext } from './messages';
 import { getSettings } from './settings';
+import { chatProviderFor } from './chat-providers';
 
 export async function ensurePresets() {
   await db.transaction('rw', db.presets, db.presetState, async () => {
@@ -85,7 +86,9 @@ export async function buildPresetContext(id?: string): Promise<FillContext> {
       coverLetter: await file(preset.coverLetter, 'coverLetter'), transcript: await file('profile', 'transcript') };
   });
   const payload = async (file: typeof data.resume) => file ? fileToPayload(file, await file.blob.arrayBuffer()) : null;
+  const chat = chatProviderFor(settings.answerSource);
   return { profile: data.profile, resume: await payload(data.resume), coverLetter: await payload(data.coverLetter),
     transcript: await payload(data.transcript), hasGeminiKey: !!settings.geminiApiKey,
+    ...(chat ? { chatProvider: chat.name } : {}), ...(settings.answerSource === 'none' ? { freeResponses: 'none' as const } : {}),
     preset: { id: data.preset.id, name: data.preset.name, revision: data.preset.revision, emphasis: data.preset.emphasis, responses: data.preset.responses, links: data.preset.links } };
 }

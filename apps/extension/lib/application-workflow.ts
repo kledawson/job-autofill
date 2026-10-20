@@ -1,5 +1,6 @@
 import type { Application } from './types';
 import type { QueueItem } from './application-queue';
+import { feedbackPriority, type FieldFeedback } from './field-feedback';
 
 export type WorkflowPhase = 'idle' | 'waiting' | 'opening' | 'filling' | 'login' | 'account' | 'verification' | 'navigation' | 'blocked' | 'needs-answers' | 'review' | 'submitted' | 'abandoned';
 
@@ -38,4 +39,24 @@ export function applicationWorkflow(app?: Application, item?: QueueItem) {
     canConfirmSubmission: (reviewing || phase === 'blocked' && !!item?.attempt && item.attempt === app?.runId) && !!app?.id && app.status === 'Ready for review',
     canFinishManually: phase === 'filling' && !!item?.applicationId,
   };
+}
+
+/**
+ * Required questions that still need the person: unanswered, or answered in a way the extension could not verify.
+ * Optional questions, answers typed on the page and AI drafts (counted under AI-written) are not counted.
+ */
+export function needReviewCount(app: Pick<Application, 'fieldFeedback' | 'missingCount'>): number {
+  if (!app.fieldFeedback) return app.missingCount;
+  return needReviewFields(app).filter(f => f.required && f.status !== 'optional').length;
+}
+
+/** Questions listed under the counts: required gaps first, then unverifiable answers, then optional questions. */
+export function needReviewFields(app: Pick<Application, 'fieldFeedback'>): FieldFeedback[] {
+  return (app.fieldFeedback ?? []).filter(f => f.status === 'missing' || f.status === 'optional' || (f.status === 'review' && f.source !== 'ai'))
+    .sort((a, b) => feedbackPriority(a) - feedbackPriority(b));
+}
+
+/** Whether the side panel shows this application's fill results: not after its page was reloaded and cleared. */
+export function showsFillResults(app: Pick<Application, 'status' | 'pageCleared'> | undefined): boolean {
+  return !!app && !(app.pageCleared && app.status !== 'Submitted');
 }

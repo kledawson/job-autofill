@@ -8,9 +8,10 @@ import { missingSections, parseResumeText, type ResumeSection } from '@/lib/resu
 import { sendToBackground } from '@/lib/messages';
 import { DEFAULT_PROMPT_TEMPLATE, PROMPT_PLACEHOLDERS } from '@/lib/prompt';
 import { DEFAULT_GEMINI_MODEL, updateSettings, type PublicSettings } from '@/lib/settings';
+import { ANSWER_SOURCES, answerSourceHint, chatProviderFor, parseAnswerSource, type AnswerSource } from '@/lib/chat-providers';
 import { emptyProfile, type Profile, type StoredFile } from '@/lib/types';
 import { useLiveQuery } from './hooks';
-import { Button, Card, Field, Input, Notice, Textarea, useToast } from './ui';
+import { Button, Card, Field, Input, Notice, Select, Textarea, useToast } from './ui';
 
 function formatBytes(n: number) {
   return n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`;
@@ -228,6 +229,38 @@ function ResumeImport({
   );
 }
 
+export function AnswerSourceSection({ settings }: { settings: PublicSettings | null }) {
+  const [status, setStatus] = useState<{ tone: 'success' | 'warn'; text: string } | null>(null);
+  if (!settings) return null;
+  const chat = chatProviderFor(settings.answerSource);
+
+  async function choose(value: AnswerSource) {
+    setStatus(null);
+    const provider = chatProviderFor(value);
+    // Chrome shows its permission prompt only during the change event, so ask before anything else.
+    const allowed = provider ? await browser.permissions.request({ origins: provider.origins }).catch(() => false) : true;
+    await updateSettings({ answerSource: value });
+    if (provider) setStatus(allowed
+      ? { tone: 'success', text: `Saved. Draft in ${provider.name} opens a new chat with your prompt in its message box.` }
+      : { tone: 'warn', text: `Saved. Without access to ${provider.name}, the prompt is copied for you to paste (⌘V / Ctrl+V) instead.` });
+  }
+
+  return (
+    <Card title="Free Responses" description="Choose who writes answers to open-ended questions such as “Why do you want to work here?”">
+      <div className="space-y-3">
+        <Field label="Write free responses with" hint={answerSourceHint(settings.answerSource, settings.hasGeminiKey) + (chat ? ' Job Autofill never sends messages or reads replies, and uses no API credits.' : '')}>
+          <Select value={settings.answerSource} options={ANSWER_SOURCES} onChange={e => void choose(parseAnswerSource(e.target.value))} />
+        </Field>
+        {status && <Notice tone={status.tone}>{status.text}</Notice>}
+        {chat && <p className="text-xs text-slate-500">
+          Use your own {chat.name} account. The prompt contains the question, the job description and your education,
+          experience and skills, never your contact details or self-identification answers. It reaches {chat.name} only when you press Send.
+        </p>}
+      </div>
+    </Card>
+  );
+}
+
 export function GeminiSection({ settings }: { settings: PublicSettings | null }) {
   const [key, setKey] = useState('');
   const [model, setModel] = useState(settings?.geminiModel ?? DEFAULT_GEMINI_MODEL);
@@ -243,7 +276,8 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
       if (key) await sendToBackground('setGeminiKey', { apiKey: key });
       await updateSettings({ geminiModel: model.trim() || DEFAULT_GEMINI_MODEL });
       setKey('');
-      setStatus({ tone: 'success', text: 'Connected. Gemini will write your free responses.' });
+      const chat = chatProviderFor(settings?.answerSource);
+      setStatus({ tone: 'success', text: chat ? `Connected. Gemini reads resumes and matches unfamiliar fields; free responses are drafted in ${chat.name}.` : 'Connected. Gemini will write your free responses.' });
     } else {
       setStatus({ tone: 'error', text: res.error });
     }
@@ -252,7 +286,7 @@ export function GeminiSection({ settings }: { settings: PublicSettings | null })
 
   return (
     <Card
-      title="Gemini (Free Responses)"
+      title="Gemini API Key"
       description={
         <>
           Create a free key at{' '}

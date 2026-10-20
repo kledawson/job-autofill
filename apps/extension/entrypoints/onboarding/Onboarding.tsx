@@ -12,7 +12,7 @@ import {
   SkillsSection,
   WorkAuthSection,
 } from '@/components/ProfileSections';
-import { DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
+import { AnswerSourceSection, DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
 import { Button, Card, Notice } from '@/components/ui';
 import { updateSettings } from '@/lib/settings';
 import { mergeResumeDraft } from '@/lib/resume';
@@ -124,9 +124,10 @@ export default function Onboarding() {
     case 'Connect':
       body = (
         <div className="space-y-4">
+          {settings && <AnswerSourceSection settings={settings} />}
           {settings && <GeminiSection settings={settings} />}
           {settings && <SheetsSection settings={settings} />}
-          <p className="text-sm text-slate-500">Both are optional. Without Gemini, free-response questions are outlined for you to answer.</p>
+          <p className="text-sm text-slate-500">All optional. Without Gemini or a chat website, free-response questions are outlined for you to answer.</p>
         </div>
       );
       break;

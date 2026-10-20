@@ -15,7 +15,7 @@ Build Job Autofill: a local-first Chrome extension that imports a reusable appli
 
 The original MVP baseline covers JSON profile import/export, profile editing, generic field matching, one platform adapter, preview and verified fill, manual field mapping, local tracking, and CSV export.
 
-The current extension also implements multiple adapters, confirmed Memories, resume uploads, optional Gemini responses and optional Google Sheets tracking. Maintain these existing features within their documented privacy boundaries. User-started bounded application queues stop for manual review and submission. Keep automatic submission, unattended submission, broad job search, accounts and cloud sync outside the current scope. Later features belong on the roadmap, not in unrelated PRs. Do not automate LinkedIn in this project.
+The current extension also implements multiple adapters, confirmed Memories, resume uploads, optional Gemini responses, optional chat-website drafts (the person sends each prompt and pastes the reply) and optional Google Sheets tracking. Maintain these existing features within their documented privacy boundaries. User-started bounded application queues stop for manual review and submission. Keep automatic submission, unattended submission, broad job search, accounts and cloud sync outside the current scope. Later features belong on the roadmap, not in unrelated PRs. Do not automate LinkedIn in this project.
 
 ## Stack and structure
 

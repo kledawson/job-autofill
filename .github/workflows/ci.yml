@@ -55,8 +55,8 @@ jobs:
             specs: tests/e2e/extension.spec.ts
           - group: queue
             specs: tests/e2e/queue.spec.ts
-          - group: review and presets
-            specs: tests/e2e/queue-review.spec.ts tests/e2e/presets.spec.ts
+          - group: review, presets and chat drafts
+            specs: tests/e2e/queue-review.spec.ts tests/e2e/presets.spec.ts tests/e2e/chat-drafts.spec.ts
           - group: submission, login and backup
             specs: tests/e2e/submission.spec.ts tests/e2e/login-resume.spec.ts tests/e2e/memory-backup.spec.ts
     steps:

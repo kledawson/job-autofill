@@ -18,6 +18,10 @@ export interface FillContext {
   coverLetter: FilePayload | null;
   transcript: FilePayload | null;
   hasGeminiKey: boolean;
+  /** Set when free responses are drafted on a chat website instead of the Gemini API: its display name. */
+  chatProvider?: string;
+  /** 'none' when the person answers free responses themselves: no AI writes them. */
+  freeResponses?: 'none';
   runId?: string;
   queue?: { token: string; itemId: string; attempt: string };
   preset?: Pick<import('./presets').ApplicationPreset, 'id' | 'name' | 'revision' | 'emphasis' | 'responses' | 'links'>;
@@ -30,6 +34,8 @@ export interface AnswerRequest {
   company: string;
   role: string;
   jobDescription: string;
+  /** The job posting's address (http/https), when known. */
+  jobUrl?: string;
 }
 
 /** A form question sent for AI matching: its wording and choices only, never the person's answers. */
@@ -49,6 +55,31 @@ export interface PageStatus {
 
 /** Session-storage key holding a tab's {@link PageStatus} plus the page origin it was set on. */
 export const pageStatusKey = (tabId: number) => `pageStatus:${tabId}`;
+
+/**
+ * The free response being drafted on a chat website, kept in session storage (extension pages only) so the
+ * side panel can show it on every tab until the answer is used or the draft is cancelled. One at a time.
+ */
+export interface ChatDraft {
+  id: string;
+  applicationId: number;
+  /** The free responses this prompt asks for, in prompt order. Answered ones are removed. */
+  questions: { token: string; question: string; required: boolean; /** Its number in the prompt. */ number: number }[];
+  /** True when the prompt asked for several numbered answers at once. */
+  batch?: boolean;
+  company: string;
+  role: string;
+  provider: import('./chat-providers').ChatProviderId;
+  prompt: string;
+  /** Whether the prompt is being put in the chat's message box (the site permission was granted). */
+  inserting?: boolean;
+  /** What happened in the chat tab: set once the prompt was put in its message box or could not be. */
+  insertResult?: import('./chat-providers').InsertResult;
+  createdAt: number;
+}
+export const CHAT_DRAFT_KEY = 'chatDraft';
+/** Session-storage key marking a chat tab that should receive the draft's prompt once it loads. */
+export const chatInsertKey = (tabId: number) => `chatInsert:${tabId}`;
 
 export type Result<T = {}> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -120,6 +151,13 @@ export interface BackgroundMessages {
   showApplicationField: { req: { applicationId: number; token: string }; res: Result };
   capturePageAnswers: { req: { applicationId: number; tokens: string[] }; res: Result<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }> };
   savePageAnswers: { req: { applicationId: number; entries: { token: string; captureId: string; mapping?: MappingDraft; profile?: import('./profile-learning').ProfileConfirmation }[] }; res: Result<{ count: number; profileCount: number; note: string }> };
+  /** Builds the prompt for one free response and makes it the active {@link ChatDraft}. */
+  startChatDraft: { req: { applicationId: number; tokens: string[] }; res: Result<{ draft: ChatDraft }> };
+  /** Opens the active draft's chat website in a new tab, putting the prompt in its message box when allowed. */
+  openChatDraft: { req: { draftId: string }; res: Result<{ inserting: boolean }> };
+  /** Writes the replies the person pasted into the draft's fields, then returns to the application tab. */
+  useChatAnswer: { req: { draftId: string; answers: { token: string; answer: string }[] }; res: Result<{ results: { token: string; ok: boolean; note: string }[] }> };
+  cancelChatDraft: { req: { draftId: string }; res: Result };
   applySavedAnswer: { req: { applicationId: number; token: string; captureId: string; mappingId: number }; res: Result<{ note: string }> };
   suggestAnswerWordings: { req: { question: string }; res: Result<{ aliases: string[] }> };
   saveRememberedMapping: { req: { mapping: MappingDraft; id?: number }; res: Result<{ id: number }> };
@@ -168,7 +206,9 @@ export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: str
   { type: 'captureAnswers'; fields: { token: string; label: string }[] } |
   { type: 'validateCaptures'; entries: { token: string; captureId: string }[] } |
   { type: 'finishRemembering'; entries: { token: string; captureId: string }[] } |
-  { type: 'applyAnswer'; token: string; captureId: string; mapping: RememberedMapping };
+  { type: 'applyAnswer'; token: string; captureId: string; mapping: RememberedMapping } |
+  { type: 'draftRequest'; token: string; question: string; runId?: string } |
+  { type: 'applyDraft'; token: string; question: string; text: string; runId?: string };
 
 export function fileToPayload(file: { name: string; type: string }, bytes: ArrayBuffer): FilePayload {
   const u8 = new Uint8Array(bytes);
