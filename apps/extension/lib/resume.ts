@@ -1,4 +1,6 @@
 import { parseDegreeLine, splitDegree, standardDegree, startsWithDegree } from './degree';
+import { splitJobLocation } from './job-location';
+import { byStartDesc } from './sort-entries';
 import { emptyProfile, type Education, type Experience, type Profile } from './types';
 
 /** Profile fields a resume can supply. Work authorization, preferences, and EEO answers are never inferred. */
@@ -161,10 +163,13 @@ export function sanitizeDraft(raw: unknown): ResumeDraft {
       .map((x) => {
         // "Present" as the end date (or any wording for "still here") means a current job.
         const current = x.current === true || /^(present|current|now|ongoing|today)$/i.test(text(x.endDate, 20));
+        // "Majorly, Remote" as the company: the location goes in its own field.
+        const company = splitJobLocation(text(x.company, 120));
+        const title = splitJobLocation(text(x.title, 120));
         return {
-          title: text(x.title, 120),
-          company: text(x.company, 120),
-          location: text(x.location, 120),
+          title: title.name,
+          company: company.name,
+          location: text(x.location, 120) || company.location || title.location,
           startDate: month(x.startDate),
           endDate: current ? '' : month(x.endDate),
           current,
@@ -251,6 +256,20 @@ function fillEmptyFields<T extends object>(
 const blankEducation = (e: Education) => !e.school && !e.degree && !e.major;
 const blankExperience = (x: Experience) => !x.title && !x.company && !x.bullets;
 
+/** Resume entries that match nothing saved, added to the saved list (blank placeholders dropped), most recent first. */
+function addNew<T extends { startDate: string }>(
+  saved: T[],
+  fromResume: T[],
+  same: (a: T, b: T) => boolean,
+  blank: (x: T) => boolean,
+): { items: T[]; added: number } {
+  const fresh = fromResume.filter((d, i) => !saved.some((s) => same(s, d)) && !fromResume.slice(0, i).some((e) => same(e, d)));
+  if (!fresh.length) return { items: saved, added: 0 };
+  return { items: byStartDesc([...saved.filter((x) => !blank(x)), ...fresh]), added: fresh.length };
+}
+
+const count = (n: number, one: string, many: string) => (n > 1 ? `${n} ${many}` : one);
+
 export function mergeResumeDraft(profile: Profile, draft: ResumeDraft): { profile: Profile; filled: string[] } {
   const next: Profile = { ...profile };
   const filled: string[] = [];
@@ -266,32 +285,83 @@ export function mergeResumeDraft(profile: Profile, draft: ResumeDraft): { profil
     if (draft.country !== next.country) filled.push('country');
     next.country = draft.country;
   }
-  if (draft.education.length && profile.education.every(blankEducation)) {
-    next.education = draft.education;
-    filled.push(draft.education.length > 1 ? `${draft.education.length} schools` : 'education');
-  } else if (draft.education.length) {
-    // Already has schools: keep what is there and fill only the empty details (dates, degree, GPA…).
-    const { items, changed } = fillEmptyFields(profile.education, draft.education, sameSchool, ['degree', 'major', 'gpa', 'startDate', 'endDate', 'honors']);
+
+  if (draft.education.length) {
+    // Fill the empty details (dates, degree, GPA…) of schools already saved, then add the ones not saved yet.
+    const details = fillEmptyFields(profile.education, draft.education, sameSchool, ['degree', 'major', 'gpa', 'startDate', 'endDate', 'honors']);
+    if (details.changed && !profile.education.every(blankEducation)) filled.push('education details');
+    const { items, added } = addNew(details.items, draft.education, sameSchool, blankEducation);
     next.education = items;
-    if (changed) filled.push('education details');
+    if (added) filled.push(count(added, profile.education.every(blankEducation) ? 'education' : '1 school', 'schools'));
   }
-  if (draft.experience.length && profile.experience.every(blankExperience)) {
-    next.experience = draft.experience;
-    filled.push(draft.experience.length > 1 ? `${draft.experience.length} jobs` : 'experience');
-  } else if (draft.experience.length) {
-    const { items, changed } = fillEmptyFields(profile.experience, draft.experience, sameJob, ['location', 'startDate', 'endDate', 'bullets']);
-    // A job the resume lists as ongoing, with no dates saved yet, becomes current.
-    next.experience = items.map((x, i) => {
+
+  if (draft.experience.length) {
+    const details = fillEmptyFields(profile.experience, draft.experience, sameJob, ['location', 'startDate', 'endDate', 'bullets']);
+    let statusChanged = false;
+    const withStatus = details.items.map((saved, i) => {
       const match = draft.experience.find((d) => sameJob(profile.experience[i]!, d));
-      return match?.current && !x.current && !x.endDate ? { ...x, current: true } : x;
+      if (!match) return saved;
+      // An earlier import saved "Majorly, Remote" as the company; split it the way the resume now reads.
+      let x = saved;
+      const split = splitJobLocation(saved.company);
+      if (split.location && norm(split.name) === norm(match.company) && (!saved.location || norm(saved.location) === norm(split.location))) {
+        statusChanged = true;
+        x = { ...saved, company: split.name, location: split.location };
+      }
+      // A job the resume lists as ongoing, with no dates saved yet, becomes current.
+      if (match.current && !x.current && !x.endDate) {
+        statusChanged = true;
+        return { ...x, current: true };
+      }
+      // A job saved as current that the resume shows has ended.
+      if (!match.current && match.endDate && x.current) {
+        statusChanged = true;
+        return { ...x, current: false, endDate: x.endDate || match.endDate };
+      }
+      return x;
     });
-    if (changed || next.experience.some((x, i) => x.current !== items[i]!.current)) filled.push('job details');
+    if (details.changed || statusChanged) filled.push('job details');
+    const { items, added } = addNew(withStatus, draft.experience, sameJob, blankExperience);
+    next.experience = items;
+    if (added) filled.push(count(added, profile.experience.every(blankExperience) ? 'experience' : '1 job', 'jobs'));
+
+    // Current and previous employers saved with the location attached ("Majorly, Remote") are fixed too.
+    for (const key of ['currentCompany', 'previousCompany'] as const) {
+      const split = splitJobLocation(next[key]);
+      if (split.location && draft.experience.some((d) => norm(d.company) === norm(split.name))) {
+        next[key] = split.name;
+        filled.push(key === 'currentCompany' ? 'current company' : 'previous employer');
+      }
+    }
+    // A new current job on the resume replaces a current position the resume shows has ended.
+    const now = draft.experience.find((x) => x.current);
+    const savedNow = { title: next.currentTitle, company: next.currentCompany, location: '', startDate: '', endDate: '', current: true, bullets: '' };
+    const ended = draft.experience.find((d) => !d.current && sameJob(savedNow, d));
+    if (now && profile.currentCompany.trim() && ended && !sameJob(savedNow, now)) {
+      next.previousTitle = savedNow.title;
+      next.previousCompany = savedNow.company;
+      next.currentTitle = now.title;
+      next.currentCompany = now.company;
+      filled.push('current position', 'current company', 'previous position', 'previous employer');
+    }
+    // The previous job is the most recent one that has ended.
+    const past = draft.experience.find((x) => !x.current && !sameJob(x, { ...savedNow, title: next.currentTitle, company: next.currentCompany }));
+    if (past && !next.previousCompany.trim() && !next.previousTitle.trim()) {
+      next.previousCompany = past.company;
+      next.previousTitle = past.title;
+      if (past.title) filled.push('previous position');
+      if (past.company) filled.push('previous employer');
+    }
   }
-  if (draft.skills.length && !profile.skills.length) {
-    next.skills = draft.skills;
-    filled.push('skills');
+
+  // Skills the resume lists that are not saved yet are added after the saved ones.
+  const haveSkills = new Set(profile.skills.map(norm));
+  const newSkills = draft.skills.filter((s) => !haveSkills.has(norm(s)) && haveSkills.add(norm(s)));
+  if (newSkills.length) {
+    next.skills = [...profile.skills, ...newSkills];
+    filled.push(profile.skills.length ? count(newSkills.length, '1 skill', 'skills') : 'skills');
   }
-  return { profile: next, filled };
+  return { profile: next, filled: Array.from(new Set(filled)) };
 }
 
 /** Schema and prompt limited to some sections, so Gemini returns less and answers faster. */
