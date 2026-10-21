@@ -37,6 +37,23 @@ before preparing a run; stale page code returns refresh instructions without wri
 
 ## Messages
 
+`stopActiveFill` requires a trusted extension page and the still-active tab ID. Queue cancellation is
+bound to token/item/attempt; standalone cancellation stops pending readiness and widget/AI writers
+before read-only review. Show field remains read-only and available while a known run is filling.
+Explicit capture/navigation compares same-origin job identity instead of tracking query/hash equality;
+different job IDs remain rejected and field tokens/questions are still checked in the bound frame.
+
+`resolveQueuePage` requires a trusted extension page, valid queue/item UUIDs, the active web tab and
+granted access. Optional queue-item `resolvedUrl` is a validated HTTP(S) URL without credentials or
+LinkedIn, additive to schemaVersion 1; older records use url. The original url/key remain immutable.
+Handoff atomically rechecks attempt, capacity and duplicate tab/destination ownership, reserves a new
+attempt and preserves the old description tab. Only the explicit destination can claim the new writer.
+No company/title inference transfers Profile values. Browser-session ownership rules still apply.
+
+`preferences.startDate` retains its existing string format: `today` and `tomorrow` resolve using the
+local calendar at fill time; blank retains two weeks from today. ISO fixed dates and legacy text remain
+valid. No stored profile value is rewritten each day and profile import/export needs no shape migration.
+
 Define discriminated, versioned messages for scan, plan, apply, verification results, and tracking. Include a request ID and tab/frame context. Validate the sender and payload. Send a selected fill plan rather than the entire profile to content scripts. Define errors and stale-plan rejection explicitly.
 
 ## Tracker
@@ -233,6 +250,11 @@ transaction atomicity, conservative defaults, import formats or Profile referenc
 
 ## Application queue contract
 
+Checkpoint 6 does not change persisted schemas/messages. A settled item with a live tab continues to
+occupy capacity after a close failure; reconciliation rechecks current token/attempt/tab ownership and
+does not invoke removal bookkeeping until closure succeeds or absence is verified. Build metadata and
+aggregate benchmark/release reports contain no Profile or captured page answers.
+
 Increment 4 adds `startQueue.resumeApplicationIds?: number[]` and trusted
 `addQueueLinks({token, urls, resumeApplicationIds?}) → {ok, added, excluded}`. IDs are unique positive
 integers, max 100, and must match current unfinished/abandoned history for a supplied job. Submitted
@@ -331,6 +353,12 @@ Queue schemaVersion 1 adds optional mode (batch/continuous), autoDetectSubmissio
 queueAction adds review: a trusted extension request stops and awaits the owned writer before declaring review. The content reviewNow request is bound to that run; capture tokens/explicit confirmation remain required. Read-only observation preserves tokens only for a single exact field-signature replacement.
 
 submissionIntent, submissionContext, submissionBlocked and submissionConfirmed accept only permitted content senders. The older queue-prefixed messages remain compatibility aliases. Intent binds to a review application/run/frame, its session marker and a supported same-job Greenhouse/Lever/Ashby route. Queue detection also requires its opt-in and owned review tab. Confirmation requires recent intent; the worker re-probes checkSubmission in the owned frame and verifies the actual tab URL. No applicant answers or submit controls cross this interface. Unsupported/ambiguous results stay manual.
+
+Detected submission updates the application to Submitted but keeps its queue item in review and its
+tab occupied. It does not close or refill capacity. Continue/Submitted explicitly settles/closes it;
+closing that tab directly also settles an already-confirmed outcome. Automatic reconciliation only
+retries failed closures already requested explicitly. A Continue click does not retry a failed Sheets
+write; Retry sheet is independent.
 
 Application records add optional submitIntentAt, submissionIssue (validation), submissionSource (user or a supported platform confirmation), and sheetSyncPending. Old records remain valid; no IndexedDB index/version migration is needed for these optional properties. Duplicate completion preserves the original timestamp/source. A new fill clears old intent/issues. Browser-session markers are not durable ownership across browser restarts.
 

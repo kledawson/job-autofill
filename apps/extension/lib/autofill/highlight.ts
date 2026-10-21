@@ -38,6 +38,7 @@ const tags = new Map<HTMLElement, string>();
 let host: HTMLElement | null = null;
 let shadow: ShadowRoot | null = null;
 let frame = 0;
+let overlayTimer: ReturnType<typeof setInterval> | undefined;
 
 function ensureHost(): ShadowRoot {
   if (shadow && host?.isConnected) return shadow;
@@ -51,7 +52,7 @@ function ensureHost(): ShadowRoot {
   </style><div id="tags"></div>`;
   window.addEventListener('scroll', scheduleOverlay, { passive: true });
   window.addEventListener('resize', scheduleOverlay);
-  setInterval(scheduleOverlay, 1000);
+  overlayTimer = setInterval(scheduleOverlay, 1000);
   return shadow;
 }
 
@@ -63,8 +64,14 @@ function scheduleOverlay() {
   });
 }
 
+function releaseOverlay() {
+  clearInterval(overlayTimer); overlayTimer = undefined;
+  window.removeEventListener('scroll', scheduleOverlay); window.removeEventListener('resize', scheduleOverlay);
+  host?.remove(); host = null; shadow = null;
+}
+
 function render() {
-  if (!tags.size && !host) return;
+  if (!tags.size) { releaseOverlay(); return; }
   const root = ensureHost();
   const tagLayer = root.getElementById('tags')!;
   tagLayer.textContent = '';
@@ -83,12 +90,16 @@ function render() {
     tag.style.left = `${r.right + window.scrollX - 34}px`;
     tagLayer.appendChild(tag);
   }
+  if (!tags.size) releaseOverlay();
 }
 
 /** Only an explicit Show field action scrolls. Animation leaves the review outline intact. */
 export function revealField(target: HTMLElement, control: HTMLElement) {
   const reduced = target.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  target.scrollIntoView?.({ behavior: reduced ? 'instant' : 'smooth', block: 'center' });
   control.focus({ preventScroll: true });
+  // Focus handlers can rerender a widget or cancel smooth scrolling. Scroll last, in one
+  // immediate operation, including nested scroll containers and enclosing frames.
+  const visibleTarget = target.getClientRects().length ? target : control;
+  visibleTarget.scrollIntoView?.({ behavior: 'instant', block: 'center', inline: 'nearest' });
   if (!reduced) target.animate?.([{ boxShadow: '0 0 0 0 transparent' }, { boxShadow: '0 0 0 7px #a5b4fc' }, { boxShadow: '0 0 0 0 transparent' }], { duration: 1400 });
 }

@@ -17,6 +17,7 @@ import {
   closeListsOpenedBy,
   type ChoiceOpts,
   fillCombobox,
+  bindWriterSignal,
   fillFile,
   fillListbox,
   fillPrompt,
@@ -40,7 +41,7 @@ import { clearOutline, outline, revealField, type ReviewState } from './highligh
 import { feedbackPriority, type FieldFeedback } from '../field-feedback';
 import { bestGpaOption, characterLimitFor } from './match';
 import { composedCompare, isHidden, isSignInPage, scanFields, type ScannedField } from './scan';
-import { WITH_CODE_RE } from './classify';
+import { WITH_CODE_RE, isEmployerContact } from './classify';
 import { applicantLocationQueries, pickApplicantLocation, pickLocationPreference, raceChoices, valueFor } from './values';
 import { isPlaceholderOption } from './match';
 import { parseSelections, resolveRememberedMapping, type RememberedMapping, type SavedField, type SavedMatch, type ReviewField, type CapturedAnswer } from '../remembered-mappings';
@@ -108,6 +109,16 @@ const LINK_KEYS = new Set<string>(['linkedin', 'github', 'portfolio', 'website']
 
 export class FillSession {
   get processing() { return this.busy; }
+  private idleWaiters = new Set<() => void>();
+  /** Observed conditional-field fills can run after the initial content task has ended. */
+  whenIdle(): Promise<void> {
+    return this.busy ? new Promise(resolve => this.idleWaiters.add(resolve)) : Promise.resolve();
+  }
+  private markIdle() {
+    this.busy = false;
+    for (const resolve of this.idleWaiters) resolve();
+    this.idleWaiters.clear();
+  }
   private records = new Map<HTMLElement, FieldRecord>();
   private jobInfo: JobInfo;
   private description: string | null = null;
@@ -116,6 +127,7 @@ export class FillSession {
   private busy = false;
   private observer?: MutationObserver;
   private stopWatching?: () => void;
+  private blanking = new AbortController();
   private aiNote?: string;
   private resumeFile: File | null;
   private coverLetterFile: File | null;
@@ -127,6 +139,7 @@ export class FillSession {
     private adapter: Adapter,
     private deps: EngineDeps,
   ) {
+    bindWriterSignal(doc, this.blanking.signal);
     this.jobInfo = adapter.jobInfo(doc);
     this.resumeFile = deps.context.resume ? payloadToFile(deps.context.resume) : null;
     this.coverLetterFile = deps.context.coverLetter ? payloadToFile(deps.context.coverLetter) : null;
@@ -138,7 +151,8 @@ export class FillSession {
   }
   get knownDetails(): JobDetails { return this.details; }
   showField(token: string, question: string) {
-    if (this.busy || this.stopped) throw new Error('Wait for autofill to finish before locating a field.');
+    // Locating a known question is read-only and must remain available during a fill.
+    if (this.stopped) throw new Error('This fill has stopped. Refresh the review results before locating a field.');
     const rec = [...this.records.values()].find(r => r.token === token);
     const field = rec && this.relocate(rec);
     if (!field || !labelMatches(field, question) || isHidden(field.el)) throw new Error('This field changed or is hidden. Click Fill this page to refresh the results.');
@@ -148,7 +162,10 @@ export class FillSession {
   summary(): FillSummary { return this.verify(); }
   /** Called only after the old writer has stopped; keep capture/edits live without more writes. */
   enterReview(): FillSummary {
+    if (this.busy) throw new Error('Wait for the current widget writer to stop before entering review.');
     this.stopped = false;
+    this.blanking = new AbortController();
+    bindWriterSignal(this.doc, this.blanking.signal);
     this.collectFresh(true);
     this.observe(false);
     return this.verify();
@@ -282,7 +299,7 @@ export class FillSession {
       rec.cls = mapping.target.kind === 'profile' ? { kind: 'profile', key: mapping.target.key, source: 'remembered' } : mapping.target.kind === 'answer' ? { kind: 'saved_answer', answer: mapping.target.value } : { kind: 'unknown', askAi: false };
       await this.fillRecord(rec);
       if (rec.outcome === 'filled' && fieldHasValue(rec.field)) rec.review = false;
-    } finally { this.busy = false; }
+    } finally { this.markIdle(); }
     this.deps.onProgress?.(this.verify());
     return rec.outcome === 'filled' ? 'Saved and applied to this field.' : 'Saved for future applications. Select the answer on this page; no unambiguous option matched.';
   }
@@ -333,6 +350,10 @@ export class FillSession {
 
   /** Watches for conditional follow-up questions, user edits, and (multi-step forms) the next step. */
   observe(autofill = true) {
+    this.observer?.disconnect();
+    this.stopWatching?.();
+    if (this.stopped) return;
+    let active = true;
     // A multi-step form swaps its whole form between steps, so watch the page instead.
     const root = this.doc.body;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -344,7 +365,7 @@ export class FillSession {
         if (this.busy) return rescan();
         if (autofill) await this.processNew(true);
         else this.collectFresh(true);
-        this.deps.onProgress?.(this.verify());
+        if (active && !this.stopped) this.deps.onProgress?.(this.verify());
       }, 700);
     };
     this.observer = new MutationObserver((mutations) => {
@@ -366,13 +387,14 @@ export class FillSession {
       }
       clearTimeout(editTimer);
       editTimer = setTimeout(() => {
-        if (!this.busy) this.deps.onProgress?.(this.verify());
+        if (active && !this.stopped && !this.busy) this.deps.onProgress?.(this.verify());
       }, 1200);
     };
     root.addEventListener('change', onEdit, true);
     root.addEventListener('input', onEdit, true);
     root.addEventListener('click', onEdit, true);
     this.stopWatching = () => {
+      active = false;
       clearTimeout(timer);
       clearTimeout(editTimer);
       root.removeEventListener('change', onEdit, true);
@@ -386,6 +408,9 @@ export class FillSession {
     this.stopped = true;
     this.observer?.disconnect();
     this.stopWatching?.();
+    this.observer = undefined;
+    this.stopWatching = undefined;
+    this.blanking.abort();
   }
 
   private stopped = false;
@@ -393,6 +418,8 @@ export class FillSession {
   private expanded = new WeakSet<Element>();
   /** Questions already handled in this session, so a redrawn copy is not filled again behind the user's back. */
   private seen = new Set<string>();
+  /** Uploads have external side effects. Never repeat one because a site replaces its input. */
+  private attemptedDocuments = new Set<string>();
 
   /** Polls until new fields show up or the time runs out. */
   private async waitForFresh(maxMs: number): Promise<FieldRecord[]> {
@@ -416,7 +443,7 @@ export class FillSession {
       // A control the page redrew after the user removed its value (a deleted resume swapped for an upload
       // button) is a new element, but not a new question: leave it for the next explicit Fill.
       const sig = fieldSignature(field);
-      if (watching && this.seen.has(sig)) {
+      if (this.seen.has(sig)) {
         const previous = [...this.records.values()].filter(r => !r.field.el.isConnected && fieldSignature(r.field) === sig);
         if (previous.length === 1) {
           const rec = previous[0]!;
@@ -425,8 +452,10 @@ export class FillSession {
           this.records.set(field.el, rec);
           continue;
         }
-        this.records.set(field.el, { field, cls: { kind: 'unknown', askAi: false }, token: crypto.randomUUID() });
-        continue;
+        if (watching) {
+          this.records.set(field.el, { field, cls: { kind: 'unknown', askAi: false }, token: crypto.randomUUID() });
+          continue;
+        }
       }
       this.seen.add(sig);
       const rec: FieldRecord = { field, cls: classifyField(field, this.adapter.keys), token: crypto.randomUUID() };
@@ -441,6 +470,7 @@ export class FillSession {
     // Prepared responses never override canonical facts, files, consent or challenge controls.
     const presetRecords = new Set<FieldRecord>();
     for (const rec of records) {
+      if (isEmployerContact(rec.field)) continue;
       if (!['text', 'textarea'].includes(rec.field.kind) || !['free_response', 'unknown'].includes(rec.cls.kind)) continue;
       const answer = preparedResponse(this.deps.context.preset?.responses ?? [], rec.field.label);
       if (answer !== undefined) { rec.cls = { kind: 'saved_answer', answer }; presetRecords.add(rec); }
@@ -586,7 +616,7 @@ export class FillSession {
       await this.closeOpenDropdowns();
       return fresh.length;
     } finally {
-      this.busy = false;
+      this.markIdle();
     }
   }
 
@@ -648,6 +678,7 @@ export class FillSession {
     if (rec.cls.kind !== 'profile' && rec.cls.kind !== 'saved_answer') return;
     const before = openLists(this.doc);
     await this.fillProfileField(rec);
+    if (this.stopped) return;
     // Whatever the outcome, leave no list open and the field unfocused before moving on.
     if (rec.field.el.isConnected) await closeListsOpenedBy(rec.field, before);
     if (rec.outcome !== 'filled') return;
@@ -732,7 +763,13 @@ export class FillSession {
     try {
       if (key === 'resume' || key === 'coverLetter' || key === 'transcript') {
         const file = key === 'resume' ? this.resumeFile : key === 'coverLetter' ? this.coverLetterFile : this.transcriptFile;
-        rec.outcome = field.kind === 'file' && file ? fillFile(field, file) : 'nomatch';
+        if (field.kind !== 'file' || !file) { rec.outcome = 'nomatch'; return; }
+        if (uploadedAlready(field.el as HTMLInputElement) || (field.el as HTMLInputElement).files?.length) {
+          rec.outcome = 'already'; return;
+        }
+        if (this.attemptedDocuments.has(key)) { rec.outcome = 'failed'; return; }
+        this.attemptedDocuments.add(key);
+        rec.outcome = fillFile(field, file);
         return;
       }
       const hasCodeField = [...this.records.values()].some((r) => r.cls.kind === 'profile' && r.cls.key === 'phoneCountryCode');
@@ -847,7 +884,7 @@ export class FillSession {
       if (!values || !first) {
         // The site's resume parser may have prefilled an employer the profile says is blank; clear it.
         if (key === 'currentCompany' && rec.cls.kind === 'profile' && rec.cls.source !== 'remembered' && field.kind === 'text' && !profile.currentCompany.trim()) {
-          keepBlank(field.el as HTMLInputElement);
+          keepBlank(field.el as HTMLInputElement, this.blanking.signal);
         }
         rec.outcome = 'nomatch';
         return;
@@ -1022,7 +1059,7 @@ export class FillSession {
           changed || !weFilled ? 'entered' : rec.ai || !readable || rec.writtenValue === undefined ? 'review' : 'verified';
         const source: FieldFeedback['source'] = !has ? 'none' : status === 'entered' ? 'page' : rec.ai ? 'ai' :
           rec.saved ? 'memory' : rec.cls.kind === 'saved_answer' ? 'preset' : rec.cls.kind === 'profile' ? 'profile' : 'none';
-        const reason = reviewReason || (status === 'missing' || status === 'optional' ?
+        const reason = isEmployerContact(field) ? 'Enter the employer’s contact or address details on the website. Your personal details are never used here.' : reviewReason || (status === 'missing' || status === 'optional' ?
           field.kind === 'file' ? 'Upload this document on the application page.' : rec.cls.kind === 'consent' ? 'Read and confirm this agreement on the website.' :
           rec.suggestionId ? 'A similar Memory needs your confirmation before reuse.' :
           rec.cls.kind === 'profile' ? 'A saved Profile answer or a matching option was unavailable. Answer on the page, then confirm where to save it.' :
@@ -1111,7 +1148,7 @@ function sameLabel(a: string, b: string): boolean {
 }
 
 function canRemember(rec: FieldRecord): boolean {
-  return !!rec.field.label.trim() && rec.field.label.length <= 700 &&
+  return !isEmployerContact(rec.field) && !!rec.field.label.trim() && rec.field.label.length <= 700 &&
     (rec.field.section?.index ?? 0) === 0 &&
     (rec.field.kind !== 'checkboxGroup' || selectionMode(rec.field) === 'multiple') &&
     (rec.field.kind === 'combobox' || rec.field.el.getAttribute('aria-multiselectable') !== 'true') &&
@@ -1173,17 +1210,23 @@ function isYesNo(options: string[]): boolean {
  * Keeps an optional box empty while the site's resume parser may still be prefilling it. Parsing can finish
  * seconds after the upload, so check for a while; stop as soon as the person types or focuses the box.
  */
-function keepBlank(input: HTMLInputElement, ms = 20000) {
+function keepBlank(input: HTMLInputElement, signal: AbortSignal, ms = 20000) {
+  if (signal.aborted) return;
   let touched = false;
+  let timer: ReturnType<typeof setInterval>, deadline: ReturnType<typeof setTimeout>;
   const stop = () => {
     touched = true;
+    clearInterval(timer); clearTimeout(deadline);
+    input.removeEventListener('keydown', stop); input.removeEventListener('focus', stop);
+    signal.removeEventListener('abort', stop);
   };
   input.addEventListener('keydown', stop, { once: true });
   input.addEventListener('focus', stop, { once: true });
+  signal.addEventListener('abort', stop, { once: true });
   const clear = () => {
     if (!touched && input.isConnected && input.value.trim()) setNativeValue(input, '');
   };
   clear();
-  const timer = setInterval(clear, 300);
-  setTimeout(() => clearInterval(timer), ms);
+  timer = setInterval(clear, 300);
+  deadline = setTimeout(stop, ms);
 }

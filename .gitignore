@@ -12,6 +12,7 @@ test-results/
 .env.*
 !.env.example
 local-data/
+.local/
 profiles/
 resumes/
 exports/

@@ -578,12 +578,18 @@ export function PreferencesSection({ profile: p, onChange }: SectionProps) {
         <Field label="Desired Salary">
           <SalaryInput value={p.preferences.salary} onChange={(salary) => set({ salary })} />
         </Field>
-        <Field label="Earliest Start Date" hint="Leave blank to use two weeks from the day you apply">
-          <DateInput
+        <Field label="Earliest Start Date" hint="Today, Tomorrow and Two weeks from today update automatically when you fill an application.">
+          <div className="space-y-2">
+          <Select aria-label="Earliest start date choice" value={['', 'today', 'tomorrow'].includes(p.preferences.startDate) ? p.preferences.startDate : 'date'}
+            options={[["today", "Today — available immediately"], ["tomorrow", "Tomorrow"], ["", "Two weeks from today"], ["date", "Choose a date…"]]}
+            onChange={e => set({ startDate: e.target.value === 'date' ? new Date().toLocaleDateString('en-CA') : e.target.value })} />
+          {!['', 'today', 'tomorrow'].includes(p.preferences.startDate) && <><label className="sr-only" htmlFor="earliest-start-date-fixed">Start month</label><DateInput
+            id="earliest-start-date-fixed"
             yearsBack={0}
             value={/^\d{4}-\d{2}-\d{2}$/.test(p.preferences.startDate) ? p.preferences.startDate : ''}
             onChange={(v) => set({ startDate: v })}
-          />
+          /></>}
+          </div>
         </Field>
         <Field label="Work Arrangement" hint="Flexible answers Yes to remote, hybrid, and on-site">
           <Select

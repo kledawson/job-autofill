@@ -16,6 +16,13 @@ const rows = (table: string) => panel.evaluate(table => new Promise<any[]>((reso
 }), table);
 const queue = async () => (await rows('applicationQueue'))[0];
 const ready = (index: number) => expect.poll(async () => (await queue()).items[index].state, { timeout: 35000 }).toBe('review');
+async function continueDetected(index: number, page: Page, closeManually = false) {
+  await expect.poll(async () => { const id = (await queue()).items[index].applicationId; return (await rows('applications')).find(a => a.id === id)?.status; }).toBe('Submitted');
+  expect(page.isClosed()).toBe(false);
+  const q = await queue(); expect(q.items[index].state).toBe('review');
+  if (closeManually) await page.close();
+  else expect(await request('queueAction', { token: q.token, itemId: q.items[index].id, action: 'submitted' })).toMatchObject({ ok: true });
+}
 const form = (id: number) => context.pages().find(p => p.url().startsWith(url(id)))!;
 const siteQuestion = 'Are you available to immediately work on-site in our San Jose location three days a week?';
 const priorityFixture = (ai: boolean) => `<!doctype html><title>Job Application for Fictional Engineer at Fictional Space</title><style>body{font:16px system-ui;padding:24px}label{display:block;margin:16px 0}input,select,textarea{font:inherit;padding:10px}</style><h1>Fictional Engineer</h1><form id="application-form"><label>First name<input id="first_name" autocomplete="given-name" required></label><label>Email<input id="email" type="email" required></label>${ai ? '' : '<label>Phone<input id="phone" value="2025550141"></label><div style="height:1100px" aria-hidden="true"></div>'}<label>${siteQuestion}<select id="onsite" required><option value="">Select...</option><option>Yes</option><option>No</option></select></label>${ai ? '<label>Why are you interested in this fictional role?<textarea id="review-essay" required></textarea></label>' : '<label>Fictional review reference<input id="review-custom" required></label><label>Academic transcript<input id="review-file" type="file" required></label><label>Fictional optional note<input id="review-optional"></label>'}</form>`;
@@ -101,13 +108,15 @@ test('queued hydration matches manual Memories, preserves review edits, saves an
   await expect(first.getByRole('alert')).toBeVisible(); expect(first.isClosed()).toBe(false); expect((await queue()).items[0].state).toBe('review'); expect((await queue()).items[2].batch).toBe(0);
   const second = form(702); await second.locator('#custom').fill('Manual second reference');
   await second.getByRole('button', { name: 'Submit application', exact: true }).click();
+  await continueDetected(1, second);
   await expect.poll(() => second.isClosed()).toBe(true); await ready(2); expect(first.isClosed()).toBe(false);
   await expect.poll(() => !!form(703)).toBe(true);
   const third = form(703); await expect(third.locator('#custom')).toHaveValue('Reusable fictional reference');
   expect(context.pages().filter(p => p.url().startsWith('https://job-boards.greenhouse.io/')).length).toBe(2);
   await shot('queue-rolling-review');
   await first.evaluate(() => { document.querySelector('[role="alert"]')!.remove(); (window as any).outcome = 'success'; }); await first.getByRole('button', { name: 'Submit application', exact: true }).click();
-  await expect.poll(() => first.isClosed()).toBe(true); await third.getByRole('button', { name: 'Submit application', exact: true }).click();
+  await continueDetected(0, first); await expect.poll(() => first.isClosed()).toBe(true); await third.getByRole('button', { name: 'Submit application', exact: true }).click();
+  await continueDetected(2, third, true);
   await expect.poll(async () => (await queue()).status).toBe('complete'); expect((await rows('applications')).filter(a => a.status === 'Submitted')).toHaveLength(3);
 });
 test('no click/failed validation is not success; a persisted intent survives worker restart and a confirmation redirect', async () => {
@@ -119,6 +128,7 @@ test('no click/failed validation is not success; a persisted intent survives wor
   const q = await queue(); expect(await request('queueSubmissionConfirmed', { runId: q.items[0].attempt })).toMatchObject({ ok: false });
   await first.bringToFront();
   await first.locator('#custom').fill('Fictional reference'); await first.getByRole('button', { name: 'Submit application', exact: true }).click();
+  await continueDetected(0, first);
   await expect.poll(() => first.isClosed()).toBe(true); await ready(1);
   const second = form(802); await second.locator('#custom').fill('Another fictional reference');
   await expect.poll(() => panel.evaluate(async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id)).toBe((await queue()).items[1].tabId);
@@ -126,6 +136,7 @@ test('no click/failed validation is not success; a persisted intent survives wor
   await expect.poll(async () => !!(await queue()).items[1].submitIntentAt).toBe(true); expect(second.isClosed()).toBe(false);
   const cdp = await context.newCDPSession(panel); await cdp.send('ServiceWorker.enable'); await cdp.send('ServiceWorker.stopAllWorkers'); await cdp.detach();
   await second.evaluate(() => { document.querySelector('form')!.remove(); document.body.insertAdjacentHTML('beforeend', '<h2>Your application has been received.</h2>'); });
+  await continueDetected(1, second, true);
   await expect.poll(() => second.isClosed()).toBe(true); await expect.poll(async () => (await queue()).status).toBe('complete');
 });
 test('Stop autofill & review releases a stalled AI response, permits remembering, and ignores the late writer', async () => {
@@ -134,7 +145,9 @@ test('Stop autofill & review releases a stalled AI response, permits remembering
   await panel.evaluate(() => chrome.storage.local.set({ geminiApiKey: 'synthetic-e2e-key' }));
   expect(await request('startQueue', { urls: [url(900)], batchSize: 1, mode: 'continuous' })).toMatchObject({ ok: true });
   await expect.poll(() => asks).toBe(1); const page = form(900); await expect(page.locator('#first_name')).toHaveValue('Taylor');
-  await panel.getByRole('button', { name: 'Stop autofill & review', exact: true }).click(); await ready(0);
+  await page.bringToFront();
+  await panel.getByRole('button', { name: 'Stop fill', exact: true }).click(); await ready(0);
+  await expect(panel.getByText('Autofill stopped. Your answers were kept.', { exact: true })).toBeVisible();
   await page.locator('#essay').fill('My own fictional accomplishment');
   const field = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'proudest accomplishment' });
   await expect(field.getByRole('button', { name: 'Save this answer', exact: true })).toBeVisible(); await field.getByRole('button', { name: 'Save this answer', exact: true }).click();

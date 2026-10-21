@@ -262,7 +262,18 @@ export interface AdapterKeys {
   [idOrName: string]: ProfileKey;
 }
 
+export function isEmployerContact(field: ScannedField): boolean {
+  const label = field.label.toLowerCase();
+  const employer = field.employerContext || field.section?.kind === 'experience' || /company|employer|supervisor|manager|reference|organization|organisation|workplace/.test(label);
+  return !!employer && /phone|telephone|\btel\b|contact number|e-?mail|\baddress\b|\bstreet\b|\bcity\b|\bstate\b|\bprovince\b|\bzip\b|\bpostal\b|\bcountry\b/.test(label);
+}
+
 export function classifyField(field: ScannedField, adapterKeys: AdapterKeys = {}): Classification {
+  // Employer/reference contacts are not the applicant, even if the site adds autocomplete="tel"
+  // or reuses a generic adapter name. Leave these teachable, without asking AI for a personal fact.
+  if (isEmployerContact(field)) {
+    return { kind: 'unknown', askAi: false };
+  }
   // Ashby prefixes names with the form id ("<uuid>__systemfield_eeoc_gender").
   const index = field.section?.index;
   // Workday ids repeat per entry with a number in front ("workExperience-12--jobTitle"); match on the end.

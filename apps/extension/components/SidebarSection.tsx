@@ -54,7 +54,7 @@ export function SidebarSection({ id, title, summary, defaultOpen = false, hidden
         void browser.storage.local.set({ [key]: next }).catch(() => setError('Could not remember this layout. Try again.'));
       }}>
       <span aria-hidden className="text-xs text-slate-400">{open ? '▾' : '▸'}</span>
-      <span className="font-semibold text-slate-900">{title}</span>
+      <span className="shrink-0 font-semibold text-slate-900">{title}</span>
       {summary && <span className="ml-auto truncate text-xs font-normal text-slate-500" title={summary}>{summary}</span>}
     </button></h2>
     </div>

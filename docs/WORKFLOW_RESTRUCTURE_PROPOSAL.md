@@ -2,7 +2,7 @@
 
 **Status:** Approved by the owner for incremental implementation on `codex/application-queue` on October 17, 2026. Review each checkpoint before proceeding to the next. This document includes work that is still planned.
 
-**Updated:** October 19, 2026. Publication review started at 13:21 PDT (UTC−07:00).
+**Updated:** October 20, 2026. The earlier publication snapshot below is dated October 19.
 
 **Purpose:** Align contributors on how Job Autofill should behave when filling one application or preparing a queue of applications. This document describes intended behavior and acceptance criteria; it is not a claim that these features have shipped.
 
@@ -21,10 +21,57 @@ Deliver these increments on the feature branch, with actual validation results a
 
 Increment 1 begins with a shared **derived view** of existing persisted state. It does not yet replace the background transition controller, add login detection, or expand automatic submission support. Those changes belong to later increments.
 
-**Current checkpoint:** Increments 1–5 are implemented in this feature-branch snapshot. Reload the
-rebuilt extension and refresh existing application tabs. Recovery, performance measurement and
-release packaging remain checkpoint 6; the broader proposal below still includes planned work.
-This snapshot is for collaborator review on `codex/application-queue`, not a release on `main`.
+**Current checkpoint:** All six increments are implemented for review on `codex/application-queue`.
+Checkpoint 6 adds failed-closure capacity recovery, observer/timer cleanup, visible build information,
+keyboard/narrow-sidebar checks, a controlled benchmark and checked 0.2.0 review packaging. Reload the
+rebuilt extension and refresh existing application tabs after copying unsaved answers. This is not a
+release on `main` or a Chrome Web Store publication. The broader product vision still includes goals
+requiring real-site/human measurements and further platform work.
+
+### Checkpoint 6 — October 20, 2026
+
+The queue retains a completed tab's slot through closure failures; worker recovery closes it once and
+only then opens the replacement. Repeated review setup replaces old observers/listeners. Disconnect
+stops pending edit callbacks and late parser clearing; empty overlays release periodic work. Version
+0.2.0 and its build timestamp are available in the keyboard-accessible footer, with update instructions.
+
+The [review guide](RELEASE_REVIEW.md) documents the supported workflow matrix, privacy, recovery and
+versioned ZIP/checksum/provenance checks. CI runs these checks and retains the review package and
+aggregate benchmark report. One development-only ZIP reader verifies archive members without adding
+an extension runtime dependency. No new permissions, backend or automatic submissions are added.
+
+The [first controlled benchmark](BENCHMARK_RESULTS.md), recorded October 20 at 15:58 PDT, filled 90/90
+eligible answers across nine fictional applications, with zero incorrect nonempty fills and no submits.
+It measures local review latency and page JS heap relative to the same forms without the extension.
+It does not measure total Chrome RAM, human review time or real-employer throughput.
+
+Validation completed October 20, 2026 (PDT), using Windows, Node.js 22.23.3 and Chromium
+153.0.8010.12:
+
+| Check | Actual result |
+| --- | --- |
+| Repository checks and TypeScript | Passed |
+| `npm test` | 484 passed across 32 files |
+| `npm run test:e2e` | Build passed; 50 browser cases passed, 2 failed, 9 did not run, 1 configuration-specific skip in an interrupted 58.4-minute run |
+| Fresh `login-resume.spec.ts` and `queue-review.spec.ts` run | All 16 passed in 2.1 minutes, including both failed cases and all cases skipped by their serial groups |
+| New closure/keyboard focused checks | Both passed in 13.0 seconds; included again in the broad run |
+| `npm run benchmark` | Passed: 90/90 correct eligible answers, zero incorrect nonempty answers, no submits across nine fictional forms |
+| `npm run release:package` | Passed: 0.2.0 ZIP, 30 byte-matching files, checksum and release provenance |
+| `npm run test:release` | Private-file, fake credential-pattern, version mismatch and outdated ZIP rejected; restored package reverified |
+| Packaged build footer check | Passed in 4.2 seconds; synthetic screenshot in ignored `local-data/workflow-increment-6/` |
+
+The broad run experienced an approximately 49-minute execution pause during its authentication check;
+the check then observed login instead of account creation. A later browser renderer reported Target
+crashed in the review group. Both complete groups passed in fresh browsers without application-code
+changes. Across the broad and fresh runs, all **61 applicable browser cases** were exercised successfully;
+a single fresh all-green full run is not claimed. The remaining configuration skip checks a build
+without OAuth, while this local build already configures it. No real employer submissions or personal
+Google-account OAuth were tested. CI is configured for these checks but has not run for these local edits.
+
+Packaging initially exposed an unavailable ZIP-reader assumption. The final checker uses the pinned
+development-only `yauzl` dependency and streams archive members without filesystem extraction.
+The extension bundle and permissions do not include this build tool. Generated artifacts and raw
+measurements remain ignored; this checkpoint is implemented locally and has not been pushed or merged.
 
 ### Dated implementation record
 
@@ -38,8 +85,9 @@ not recorded; the publication-review timestamp above is separate from those impl
 | 2026-10-17 | 3. Review and learning | Field feedback, Show field, user-edit preservation and Profile/Memory confirmation |
 | 2026-10-18 | 4. Live queue controls | Capacity, add-links intake, explicit resume/retry, abandonment and stale-control guards |
 | 2026-10-19 | 5. Submission and tracking | Supported confirmation, manual fallback, owned-tab handoff and independent Sheets recovery |
+| 2026-10-20 | 6. Recovery and review packaging | Failed-close recovery, observer cleanup, accessible build information, controlled measurements and checked 0.2.0 package |
 
-Continue with checkpoint 6 after reviewing this snapshot. Passing the controlled checks below does
+The six-checkpoint redesign sequence is complete for review. Passing the controlled checks below does
 not establish that every employer form is supported or that performance targets have been measured.
 
 Publication preparation on 2026-10-19 (PDT, UTC−07:00):
@@ -571,7 +619,7 @@ Recommended defaults for owner and collaborator approval:
 2. Use continuous replacement with three open applications by default and an initial configurable limit of five.
 3. Allow capacity changes during a queue without closing existing jobs when the limit decreases.
 4. Detect supported submission confirmations only after user submission, with an always-discoverable manual fallback.
-5. Close confirmed owned queue tabs and advance; keep standalone tabs open by default.
+5. Keep detected submissions open. Advance only after explicit Continue/Submitted or user tab closure; keep standalone tabs open by default.
 6. Keep remembering explicit and confirmed, with Profile updates for direct facts and scoped Memories for contextual answers.
 7. Keep Sheets synchronization independent from local completion and queue progress.
 8. Deliver the work in the phases above, validating each phase before expanding scope.
@@ -579,3 +627,16 @@ Recommended defaults for owner and collaborator approval:
 The owner has authorized incremental implementation. Use the checkpoints above to collect feedback, agree on module ownership, and adjust later increments before proceeding. Publication of this document alone was not implementation approval; the subsequent owner request supplied that approval.
 
 Related project guidance: [shared instructions](../AGENTS.md), [architecture](ARCHITECTURE.md), [contracts](CONTRACTS.md), [roadmap](ROADMAP.md), and [collaboration](COLLABORATION.md).
+
+## Review feedback — 2026-10-20
+
+The owner's follow-up changes the closure default above: detecting submission records its outcome,
+but the current queue job remains occupied until the person explicitly closes it or chooses Continue.
+This also keeps review from being displaced while the person is saving Memories. Arbitrary sign-in
+redirects/new tabs can be manually attached with Use this page for this job. The original description
+page/link are kept and company/title similarity alone cannot authorize Profile transfer.
+
+Additional polish adds pinned Stop fill (including later conditional-field writers), guarded document
+uploads, a persistent compact application-details toggle, smaller queue/review controls, nested Show
+field navigation, Today/Tomorrow start-date choices, and manual employer contact/address fields.
+See the [changelog](../CHANGELOG.md) and [contracts](CONTRACTS.md) for the resulting behavior.

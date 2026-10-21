@@ -5,7 +5,28 @@ not releases on `main`. Dates record the documented checkpoint day in America/Lo
 exact implementation times were not recorded. The publication review began on
 **2026-10-19 at 13:21 PDT (UTC−07:00)**. See the
 [checkpoint status and validation](docs/WORKFLOW_RESTRUCTURE_PROPOSAL.md#implementation-checkpoints)
-for completed work, test evidence and the remaining recovery/release checkpoint.
+for completed work, test evidence and publication status.
+
+## 2026-10-20 — Review controls and redirected application recovery
+
+- Add pinned Stop fill for individual applications and queue jobs; stop deferred widget writes and optional AI, preserve answers, and return to manual review.
+- Prevent replacement/cleared upload inputs from repeatedly attaching the same document. Recognize attachment tables above nested Upload menus; uncertain attempts require checking the website rather than automatic replay.
+- Keep application details/submission controls collapsed by default with a persistent toggle; compact queue capacity, cards and review explanations. Keep Show field available during filling and scroll after focus, including nested panels.
+- Resolve Today/Tomorrow availability on each fill, retaining fixed dates and the existing two-week default. Leave employer contact/address fields manual instead of using personal facts or global contact Memories.
+- Keep automatically detected submissions open and occupied until explicit Continue/close. Closing a detected submission settles its queue item; Sheets retry remains independent of moving on.
+- Allow an explicit Use this page for this job handoff after sign-in, redirects or a new application tab. Preserve the original link and description tab, bind a new attempt to the selected destination, and retain it across worker restarts. Company/title similarity alone never authorizes a handoff.
+- Compare same-job identity for explicit field capture/location, preserving job-ID and origin checks while allowing harmless tracking changes.
+- Validation at wrap-up: repository/type/build checks, 493 unit tests and four final focused Chromium cases passed. A broader run passed 61 cases but hit a renderer crash in the new group; that group passed separately. A fresh complete run and updated benchmark/ZIP evidence are deferred; see [remaining work](docs/REMAINING_WORK.md).
+
+## 2026-10-20 — 0.2.0 workflow checkpoint 6: recovery and review packaging
+
+- Keep a completed live tab in queue capacity when automatic closure fails, revalidate ownership before retry, and recover closure after worker restart without opening extra tabs.
+- Replace earlier review observers/listeners on repeated setup; cancel pending edit work and optional-employer clearing on disconnect. Remove idle overlay timers/listeners and DOM when labels disappear.
+- Show version/build information and refresh guidance in an expandable, keyboard-accessible sidebar footer; test a 320px sidebar.
+- Add a reproducible three-platform, three-tab synthetic benchmark with exact-answer checks, retry/edit preservation and a separate no-extension baseline. First run: 90/90 eligible answers, zero incorrect nonempty answers; real-site coverage, whole-browser RAM and human time savings remain unmeasured.
+- Add a versioned ZIP, matching-file/manifest/version and credential-pattern checks, SHA-256 checksum and honest source provenance. WXT creates the ZIP; the development-only yauzl reader verifies it without adding an extension runtime dependency or permission.
+- Document supported workflows, privacy, installation/update steps and measured limitations. CI now covers the redesign branch and retains the checked package plus aggregate benchmark evidence.
+- Validation: 484 unit tests, 61 applicable browser cases across broad/fresh runs, benchmark and package/negative-guard checks passed. The interrupted full-run failures, successful reruns and one OAuth-specific skip are documented in the checkpoint record; remote CI has not run for this local checkpoint.
 
 ## 2026-10-19 — Feature-branch integration
 

@@ -15,6 +15,7 @@ From the repository root, run `npm run setup` once to install dependencies and C
 | `queue.spec.ts` | Independent fills, capacity changes, add-links intake, duplicate decisions, cancellation, worker/browser recovery and abandonment |
 | `login-resume.spec.ts` | Login/account/verification waiting, bounded resume and original-job ownership |
 | `queue-review.spec.ts` | Review priorities, Show field, user edits, confirmed Profile/Memory saves and AI review |
+| `fill-controls.spec.ts` | Upload replacement/retry guard, employer contact isolation, relative start dates, nested Show field, compact persisted summary, Stop fill and explicit redirected/new-tab handoff |
 | `submission.spec.ts` | Supported confirmations, manual fallback, validation failures, tab handoff and independent Sheets retries |
 
 Sheets and Gemini responses are simulated; these cases do not validate personal-account OAuth or
@@ -24,3 +25,8 @@ for actual run results and remaining release work.
 
 Optional `SCREENSHOTS` writes synthetic proof images to a local folder. Use an ignored path under
 `local-data/`; keep personal applicant information and real credentials out of fixtures and evidence.
+
+Checkpoint 6 also tests failed tab closure through alarm/worker recovery, permanent Fill and keyboard
+access to version/build metadata at 320px. Pure unit checks exercise repeated observer replacement,
+disconnect cleanup and idle overlay teardown. `npm run benchmark` uses its own Playwright config and
+separate fixture/browser baseline; see the [review guide](../../docs/RELEASE_REVIEW.md) for its limits.

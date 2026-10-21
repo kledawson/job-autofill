@@ -25,6 +25,7 @@ const BUILD_ID = new Date().toISOString();
 export default defineConfig({
   // Visible folder (not the default .output) so it is easy to pick in Chrome's Load unpacked dialog.
   outDir: 'dist',
+  zip: { name: 'job-autofill', zipSources: false, artifactTemplate: '{{name}}-{{version}}-{{browser}}-{{manifestVersion}}.zip' },
   modules: ['@wxt-dev/module-react'],
   vite: () => ({ plugins: [tailwindcss()], define: { __BUILD__: JSON.stringify(BUILD_ID) } }),
   manifest: {

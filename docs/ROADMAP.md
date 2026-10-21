@@ -8,6 +8,11 @@
 
 ## Implemented application queue
 
+Review polish adds pinned cancellation, compact persistent application details, nested field navigation,
+guarded uploads, relative availability and manual employer contact/address fields. Detected submissions
+remain open until explicit Continue or closure. Redirected/new-tab forms can be explicitly attached to
+their queue job with Use this page for this job; title/company similarity never grants access.
+
 Workflow restructuring is approved for increments on the feature branch. See the
 [proposal and checkpoints](WORKFLOW_RESTRUCTURE_PROPOSAL.md#implementation-checkpoints).
 The first increment pins Fill, simplifies its summary, reveals missing-answer review, shares derived
@@ -18,7 +23,9 @@ Fill again. The third increment adds evidence-based field priorities, explicit S
 user edits, amber AI review, and clearer Profile/Memory confirmation. The fourth increment adds visible
 live capacity, links added to running/paused queues, status-aware explicit resume/retry, stale-token
 controls, and abandonment during stalled fills. The fifth increment shares submission detection,
-manual fallback and independent Sheets retry. Recovery and release hardening remains checkpoint 6.
+manual fallback and independent Sheets retry. The sixth checkpoint hardens failed-closure capacity and
+observer cleanup, adds visible build information and narrow-sidebar keyboard coverage, and supplies a
+controlled benchmark plus a checked versioned review package. See the [review guide](RELEASE_REVIEW.md).
 
 - Multiline link preview, duplicate detection and existing-application review.
 - User-started 1–5-tab continuous queues with independent background fills and a per-tab review/submission barrier; optional legacy batch mode remains available.
@@ -27,9 +34,10 @@ manual fallback and independent Sheets retry. Recovery and release hardening rem
 
 - Compact persistent sidebar sections: Fill is permanently pinned; Queue initially opens; Review & remember reveals missing answers after filling, while presets and history initially close. Settings checkboxes hide/show optional categories; Setup and Track initially hidden. Compact Fill summary and Queue primary actions; Memory capture has its own bounded review list. Drag/keyboard reorder of optional categories persists; Applications appears last by default. Link drafts survive panel reopening.
 - Restart stalled attempts without replacing manual answers; basic fields do not wait on optional AI. Shared readiness/local recovery improves queue/manual Memory parity. Stop autofill & review unlocks manual capture; exact rerenders retain review tokens.
-- Shared Greenhouse, Lever and Ashby user-submission confirmation closes owned tabs and refills available slots; unsupported confirmation requires the manual Submitted action.
+- Shared Greenhouse, Lever and Ashby user-submission confirmation records success and retains the tab; explicit Continue/closure frees its slot. Unsupported confirmation requires manual Submitted.
 
-Future work: refine the supported-form benchmark and measure coverage and review time.
+Measured baseline: [90/90 eligible answers on nine fictional forms](BENCHMARK_RESULTS.md). Future work:
+expand employer-specific coverage and measure human review time and whole-browser memory use.
 
 ## Implemented application presets
 
@@ -98,4 +106,5 @@ Agree on contracts in milestone 1. Use separate issues, branches, and PRs; coord
 
 Additional adapters and widgets, Sheets sync, job-description fit analysis, grounded AI drafts, selected-board job discovery, and optional cloud accounts/sync. Prioritize after personal use identifies the largest friction.
 
-Workflow increment 5 adds shared standalone/queued submission evidence, persistent manual fallback, explicit standalone closure and independent serialized Sheets retries. Recovery/performance/release remains checkpoint 6.
+All six workflow redesign checkpoints are implemented for branch review. Store publication, a merge to
+main, real-employer throughput studies and broader platform support remain separate work.

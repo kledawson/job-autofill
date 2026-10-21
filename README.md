@@ -7,11 +7,12 @@ A local-first Chrome extension for assisted job application autofill and applica
 Recent improvements: role-specific presets, batches of applications with manual review, multi-select
 Memories, batch saving with profile updates, and a searchable **Memories** library in Settings. See the [changelog](CHANGELOG.md).
 
-**Workflow redesign branch:** `codex/application-queue` contains checkpoints 1–5: permanent Fill,
+**Workflow redesign branch:** `codex/application-queue` contains checkpoints 1–6: permanent Fill,
 login/resume, prioritized review, live queue controls, and shared submission/Sheets recovery.
 See the [dated implementation record and validation](docs/WORKFLOW_RESTRUCTURE_PROPOSAL.md#implementation-checkpoints)
-before continuing. Checkpoint 6 (recovery, performance measurement and release packaging) remains planned.
+before continuing. Checkpoint 6 adds recovery cleanup, a controlled benchmark and versioned review packaging.
 This branch snapshot is available for review separately from `main`.
+See the [0.2.0 review guide](docs/RELEASE_REVIEW.md) and [measured benchmark](docs/BENCHMARK_RESULTS.md).
 
 ## Start here
 
@@ -85,6 +86,8 @@ After rebuilding, click the reload icon on the extension's card in `chrome://ext
 | `npm test` | Unit tests against saved application forms |
 | `npm run test:e2e` | Builds, then drives the real extension in Chromium (needs the Chromium that `npm run setup` installs) |
 | `npm run dev` | Development build with live reload |
+| `npm run benchmark` | Controlled three-platform queue coverage/timing and page-heap measurements |
+| `npm run release:package` | Build and verify a versioned ZIP, checksum and release metadata |
 
 See [the extension README](apps/extension/README.md) for Gemini and Google Sheets setup.
 

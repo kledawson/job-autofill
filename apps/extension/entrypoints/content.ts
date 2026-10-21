@@ -201,6 +201,7 @@ export default defineContentScript({
 
         console.debug(`[Job Autofill] build ${__BUILD__}: filling started`);
         showStatus({ title: 'Filling application…', lines: ['Filling fields from your profile.', `Build ${__BUILD__.slice(5, 16).replace('T', ' ')}`], tone: 'working' });
+        if (run !== generation || controller.signal.aborted) return;
         const summary = await s.run();
         if (run !== generation) return;
         currentId = id;
@@ -296,7 +297,7 @@ export default defineContentScript({
       if (msg.type === 'checkSubmission') { sendResponse({ evidence: readSubmissionEvidence(document), url: location.href }); return false; }
       if (msg.type === 'showField') {
         try {
-          if (!session || filling || msg.runId !== currentRunId) throw new Error('Wait for this fill to finish or refresh the application results.');
+          if (!session || msg.runId !== currentRunId) throw new Error('Refresh the application results before locating this field.');
           session.showField(msg.token, msg.question); sendResponse({ ok: true });
         } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not locate this field.' }); }
         return false;
@@ -336,26 +337,29 @@ export default defineContentScript({
         void (async () => {
           if (msg.runId === queueRun || msg.runId === currentRunId) {
             if (waiting && waiting.runId === msg.runId && !waiting.controller.signal.aborted) showStatus({ title: 'Automatic resume stopped', lines: ['Your page was kept. Finish this step, then use Fill this page or retry the queue job.'], tone: 'attention' });
-            generation++; session?.disconnect(); aborter?.abort(); waiting?.controller.abort();
+            const writer = session;
+            generation++; writer?.disconnect(); aborter?.abort(); waiting?.controller.abort();
             // Wait for the old widget writer to stop before a retry can touch this form.
-            if (msg.wait) await task;
+            if (msg.wait) { await task; await writer?.whenIdle(); }
             filling = false;
           }
           sendResponse({ ok: true });
         })();
         return true;
       }
-      if (msg.type === 'reviewNow') {
+      if (msg.type === 'reviewNow' || msg.type === 'stopFill') {
         void (async () => {
           try {
-            if (msg.runId !== queueRun || !session || currentId === undefined) throw new Error('The form is still opening. Wait until fields appear.');
+            if (msg.type === 'reviewNow' && (msg.runId !== queueRun || !session || currentId === undefined)) throw new Error('The form is still opening. Wait until fields appear.');
             const owner = session;
-            generation++; owner.disconnect(); aborter?.abort();
-            owner.summary(); // Keep unfinished questions teachable if the user starts typing now.
+            generation++; owner?.disconnect(); aborter?.abort(); waiting?.controller.abort();
+            owner?.summary(); // Keep unfinished questions teachable if the user starts typing now.
             await task;
-            if (session !== owner || queueRun !== msg.runId) throw new Error('This fill attempt changed. Review the current attempt instead.');
+            await owner?.whenIdle();
+            if (session !== owner || (msg.type === 'reviewNow' && queueRun !== msg.runId)) throw new Error('This fill attempt changed. Review the current attempt instead.');
             filling = false;
-            await report(owner.enterReview());
+            if (owner && currentId !== undefined) await report(owner.enterReview());
+            showStatus({ title: 'Autofill stopped', lines: ['Your answers were kept. Finish missing answers and save Memories, or click Fill this page to continue.'], tone: 'done' });
             sendResponse({ ok: true });
           } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not switch to review.' }); }
         })();

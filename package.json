@@ -1,6 +1,6 @@
 {
   "name": "job-autofill",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Local-first Chrome extension that fills job applications from a saved profile and stops for review",
   "type": "module",
@@ -15,12 +15,17 @@
     "zip": "npm run zip -w apps/extension",
     "typecheck": "npm run compile -w apps/extension",
     "test": "npm test -w apps/extension",
-    "test:e2e": "npm run build && playwright test"
+    "test:e2e": "npm run build && playwright test",
+    "benchmark": "npm run build && playwright test --config playwright.benchmark.config.ts",
+    "release:check": "node scripts/check-release.mjs",
+    "release:package": "npm run zip && npm run release:check",
+    "test:release": "node scripts/test-release-guards.mjs"
   },
   "workspaces": [
     "apps/extension"
   ],
   "devDependencies": {
-    "@playwright/test": "^1.63.0"
+    "@playwright/test": "^1.63.0",
+    "yauzl": "3.4.0"
   }
 }

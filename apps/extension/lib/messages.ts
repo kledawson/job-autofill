@@ -114,6 +114,8 @@ export interface BackgroundMessages {
     res: Result<{ duplicate?: { filledAt: number; status: string } }>;
   };
   fillActiveTab: { req: { presetId?: string }; res: Result };
+  stopActiveFill: { req: { tabId: number }; res: Result };
+  resolveQueuePage: { req: { token: string; itemId: string; tabId: number }; res: Result };
   getRememberedMappings: { req: { questions: string[] }; res: Result<{ mappings: RememberedMapping[] }> };
   matchSavedAnswers: { req: { fields: SavedField[]; runId?: string }; res: Result<{ matches: { mapping: RememberedMapping | null; suggestionId?: number; reason: string }[] }> };
   capturePageAnswer: { req: { applicationId: number; token: string; suggestionId?: number }; res: Result<{ capture: CapturedAnswer; suggestion?: RememberedMapping }> };
@@ -160,7 +162,7 @@ export function sendToBackground<K extends keyof BackgroundMessages>(
 }
 
 /** Messages handled by the content script. */
-export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: string } | { type: 'cancelQueue'; runId?: string; wait?: boolean } | { type: 'reviewNow'; runId: string } | { type: 'ping' } | { type: 'readPosting' } |
+export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: string } | { type: 'stopFill' } | { type: 'cancelQueue'; runId?: string; wait?: boolean } | { type: 'reviewNow'; runId: string } | { type: 'ping' } | { type: 'readPosting' } |
   { type: 'checkSubmission' } |
   { type: 'showField'; token: string; question: string; runId?: string } |
   { type: 'captureAnswer'; token: string; question: string } |

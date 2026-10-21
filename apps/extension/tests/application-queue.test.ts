@@ -4,12 +4,24 @@ import { ADAPTERS } from '../lib/autofill/adapters';
 import { timing } from '../lib/autofill/fill';
 import { sampleProfile } from './helpers';
 import { jobKey } from '../lib/platforms';
-import { batchSize, nextQueueItem, parseQueueLinks, queueKey, queueSchema, type QueueState } from '../lib/application-queue';
+import { batchSize, nextQueueItem, parseQueueLinks, queueKey, queueJobMatches, queueSchema, type QueueState } from '../lib/application-queue';
 const q = (size = 3): QueueState => ({
   id: 'current', schemaVersion: 1, token: crypto.randomUUID(), status: 'running', batchSize: size, batch: 0, createdAt: Date.now(),
   items: Array.from({ length: 7 }, (_, i) => ({ id: crypto.randomUUID(), url: 'https://jobs.lever.co/example/job' + i, key: 'jobs.lever.co/example/job' + i, state: 'queued', batch: 0 })),
 });
 describe('application queue', () => {
+  it('accepts only an explicitly resolved destination while preserving the original job link', () => {
+    const state = q(), item = state.items[0]!;
+    const original = item.url;
+    item.resolvedUrl = 'https://jobs.lever.co/example/actual-form/apply';
+    expect(queueSchema.parse(state)).toBe(state);
+    expect(queueJobMatches(item, item.resolvedUrl + '?utm_source=redirect')).toBe(true);
+    expect(queueJobMatches(item, original)).toBe(false);
+    expect(queueJobMatches(item, 'https://jobs.lever.co/example/another-job/apply')).toBe(false);
+    for (const invalid of ['javascript:alert(1)', 'https://user:pass@example.com/apply', 'https://linkedin.com/jobs/1']) {
+      item.resolvedUrl = invalid; expect(() => queueSchema.parse(state)).toThrow();
+    }
+  });
   it('preserves distinct generic job IDs in the tracker and parses comma-separated links', () => {
     expect(jobKey('https://example.com/apply?id=42')).not.toBe(jobKey('https://example.com/apply?id=43'));
     expect(jobKey('https://example.com/apply?id=42&utm_source=test')).toBe(jobKey('https://example.com/apply?id=42'));

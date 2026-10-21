@@ -78,6 +78,7 @@ export interface Profile {
 
   preferences: {
     salary: string;
+    /** Fixed date/legacy text, 'today', 'tomorrow', or blank for two weeks from the fill date. */
     startDate: string;
     relocate: YesNo;
     workMode: '' | 'remote' | 'hybrid' | 'onsite' | 'flexible';

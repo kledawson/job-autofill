@@ -6,6 +6,10 @@ backend: everything lives in the browser.
 
 ## Install (unpacked)
 
+The workflow redesign review build is **0.2.0**. The sidebar footer shows its version and exact build
+timestamp. See the [review/install guide](../../docs/RELEASE_REVIEW.md) for the versioned ZIP, supported
+workflow matrix, privacy boundaries and [controlled benchmark results](../../docs/BENCHMARK_RESULTS.md).
+
 From the repository root:
 
 ```bash
@@ -303,10 +307,23 @@ preset documents. Delete all local data includes presets, their documents and fi
 3. Choose **Applications open at once** (1–5, default 3), then **Start queue**. Pages fill independently in the background. **Open the next job when an application finishes** is enabled by default: each finished/closed tab makes room for one next job. Uncheck it for the earlier batch workflow.
 4. Use **Review** to review, complete missing fields and submit on the website yourself.
    Memories and Save all remain available in the current-page review section.
-5. **Close confirmed submissions automatically** is enabled for new UI-started queues. After you click Submit yourself, a supported success screen records submission and closes that owned tab. A click, invalid form, route change or unsupported confirmation alone never counts. If detection cannot confirm success, use **Submitted — close tab** after verifying it yourself. Saving Memories must happen before submitting. **More → Abandon — close tab** stops even a stalled writer, records Abandoned, and frees its slot after closure.
+5. **Detect successful submissions (keep tabs open)** records supported success after you submit on the website. Your tab stays open and its queue slot remains occupied. Choose **Continue — close tab**, or close it yourself, when ready for the next job. If detection misses success, use **Submitted — close tab** after verifying it yourself. A click, invalid form or route change alone never counts as success. Save Memories before submitting. **More → Abandon — close tab** stops a stalled writer, records Abandoned, and frees its slot after closure.
 6. For sign-in, use **Open to sign in**, complete the website step and return to this job; the initial
    queue fill resumes automatically. On a later application step, use **Fill this step**. Missing forms,
    closed tabs and expired waits offer **Retry autofill** after resolving the issue. Existing values stay.
+   If the actual form opens at another URL or in a new tab, select that form and choose the original
+   queue job's **More → Use this page for this job**. Grant site access if prompted. The old description
+   tab and original queue link are kept; a fresh attempt fills the selected page. A matching company or
+   title alone does not transfer your Profile. The same control is visible for blocked queue items.
+
+**Stop fill** stays beside Fill this page. It cancels the current page's writer and keeps answers for
+manual review. **Details & submission** expands the compact application summary and remembers your
+choice. **Show field** scrolls and highlights the selected question, including nested form panels.
+In Profile → Common Questions, choose Today, Tomorrow, Two weeks from today or a fixed start date.
+Relative dates update on every fill. Employer contact/address questions stay manual instead of using
+your personal contact details. Upload guards prevent repeated attachment attempts; if an upload is
+uncertain, check the website's file list and upload manually if necessary. Refresh before retrying a
+removed/failed attachment. The extension does not remove duplicate files already uploaded.
 
 **Pause queue** lets already opened jobs finish signing in/filling and prevents new jobs opening. **Resume queue** continues.
 The visible **Open application limit** takes effect immediately: three to five opens two more waiting

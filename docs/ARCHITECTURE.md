@@ -28,6 +28,30 @@ Start with a Chrome extension using TypeScript, WXT, Manifest V3, React, and Zod
 
 ## Reliability boundaries
 
+Review controls additionally bind widget event dispatch to the active writer's AbortSignal. Stop fill
+awaits that writer before enabling read-only review. File uploads have per-session document-role and
+document/form attempt guards: replacing an input cannot replay an upload. A detected attachment is
+preserved; uncertain previous attempts are left for manual inspection. Employer contact/address
+metadata is extracted independently of applicant labels; these fields remain manual and cannot update
+personal contact facts through Memories or optional AI matching.
+
+Automatic submission detection records the application outcome while retaining the queue review slot.
+Only explicit Continue/Submitted/Abandon or a user tab closure releases it. Detection never closes a tab.
+The optional per-item resolvedUrl is an explicit user-selected application destination; url/key keep the
+original posting identity. A trusted active-tab handoff cancels the prior writer, retains the prior page,
+checks permissions/duplicates/capacity, and starts a new owned attempt on the selected page. Company/title
+similarity cannot authorize a destination. Ordinary authentication still resumes only on its approved job.
+
+Checkpoint 6 makes observer setup replace earlier listeners and invalidates pending callbacks on
+cleanup. Disconnect also cancels optional-employer parser clearing. The overlay releases its timer,
+listeners and DOM when no labels remain. Queue reconciliation revalidates token/item/attempt/session
+ownership before closing a completed tab, and only detaches its tab ID once removal succeeds or the
+tab is confirmed absent. Failed closure keeps capacity occupied and exposes recovery guidance.
+
+Public version/build metadata is shown in a native expandable sidebar footer. The controlled benchmark
+and checked ZIP are development/release artifacts only; they do not add telemetry or runtime permissions.
+See the [supported matrix and measurement boundaries](RELEASE_REVIEW.md).
+
 Workflow increment 3 reports bounded `fieldFeedback` metadata (tokens, question labels, status,
 source and an action reason) separately from eligible Memory capture tokens. Required gaps precede
 unverified writes, drafts and optional questions. Verified Profile/Memory/preset writes appear green;
@@ -217,7 +241,7 @@ Sheets synchronization, whose failure does not block the queue. No website Submi
 Pause prevents the next claim; Stop disconnects all active sessions and preserves open pages.
 Queue observers update review/capture metadata but do not automatically fill later steps.
 An explicit Fill this step retries through the bounded scheduler and preserves non-empty values.
-Missing forms, closed tabs and bounded loading/fill timeouts require Retry or Skip. Chromium
+Missing forms, closed tabs and bounded loading/fill timeouts offer Retry, Use this page for this job, or Abandon. Chromium
 alarms (additional alarms permission) wake durable timeout/recovery checks without keeping the
 worker alive. Worker restarts reconcile state; browser restarts pause and detach previous tab IDs,
 since those IDs must not authorize closing tabs in a new session. Session-owned markers restrict

@@ -70,6 +70,56 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await context?.close(); await new Promise<void>(r => server?.close(()=>r())); });
 
+test('build information is keyboard accessible at narrow sidebar widths', async () => {
+  const info = await context.newPage(); await info.goto('chrome-extension://' + extensionId + '/sidepanel.html');
+  await info.setViewportSize({ width: 320, height: 800 });
+  const summary = info.locator('footer summary');
+  await expect(summary).toContainText('Version ' + await info.evaluate(() => chrome.runtime.getManifest().version));
+  await summary.focus(); await summary.press('Enter');
+  await expect(info.locator('footer time')).toBeVisible();
+  expect(await info.locator('footer time').getAttribute('datetime')).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  expect(await info.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  if (process.env.SCREENSHOTS) {
+    mkdirSync(process.env.SCREENSHOTS, { recursive: true });
+    await info.screenshot({ path: join(process.env.SCREENSHOTS, 'checkpoint-6-build-info.png'), fullPage: true });
+  }
+  await info.getByRole('button', { name: 'Fill this page', exact: true }).focus();
+  await expect(info.getByRole('button', { name: 'Fill this page', exact: true })).toBeFocused();
+  await summary.focus(); await summary.press('Space'); await expect(info.locator('footer time')).toBeHidden();
+  await info.close();
+});
+
+test('closure retry keeps a completed live tab in capacity until removal succeeds', async () => {
+  expect((await request('startQueue', { urls: [url('close-fails'), url('close-next')], batchSize: 1, mode: 'continuous' })).ok).toBe(true);
+  await ready(0);
+  const original = await state(), tabId = original.items[0].tabId, first = form('close-fails');
+  const worker = context.serviceWorkers()[0]!;
+  await worker.evaluate(tabId => {
+    const remove = chrome.tabs.remove.bind(chrome.tabs);
+    (globalThis as any).__closeFixture = { remove, failures: 0 };
+    chrome.tabs.remove = async (id: number) => {
+      if (id === tabId) { (globalThis as any).__closeFixture.failures++; throw new Error('Fictional tab closure failure'); }
+      return remove(id);
+    };
+  }, tabId);
+  try {
+    expect((await action(0, 'submitted')).ok).toBe(false);
+    await panel.evaluate(() => chrome.alarms.create('application-queue', { when: Date.now() + 1 }));
+    await expect.poll(() => worker.evaluate(() => (globalThis as any).__closeFixture.failures)).toBeGreaterThan(1);
+    const q = await state(); expect(q.items[0].tabId).toBe(tabId); expect(q.items[1].state).toBe('queued');
+    expect(first.isClosed()).toBe(false);
+    expect((await rows('applications')).find(a => a.id === q.items[0].applicationId).status).toBe('Submitted');
+  } finally {
+    await worker.evaluate(() => { chrome.tabs.remove = (globalThis as any).__closeFixture.remove; delete (globalThis as any).__closeFixture; });
+  }
+  const cdp = await context.newCDPSession(panel); await cdp.send('ServiceWorker.enable'); await cdp.send('ServiceWorker.stopAllWorkers'); await cdp.detach();
+  await request('getQueue'); await ready(1);
+  expect(first.isClosed()).toBe(true);
+  expect((await state()).items[0].tabId).toBeUndefined();
+  await action(1, 'skip');
+  for (const item of (await state()).items) if (item.applicationId) await request('deleteApplication', { applicationId: item.applicationId });
+});
+
 test('bounded review batches pin role/documents, preserve edits and survive worker restarts', async () => {
   await panel.getByRole('checkbox', { name: 'Open the next job when an application finishes', exact: true }).uncheck();
   await panel.getByLabel('Job links', { exact:true }).fill([url(1),url(2),url(3),url(4),url(5),url(1)+'/apply?utm_source=x','https://linkedin.com/jobs/42'].join('\n'));

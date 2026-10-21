@@ -45,6 +45,9 @@ async function waitFor<T>(fn: () => T | null | undefined | false, timeout: numbe
 
 let engineDispatching = 0;
 let guardInstalled = false;
+const writerSignals = new WeakMap<Document, AbortSignal>();
+/** Bind all widget events to the current writer, including events after an awaited search. */
+export function bindWriterSignal(doc: Document, signal: AbortSignal) { writerSignals.set(doc, signal); }
 
 function installSubmitGuard(win: Window) {
   if (guardInstalled) return;
@@ -71,6 +74,7 @@ export function isSubmitControl(el: Element): boolean {
 }
 
 function withGuard<T>(el: Element, fn: () => T): T {
+  writerSignals.get(el.ownerDocument)?.throwIfAborted();
   if (isSubmitControl(el)) throw new Error('Refusing to interact with a submit control');
   installSubmitGuard(el.ownerDocument.defaultView ?? window);
   engineDispatching++;
@@ -292,16 +296,26 @@ export function yesNoSelected(field: ScannedField): boolean {
   return field.members.some((b) => b.getAttribute('aria-pressed') === 'true' || SELECTED_CLASS.test(b.className));
 }
 
+// Survives an explicit second Fill in this document, without storing anything on the job site.
+// A detached form or a different URL starts a separate upload context.
+const uploadAttempts = new WeakMap<Document, Map<string, Element>>();
 export function fillFile(field: ScannedField, file: File): FillOutcome {
   const input = field.el as HTMLInputElement;
   if ((input.files && input.files.length) || uploadedAlready(input)) return 'already';
+  const doc = input.ownerDocument;
+  const key = `${doc.URL}|${normalize(field.label)}|${field.section?.kind ?? ''}|${field.section?.index ?? ''}`;
+  let attempts = uploadAttempts.get(doc);
+  if (!attempts) { attempts = new Map(); uploadAttempts.set(doc, attempts); }
+  if (attempts.get(key)?.isConnected) return 'failed';
   try {
     const dt = new DataTransfer();
     dt.items.add(file);
     withGuard(input, () => {
       input.files = dt.files;
+      attempts.set(key, input.closest('form') ?? input.parentElement ?? input);
       fire(input, 'input');
-      fire(input, 'change');
+      // An input handler may synchronously replace the widget after accepting the file.
+      if (input.isConnected) fire(input, 'change');
     });
     return 'filled';
   } catch {
@@ -311,6 +325,16 @@ export function fillFile(field: ScannedField, file: File): FillOutcome {
 
 /** A file the site already shows as attached next to this upload box (Workday keeps the box empty after uploading). */
 export function uploadedAlready(input: HTMLInputElement): boolean {
+  // ClearCompany-style tables can precede a deeply nested Upload menu, outside the
+  // input's small wrapper. Stop at a caption or another upload so a resume never
+  // suppresses the following Cover Letter field.
+  for (let branch: Element | null = input, depth = 0; branch && depth < 12; branch = branch.parentElement, depth++) {
+    if (branch.matches('label,h1,h2,h3,h4,legend,form,body')) break;
+    for (let sibling = branch.previousElementSibling, count = 0; sibling && count < 12; sibling = sibling.previousElementSibling, count++) {
+      if (sibling.matches('input[type="file"],label,h1,h2,h3,h4,legend') || sibling.querySelector('input[type="file"],h1,h2,h3,h4,legend,label')) break;
+      if (sibling.matches('table,[role="table"]') && /[\w)\]-]\.(pdf|docx?|rtf)\b/i.test(sibling.textContent ?? '')) return true;
+    }
+  }
   let node = input.parentElement;
   for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
     if (node.querySelectorAll('input[type="file"]').length > 1) return false;

@@ -35,6 +35,8 @@ export interface ScannedField {
   path: string;
   /** The repeatable entry the field belongs to, when it sits under a numbered heading. */
   section?: Section;
+  /** Contact fields in an employer block must never fall back to the applicant's contact facts. */
+  employerContext?: boolean;
   autocomplete: string;
   required: boolean;
   maxLength?: number;
@@ -306,6 +308,19 @@ export function sectionOf(el: HTMLElement): Section | undefined {
   return undefined;
 }
 
+function employerContextOf(el: HTMLElement): boolean {
+  const work = /^(?:(?:previous|current|prior)\s+)?(?:work experience|work history|employment(?: history)?|employer(?: information| details)?)(?:\s*#?\s*\d+)?$/i;
+  for (let node = composedParent(el); node && node.tagName !== 'BODY'; node = composedParent(node)) {
+    if (node.matches('form')) break;
+    const heading = Array.from(node.children).find(child => child.matches('legend,h2,h3,h4,[role="heading"]'));
+    if (heading && work.test(textOf(heading))) return true;
+  }
+  // Some forms use headings and sibling blocks rather than enclosing sections.
+  const headings = deepAll<HTMLElement>(el.ownerDocument, 'h2,h3,[role="heading"]');
+  const nearest = headings.filter(h => !h.closest(`[${OWN_ATTR}]`) && precedes(h, el)).at(-1);
+  return !!nearest && work.test(textOf(nearest));
+}
+
 /**
  * The question text for a control or a group of controls. Tries explicit associations first,
  * then the nearest label-like element before it in an enclosing container.
@@ -464,6 +479,7 @@ function makeField(kind: FieldKind, el: HTMLElement, members: HTMLElement[], opt
     name: el.getAttribute('name') ?? '',
     path: el.closest('[data-field-path]')?.getAttribute('data-field-path') ?? el.getAttribute('data-automation-id') ?? '',
     section: sectionOf(el),
+    employerContext: employerContextOf(el),
     autocomplete: el.getAttribute('autocomplete') ?? '',
     required: isRequired(members, labelEl),
     maxLength,

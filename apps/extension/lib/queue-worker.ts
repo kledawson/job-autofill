@@ -13,6 +13,7 @@ import type { Application } from './types';
 let initialized: Promise<void> = Promise.resolve();
 const ALARM = 'application-queue';
 const ownershipKey = (tabId: number) => 'queueTab:' + tabId;
+const destination = (item: QueueItem) => toApplicationUrl(item.resolvedUrl ?? item.url);
 export async function ownsTab(item: QueueItem, token: string) {
   if (item.tabId === undefined) return false;
   const marker = (await browser.storage.session.get(ownershipKey(item.tabId)))[ownershipKey(item.tabId)];
@@ -136,7 +137,7 @@ async function launchNext(requestedId?: string) {
       const snapshot = await queueSnapshot(claim.token);
       if (!await ownsTab(claim.item, claim.token)) throw new Error('This tab belongs to an earlier browser session. Retry after reopening the queue.');
       const tab = await browser.tabs.get(claim.item.tabId);
-      if (!tab.url || queueKey(tab.url) !== queueKey(toApplicationUrl(claim.item.url))) throw new Error('This tab navigated away. Open the application again before retrying.');
+      if (!tab.url || queueKey(tab.url) !== queueKey(destination(claim.item))) throw new Error('This tab navigated away. Open the application, then choose Use this page for this job.');
       const ping = await browser.tabs.sendMessage(claim.item.tabId, { type: 'ping' } satisfies ContentMessage).catch(() => undefined);
       if (ping?.build !== __BUILD__) throw new Error('This page is using older extension code. Copy unsaved answers, refresh the application page, then retry.');
       await browser.tabs.update(claim.item.tabId, { autoDiscardable: false });
@@ -170,7 +171,7 @@ async function prepare(token: string, item: QueueItem, snapshot: QueueSnapshot) 
     const q = valid(await db.applicationQueue.get('current')), current = q?.items.find(i => i.attempt === item.attempt);
     if (!q || q.token !== token || !current || current.state !== 'opening' || q.status === 'stopped') throw new Error('Queue attempt was cancelled.');
     await db.fillRuns.where('tabId').equals(item.tabId!).delete();
-    await db.fillRuns.put({ id: item.attempt!, tabId: item.tabId!, topUrl: toApplicationUrl(item.url), createdAt: Date.now(), context });
+    await db.fillRuns.put({ id: item.attempt!, tabId: item.tabId!, topUrl: destination(item), createdAt: Date.now(), context });
   });
 }
 export async function queueOpening(attempt: string, sender: Sender) {
@@ -185,7 +186,7 @@ export async function queueOpening(attempt: string, sender: Sender) {
   if (!claimed) return;
   await browser.storage.session.set({ [ownershipKey(claimed.item.tabId!)]: claimed.token + ':' + claimed.item.id });
   await prepare(claimed.token, claimed.item, await queueSnapshot(claimed.token));
-  await browser.tabs.update(claimed.item.tabId!, { url: toApplicationUrl(claimed.item.url), autoDiscardable: false });
+  await browser.tabs.update(claimed.item.tabId!, { url: destination(claimed.item), autoDiscardable: false });
 }
 export async function queueWaiting(runId: string, sender: Sender, reason: QueueWaitReason) {
   if (!queueWaitReasons.includes(reason) || (sender.frameId ?? 0) !== 0 || sender.tab?.id === undefined) throw new Error('Invalid waiting page.');
@@ -283,6 +284,16 @@ export async function queueAction(token: string, itemId: string, action: 'open' 
   if (!current) throw new Error('Application no longer in this queue.');
   if (action === 'review') {
     if (current.state === 'review') return;
+    if ((current.state === 'opening' || current.waitingFor) && current.tabId !== undefined && current.attempt && await ownsTab(current, token)) {
+      await cancel(current, true);
+      await mutate(state => {
+        const item = state.items.find(i => i.id === itemId);
+        if (state.token !== token || !item || item.attempt !== current.attempt) throw new Error('This attempt changed. Try again.');
+        item.state = 'needs-action'; item.deadline = undefined; clearQueueWait(item);
+        item.note = 'Autofill stopped. Your page was kept. Retry when you are ready.';
+      });
+      return;
+    }
     if (current.state !== 'filling' || current.tabId === undefined || !current.attempt || !current.applicationId || !await ownsTab(current, token)) throw new Error('Wait until the application form opens, then try again.');
     const ping = await browser.tabs.sendMessage(current.tabId, { type: 'ping' } satisfies ContentMessage);
     if (ping?.build !== __BUILD__) throw new Error('Refresh this application page to load the updated extension.');
@@ -316,6 +327,22 @@ export async function queueAction(token: string, itemId: string, action: 'open' 
     if (current.tabId === undefined || !await ownsTab(current, token)) throw new Error('This application tab is no longer available. Retry to open a new queue tab.');
     const tab = await browser.tabs.update(current.tabId, { active: true });
     if (tab?.windowId !== undefined) await browser.windows.update(tab.windowId, { focused: true }); return;
+  }
+  // Detection records an outcome, never the user's decision to leave this application.
+  // Keep its review slot/tab until an explicit Submitted/Continue action or a tab close.
+  if (action === 'submitted' && confirmation) {
+    const held = await mutate(async state => {
+      const item = state.items.find(i => i.id === itemId);
+      if (state.token !== token || !item || item.attempt !== confirmation.runId || !item.applicationId || !['review', 'needs-action'].includes(item.state)) throw new Error('This submission belongs to an older attempt.');
+      const app = await db.applications.get(item.applicationId);
+      if (!app || app.runId !== item.attempt || app.status === 'Filling') throw new Error('Wait for autofill to stop before confirming submission.');
+      if (app.status !== 'Submitted') await db.applications.update(app.id!, submittedPatch(app, confirmation.source));
+      item.state = 'review'; item.deadline = undefined; clearQueueWait(item); item.submitIntentAt = undefined;
+      item.note = 'Submission detected. This tab stays open until you close it or choose Continue.';
+      return structuredClone(item);
+    });
+    if (held) await cancel(held, true);
+    return held?.applicationId;
   }
   if (action === 'retry') {
     const old = await mutate(state => {
@@ -393,14 +420,42 @@ export async function queueAction(token: string, itemId: string, action: 'open' 
   }
   return item.applicationId;
 }
+/** Explicit user handoff only. A matching company/title never authorizes a new destination. */
+export async function queueResolvePage(token: string, itemId: string, tabId: number, url: string) {
+  const target = queueUrl(url), q = await queuePublic(), old = q?.items.find(i => i.id === itemId);
+  if (!q || q.token !== token || !old || settled(old) || !['running', 'paused'].includes(q.status)) throw new Error('This queue job is no longer available.');
+  if (q.items.some(i => i.id !== itemId && (i.tabId === tabId || queueKey(i.resolvedUrl ?? i.url) === queueKey(target)))) throw new Error('This page already belongs to another queued job.');
+  if (old.tabId === undefined && queueOccupancy(q) >= q.batchSize) throw new Error('All queue slots are in use. Finish a job or increase the limit first.');
+  await cancel(old, true);
+  if (tabId !== old.tabId) await browser.tabs.sendMessage(tabId, { type: 'stopFill' } satisfies ContentMessage).catch(() => undefined);
+  const tab = await browser.tabs.get(tabId);
+  if (tab.url !== url) throw new Error('The selected page changed. Select the application and try again.');
+  await mutate(async state => {
+    const item = state.items.find(i => i.id === itemId);
+    if (state.token !== token || !item || item.attempt !== old.attempt || item.tabId !== old.tabId || settled(item) || !['running', 'paused'].includes(state.status)) throw new Error('This attempt changed. Try again.');
+    if (state.items.some(i => i.id !== itemId && (i.tabId === tabId || queueKey(i.resolvedUrl ?? i.url) === queueKey(target)))) throw new Error('This page already belongs to another queued job.');
+    if (item.tabId === undefined && queueOccupancy(state) >= state.batchSize) throw new Error('All queue slots are in use.');
+    const app = item.applicationId ? await db.applications.get(item.applicationId) : undefined;
+    if (app?.status === 'Submitted') throw new Error('This application is already submitted. Close it or choose Continue.');
+    if (app?.status === 'Filling') await db.applications.update(app.id!, { status: 'Ready for review' });
+    item.resolvedUrl = target; item.tabId = tabId; item.attempt = crypto.randomUUID(); item.frameId = undefined; item.applicationId = undefined;
+    item.state = 'needs-action'; item.deadline = undefined; clearQueueWait(item);
+    item.note = 'Application page selected by you. Preparing autofill…';
+  });
+  if (old.tabId !== undefined && old.tabId !== tabId) await browser.storage.session.remove(ownershipKey(old.tabId));
+  await browser.storage.session.set({ [ownershipKey(tabId)]: token + ':' + itemId });
+  await queueAction(token, itemId, 'retry');
+}
 export async function queueRemoved(tabId: number) {
   await browser.storage.session.remove(ownershipKey(tabId));
-  const item = await mutate(q => {
+  const item = await mutate(async q => {
     const i = q.items.find(i => i.tabId === tabId);
     if (!i) return;
     const copy = structuredClone(i);
     i.tabId = undefined; i.deadline = undefined; clearQueueWait(i);
-    if (!settled(i)) { i.state = 'needs-action'; i.note = 'Tab closed before submission was confirmed. Retry or skip.'; }
+    const app = i.applicationId ? await db.applications.get(i.applicationId) : undefined;
+    if (app?.status === 'Submitted') { i.state = 'submitted'; i.note = undefined; }
+    else if (!settled(i)) { i.state = 'needs-action'; i.note = 'Tab closed before submission was confirmed. Retry or skip.'; }
     return copy;
   });
   if (item) await cancel(item);
@@ -417,7 +472,24 @@ export async function queueTick() {
         if (tab.url === openingUrl(item.attempt!)) await browser.storage.session.set({ [ownershipKey(item.tabId)]: q.token + ':' + item.id });
         else { await mutate(state => { const i = state.items.find(i => i.id === item.id)!; i.tabId = undefined; i.deadline = undefined; clearQueueWait(i); if (!settled(i)) { i.state = 'needs-action'; i.note = 'Previous session tab was kept. Retry to open a new queue tab.'; } }); continue; }
       }
-      if (settled(item)) { await browser.tabs.remove(item.tabId).catch(() => undefined); await queueRemoved(item.tabId); continue; }
+      if (settled(item)) {
+        // A failed close is still an occupied slot. Never detach a live tab and open a replacement.
+        const fresh = await queuePublic();
+        const live = fresh?.token === q.token ? fresh.items.find(i => i.id === item.id && i.attempt === item.attempt && i.tabId === item.tabId && settled(i)) : undefined;
+        if (!live || !await ownsTab(live, q.token)) continue;
+        try { await browser.tabs.remove(item.tabId); }
+        catch {
+          if (await browser.tabs.get(item.tabId).catch(() => undefined)) {
+            await mutate(state => {
+              const i = state.items.find(i => i.id === item.id);
+              if (state.token === q.token && i && i.attempt === item.attempt && i.tabId === item.tabId)
+                i.note = 'Could not close this completed tab. Close it yourself or retry; its queue slot is still reserved.';
+            });
+            continue;
+          }
+        }
+        await queueRemoved(item.tabId); continue;
+      }
       if (item.waitingFor && item.resumeUntil! <= Date.now()) {
         await fail(item.attempt!, 'Waiting ended after 30 minutes. Finish signing in, return to this application, then retry autofill.'); continue;
       }
@@ -431,7 +503,7 @@ export async function queueTick() {
         // Recover a worker interruption after the handshake bound the tab but before navigation.
         const run = await db.fillRuns.get(item.attempt!);
         if (!run) await prepare(q.token, item, await queueSnapshot(q.token));
-        await browser.tabs.update(item.tabId, { url: toApplicationUrl(item.url) });
+        await browser.tabs.update(item.tabId, { url: destination(item) });
       }
     }
     if (inFlight(item) && (item.deadline ?? 0) < Date.now()) {

@@ -6,6 +6,8 @@ export interface QueueItem {
   state: 'queued' | 'opening' | 'filling' | 'review' | 'needs-action' | 'submitted' | 'skipped';
   batch: number; attempt?: string; tabId?: number; frameId?: number; applicationId?: number; deadline?: number; note?: string;
   submitIntentAt?: number;
+  /** Destination explicitly selected by the user after a redirect; original url/key stay intact. */
+  resolvedUrl?: string;
   /** Metadata only; no authentication values are captured. Absent on legacy records. */
   waitingFor?: QueueWaitReason;
   resumeUntil?: number;
@@ -16,7 +18,7 @@ export const queueWaitReasons: QueueWaitReason[] = ['login', 'account', 'verific
 export function clearQueueWait(item: QueueItem) { item.waitingFor = undefined; item.resumeUntil = undefined; }
 /** Authentication redirects may wait in their owned tab, but only the original job may claim a writer. */
 export function queueJobMatches(item: QueueItem, topUrl: string | undefined): boolean {
-  try { return !!topUrl && queueKey(topUrl) === item.key; } catch { return false; }
+  try { return !!topUrl && queueKey(topUrl) === (item.resolvedUrl ? queueKey(item.resolvedUrl) : item.key); } catch { return false; }
 }
 export interface QueueState {
   id: 'current'; schemaVersion: 1; token: string; status: 'running' | 'paused' | 'stopped' | 'complete';
@@ -51,6 +53,7 @@ export const queueSchema = { parse(value: unknown): QueueState {
     if (i.waitingFor !== undefined && (!queueWaitReasons.includes(i.waitingFor) || i.state !== 'needs-action' || !i.attempt || i.tabId === undefined || i.resumeUntil === undefined || i.batch === 0)) throw new Error('Invalid waiting queue attempt.');
     if (i.resumeUntil !== undefined && i.waitingFor === undefined) throw new Error('Invalid queue resume deadline.');
     if (queueKey(queueUrl(i.url)) !== i.key) throw new Error('Invalid stored application link.');
+    if (i.resolvedUrl !== undefined && (typeof i.resolvedUrl !== 'string' || queueUrl(i.resolvedUrl) !== i.resolvedUrl)) throw new Error('Invalid resolved application link.');
     if (keys.has(i.key)) throw new Error('Duplicate job in stored queue.');
     keys.add(i.key);
     if (inFlight(i) && i.batch !== q.batch) throw new Error('Active attempt outside current batch.');

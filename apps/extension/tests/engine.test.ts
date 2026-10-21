@@ -793,6 +793,15 @@ describe('Lever resume prefill', () => {
 });
 
 describe('Lever late resume prefill', () => {
+  it('stops optional employer clearing when its fill session is disconnected', async () => {
+    const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/6ed76ce8-4156-4b60-b120-403538bd66cd/apply');
+    const org = doc.querySelector('input[name="org"]') as HTMLInputElement;
+    const { d } = deps(); d.context.profile.currentCompany = '';
+    const session = new FillSession(doc, ADAPTERS.lever, d); await session.run();
+    session.disconnect(); org.value = 'Keep my correction';
+    await new Promise(r => setTimeout(r, 650));
+    expect(org.value).toBe('Keep my correction');
+  });
   it('clears an employer the parser fills after the fill pass, unless the person has started typing', async () => {
     const doc = loadFixture('lever.html', 'https://jobs.lever.co/contoso/6ed76ce8-4156-4b60-b120-403538bd66cd/apply');
     const org = doc.querySelector('input[name="org"]') as HTMLInputElement;

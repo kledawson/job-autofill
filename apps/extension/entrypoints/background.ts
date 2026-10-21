@@ -1,6 +1,6 @@
 import { bindSubmissionTab, forgetSubmissionTab, submissionIntent, submissionContext, submissionConfirmed, submissionBlocked, confirmManually, closeSubmittedTab } from '@/lib/submission-worker';
 import { submittedPatch } from '@/lib/submission-state';
-import { installQueue, queueStart, queueAdd, queuePublic, queueOpening, queuePending, queueWaiting, queueFinished, queueStarted, queueControl, queueAction, queueRemoved, queueOwns, queueBusy, queueTab } from '@/lib/queue-worker';
+import { installQueue, queueStart, queueAdd, queuePublic, queueOpening, queuePending, queueWaiting, queueFinished, queueStarted, queueControl, queueAction, queueResolvePage, queueRemoved, queueOwns, queueBusy, queueTab } from '@/lib/queue-worker';
 import { parseFieldFeedback } from '@/lib/field-feedback';
 import { selectedPresetId, buildPresetContext } from '@/lib/preset-db';
 import { presetId } from '@/lib/presets';
@@ -278,7 +278,7 @@ async function applicationForCapture(id: number, token: string, sender: Sender) 
   const field = app?.reviewFields?.find(f => f.token === token);
   if (!app || app.tabId === undefined || !field) throw new Error('This field is no longer available. Fill the current page again.');
   const tab = await browser.tabs.get(app.tabId);
-  if (!tab.url || applicationKey(tab.url) !== applicationKey(app.topUrl ?? app.url)) throw new Error('The application page changed. Fill it again before remembering an answer.');
+  if (!tab.url || new URL(tab.url).origin !== new URL(app.topUrl ?? app.url).origin || jobKey(tab.url) !== jobKey(app.topUrl ?? app.url)) throw new Error('This tab is on a different application. Return to the original form to save its answers.');
   return { app, field, context: { platform: app.platform, company: app.company, url: app.url } satisfies MappingContext };
 }
 
@@ -335,7 +335,8 @@ const handlers: Handlers = {
       if (req.action === 'submitted' || req.action === 'skip') await refreshBadge();
       if (req.action === 'submitted') {
         const q = await queuePublic(), id = q?.token === req.token ? q.items.find(i => i.id === req.itemId)?.applicationId : undefined;
-        if (id && (await db.applications.get(id))?.status === 'Submitted') void syncSheet(id);
+        const app = id ? await db.applications.get(id) : undefined;
+        if (app?.status === 'Submitted' && app.sheetSyncPending) void syncSheet(app.id!);
       }
     }
     return { ok: true };
@@ -385,9 +386,9 @@ const handlers: Handlers = {
     if (!Number.isSafeInteger(req.applicationId) || typeof req.token !== 'string') throw new Error('Invalid field request.');
     const app = await db.applications.get(req.applicationId);
     const field = app?.fieldFeedback?.find(f => f.token === req.token) ?? app?.reviewFields?.find(f => f.token === req.token);
-    if (!app || app.tabId === undefined || !field || app.status !== 'Ready for review') throw new Error('Fill this application and wait for review before locating a field.');
+    if (!app || app.tabId === undefined || !field || !['Filling', 'Ready for review'].includes(app.status)) throw new Error('Fill this application before locating a field.');
     const tab = await browser.tabs.get(app.tabId);
-    if (!tab.url || applicationKey(tab.url) !== applicationKey(app.topUrl ?? app.url)) throw new Error('This tab has moved to another application. Refresh its fill results.');
+    if (!tab.url || new URL(tab.url).origin !== new URL(app.topUrl ?? app.url).origin || jobKey(tab.url) !== jobKey(app.topUrl ?? app.url)) throw new Error('This tab has moved to another application. Refresh its fill results.');
     const result = await browser.tabs.sendMessage(app.tabId, { type: 'showField', token: field.token, question: field.label, runId: app.runId } satisfies ContentMessage, { frameId: app.frameId ?? 0 });
     if (!result?.ok) throw new Error(result?.error ?? 'This field is no longer available. Fill the page again.');
     await browser.tabs.update(app.tabId, { active: true });
@@ -724,6 +725,34 @@ const handlers: Handlers = {
     return { ok: true };
   },
 
+  async resolveQueuePage({ token, itemId, tabId }, sender) {
+    requireExtensionPage(sender); presetId(token); presetId(itemId);
+    if (!Number.isSafeInteger(tabId)) throw new Error('Select an application tab.');
+    const tab = await activeTab();
+    if (tab?.id !== tabId || !tab.url || !isWebUrl(tab.url)) throw new Error('Select the actual application page, then try again.');
+    if (!await canAccess(tab.url)) throw new Error(NEEDS_ACCESS);
+    const ping = await sendToTab(tabId, { type: 'ping' }).catch(() => undefined) as { build?: string } | undefined;
+    if (!ping) { await injectContentScript(tabId); await new Promise(r => setTimeout(r, 300)); }
+    else if (ping.build !== __BUILD__) throw new Error('Refresh this application page to load the updated extension first.');
+    await queueResolvePage(token, itemId, tabId, tab.url);
+    return { ok: true };
+  },
+
+  async stopActiveFill({ tabId }, sender) {
+    requireExtensionPage(sender);
+    if (!Number.isSafeInteger(tabId) || tabId < 0) throw new Error('Invalid application tab.');
+    const tab = await activeTab();
+    if (tab?.id !== tabId) throw new Error('The active tab changed. Return to the application and try again.');
+    const queue = await db.applicationQueue.get('current');
+    const item = queue && ['running', 'paused'].includes(queue.status) ? queue.items.find(i => i.tabId === tabId && !['submitted', 'skipped'].includes(i.state)) : undefined;
+    if (queue && item) { await queueAction(queue.token, item.id, 'review'); return { ok: true }; }
+    const apps = await db.applications.where('tabId').equals(tabId).sortBy('filledAt');
+    const app = apps.at(-1);
+    const result = await browser.tabs.sendMessage(tabId, { type: 'stopFill' } satisfies ContentMessage, app ? { frameId: app.frameId ?? 0 } : undefined);
+    if (!result?.ok) throw new Error(result?.error ?? 'Could not stop this fill. Refresh the application page.');
+    return { ok: true };
+  },
+
   async fillActiveTab({ presetId: selectedId }, sender) {
     requireExtensionPage(sender);
     if (selectedId !== undefined) presetId(selectedId);
@@ -764,7 +793,8 @@ const handlers: Handlers = {
     try { await confirmManually(applicationId); }
     finally {
       await refreshBadge();
-      if ((await db.applications.get(applicationId))?.status === 'Submitted') void syncSheet(applicationId);
+      const app = await db.applications.get(applicationId);
+      if (app?.status === 'Submitted' && app.sheetSyncPending) void syncSheet(applicationId);
     }
     return { ok: true };
   },

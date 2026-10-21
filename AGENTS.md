@@ -17,6 +17,10 @@ The original MVP baseline covers JSON profile import/export, profile editing, ge
 
 The current extension also implements multiple adapters, confirmed Memories, resume uploads, optional Gemini responses and optional Google Sheets tracking. Maintain these existing features within their documented privacy boundaries. User-started bounded application queues stop for manual review and submission. Keep automatic submission, unattended submission, broad job search, accounts and cloud sync outside the current scope. Later features belong on the roadmap, not in unrelated PRs. Do not automate LinkedIn in this project.
 
+Detected submissions retain their tab and queue slot until explicit Continue/Submitted or user closure.
+An unfamiliar redirected/new-tab form requires an explicit Use this page for this job handoff; a matching
+title/company alone never authorizes Profile transfer. Employer contact/address fields stay manual.
+
 ## Stack and structure
 
 - Implementation: TypeScript in strict mode, WXT / Manifest V3, React, Zod, Vitest, and Playwright.
@@ -64,6 +68,7 @@ The current extension also implements multiple adapters, confirmed Memories, res
 ## Validation and completion
 
 - Current repository checks: `npm run check` (repository/documentation), `npm run typecheck`, `npm test` (Vitest), `npm run build`, and `npm run test:e2e` (Playwright Chromium with fictional forms). See the extension README for installation prerequisites.
+- For workflow/release changes, also run `npm run benchmark`, `npm run release:package`, and `npm run test:release`. Keep generated packages and raw measurement reports ignored; document measured scope and limitations in the review guide.
 - When adding the extension scaffold, provide and document real commands for type checking, unit tests, browser tests, and builds. Add them to CI; do not introduce placeholder passing tests or empty checks.
 - Test risky behavior with meaningful cases: ambiguous labels, malformed imports, rerenders, duplicate fills, and preservation of user edits. Run relevant checks for each change.
 - Before a PR, inspect the final diff and staged files for accidental data or unrelated edits. Keep architecture/contracts/roadmap consistent with implemented behavior.

@@ -18,7 +18,7 @@ function readDismissedNotice(value: unknown): string {
     (record.status === 'stopped' || record.status === 'complete') ? record.token + ':' + record.status : '';
 }
 
-export function ApplicationQueue({ presetId, activeTabId }: { presetId?: string; activeTabId?: number }) {
+export function ApplicationQueue({ presetId, activeTabId, activeTabUrl }: { presetId?: string; activeTabId?: number; activeTabUrl?: string }) {
   const [text, setText] = useState(''), [size, setSize] = useState(3);
   const [continuous, setContinuous] = useState(true), [detectSubmission, setDetectSubmission] = useState(true);
   const edited = useRef(false);
@@ -112,7 +112,7 @@ export function ApplicationQueue({ presetId, activeTabId }: { presetId?: string;
   }
   const linkInput = <div className="space-y-2">
     <label htmlFor="job-links" className="block font-medium">{active ? 'More job links' : 'Job links'}</label>
-    <Textarea id="job-links" aria-describedby="queue-input-help" placeholder="Paste one or more full job application links" rows={3} value={text} maxLength={250000} onChange={e => draft(e.target.value, size)} />
+    <Textarea id="job-links" aria-describedby="queue-input-help" placeholder="Paste one or more full job application links" rows={2} style={{ minHeight: 64 }} value={text} maxLength={250000} onChange={e => draft(e.target.value, size)} />
     <p id="queue-input-help" className="text-xs text-slate-500">One per line, or paste a list. {active ? `${100 - queue.items.length} spaces left in this queue.` : 'Up to 100 links.'}</p>
     {text.trim() && <div className="space-y-2 rounded-lg bg-slate-50 p-3 text-xs" aria-live="polite">
       <p className="font-medium">{fresh.length} {selectedResumeIds.length ? 'applications selected' : `new application${fresh.length === 1 ? '' : 's'} ready`}</p>
@@ -132,23 +132,19 @@ export function ApplicationQueue({ presetId, activeTabId }: { presetId?: string;
     </div>}
   </div>;
   return <section aria-label="Application queue" className="space-y-2">
-    <p className="text-xs leading-relaxed text-slate-500">Autofill → finish missing answers → save Memories → submit on the website.</p>
+    <details className="text-xs text-slate-500"><summary className="cursor-pointer">How the queue works</summary><p>Autofill → finish missing answers → save Memories → submit on the website.</p><p>Detected submissions stay open. Close the tab or choose Continue when you are ready for the next job.</p></details>
     {active && queue ? <>
       <div className="space-y-1 rounded-lg bg-slate-50 p-2.5" role="status">
         <div className="flex justify-between gap-2 font-medium"><span>{queue.mode === 'continuous' ? 'Your queue' : 'Batch ' + (queue.batch || 1)}</span><span>{queue.status === 'paused' ? 'Paused' : current.some(inFlight) ? 'Filling' : current.some(i => i.state === 'needs-action') ? 'Needs your action' : 'Ready to review'}</span></div>
         <p className="text-xs text-indigo-900">{finished} of {queue.items.length} finished · {waiting} waiting</p>
-        <p className="truncate text-xs text-slate-500" title={queue.resumeName}>Using {queue.presetName} · locked</p>
         <progress className="h-1.5 w-full accent-indigo-600" aria-label="Queue progress" value={finished} max={queue.items.length} />
-      </div>
-      <div className="rounded-lg border border-slate-200 p-2.5 space-y-1">
         <label className="flex items-center justify-between gap-3 text-xs font-medium">{queue.mode === 'continuous' ? 'Open application limit' : 'Next batch size'}
-          <span className="w-20 shrink-0"><Select aria-label={queue.mode === 'continuous' ? 'Open application limit' : 'Next batch size'} options={['1','2','3','4','5']} value={String(queue.batchSize)} disabled={busy} onChange={e => control('size', Number(e.target.value))} /></span>
+          <span className="w-20 shrink-0"><Select className="py-1" aria-label={queue.mode === 'continuous' ? 'Open application limit' : 'Next batch size'} options={['1','2','3','4','5']} value={String(queue.batchSize)} disabled={busy} onChange={e => control('size', Number(e.target.value))} /></span>
         </label>
-        <p className="text-xs text-slate-500">{occupied} slot{occupied === 1 ? '' : 's'} in use.{queue.status === 'paused' ? ' Paused: open applications can finish; new jobs wait.' : occupied > queue.batchSize ? ' Above the new limit. Tabs stay open until you finish them.' : !waiting ? ' No more jobs waiting. Add links below.' : queue.mode === 'continuous' ? ' Increasing the limit opens more jobs now.' : ' Changes apply to the next batch.'}</p>
+        <p className="text-xs text-slate-500">{occupied} slot{occupied === 1 ? '' : 's'} in use.{queue.status === 'paused' ? ' New jobs wait while paused.' : occupied > queue.batchSize ? ' Above the new limit. Tabs stay open.' : !waiting ? ' Add links to queue more jobs.' : queue.mode === 'continuous' ? ' Raise the limit to open more.' : ' Changes apply to the next batch.'}</p>
       </div>
-      <p className="text-xs leading-relaxed text-slate-600">Save answers before submitting. {queue.autoDetectSubmission ? 'Supported Greenhouse, Lever or Ashby success closes the tab automatically; otherwise use Submitted.' : 'Choose Submitted here after success on the website.'}</p>
-      <ul className="space-y-2">{current.map((item, index) => <QueueCard key={item.id} item={item} index={index} queue={queue}
-        app={applications.find(app => app.id === item.applicationId)} active={item.tabId !== undefined && item.tabId === activeTabId} busy={busy} perform={perform} />)}</ul>
+      <ul aria-label="Open queue applications" className="max-h-64 space-y-1.5 overflow-y-auto overscroll-contain pr-1">{current.map((item, index) => <QueueCard key={item.id} item={item} index={index} queue={queue}
+        app={applications.find(app => app.id === item.applicationId)} active={item.tabId !== undefined && item.tabId === activeTabId} activeTabId={activeTabId} activeTabUrl={activeTabUrl} busy={busy} perform={perform} />)}</ul>
       <div className="flex gap-2"><Button variant="secondary" disabled={busy} onClick={() => control(queue.status === 'paused' ? 'resume' : 'pause')}>{queue.status === 'paused' ? 'Resume queue' : 'Pause queue'}</Button><details className="relative text-sm"><summary className="cursor-pointer rounded-lg px-3 py-2 text-slate-600">Queue options</summary><div className="mt-1 rounded-lg border border-slate-200 bg-white p-2"><Button variant="ghost" disabled={busy} onClick={() => control('stop')}>Stop queue</Button><p className="max-w-44 text-xs text-slate-500">Stops autofill; keeps opened tabs and their answers.</p></div></details></div>
       <details className="rounded-lg border border-slate-200 p-2.5"><summary className="cursor-pointer text-sm font-medium">Add job links</summary><div className="mt-3 space-y-2">{linkInput}<p className="text-xs text-slate-500">New jobs use this queue’s {queue.presetName} preset. Existing progress stays saved.</p><Button className="w-full" disabled={busy || !fresh.length || !!preview.error} onClick={() => start(true)}>Add to queue{fresh.length ? ` (${fresh.length})` : ''}</Button></div></details>
     </> : <>
@@ -159,8 +155,7 @@ export function ApplicationQueue({ presetId, activeTabId }: { presetId?: string;
       </label>
       <p className="text-xs text-slate-500">Opens up to {size} tabs. {continuous ? 'Finishing one makes room for the next job.' : 'Review the whole batch before the next batch opens.'}</p>
       <label className="flex items-start gap-2 text-xs text-slate-700"><input type="checkbox" className="mt-0.5 accent-indigo-600" checked={continuous} onChange={e => draft(text, size, e.target.checked)} />Open the next job when an application finishes</label>
-      <label className="flex items-start gap-2 text-xs text-slate-700"><input type="checkbox" className="mt-0.5 accent-indigo-600" checked={detectSubmission} onChange={e => draft(text, size, continuous, e.target.checked)} />Close confirmed submissions automatically</label>
-      <p className="text-xs text-slate-500">You submit every application yourself. A click or validation error never counts as success.</p>
+      <label className="flex items-start gap-2 text-xs text-slate-700"><input type="checkbox" className="mt-0.5 accent-indigo-600" checked={detectSubmission} onChange={e => draft(text, size, continuous, e.target.checked)} />Detect successful submissions (keep tabs open)</label>
       <Button className="w-full" disabled={busy || !presetId || !fresh.length || !!preview.error} onClick={() => start()}>{busy ? 'Starting…' : 'Start queue'}</Button>
     </>}
     {feedback && <Notice tone="success" onDismiss={() => setFeedback('')}>{feedback}</Notice>}
@@ -185,8 +180,9 @@ function LinkChoices({ choices, selected, busy, onSelect, onOpen }: {
   </>;
 }
 
-function QueueCard({ item, index, queue, app, active, busy, perform }: {
+function QueueCard({ item, index, queue, app, active, activeTabId, activeTabUrl, busy, perform }: {
   item: QueueItem; index: number; queue: QueueRecord; app?: Application; active: boolean; busy: boolean;
+  activeTabId?: number; activeTabUrl?: string;
   perform(work: () => Promise<{ ok: boolean; error?: string }>): Promise<void>;
 }) {
   const [more, setMore] = useState(false);
@@ -194,6 +190,11 @@ function QueueCard({ item, index, queue, app, active, busy, perform }: {
   const state = workflow.title;
   const statusColor = item.state === 'needs-action' || workflow.phase === 'needs-answers' ? 'bg-amber-50 text-amber-800' : item.state === 'review' ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-600';
   const finished = settled(item);
+  async function resolvePage() {
+    if (activeTabId === undefined || !activeTabUrl) return;
+    if (!detectPlatform(activeTabUrl) && !await browser.permissions.request({ origins: ALL_SITES }).catch(() => false)) return;
+    await perform(() => sendToBackground('resolveQueuePage', { token: queue.token, itemId: item.id, tabId: activeTabId }));
+  }
   function action(action: 'open' | 'retry' | 'review' | 'submitted' | 'skip') {
     return perform(async () => {
       const result = await sendToBackground('queueAction', { token: queue.token, itemId: item.id, action });
@@ -207,7 +208,7 @@ function QueueCard({ item, index, queue, app, active, busy, perform }: {
       return result;
     });
   }
-  return <li data-queue-item={item.id} className={'space-y-2 rounded-lg border p-2.5 ' + (active ? 'border-indigo-300 bg-indigo-50/30' : 'border-slate-200 bg-white')}>
+  return <li data-queue-item={item.id} className={'space-y-1.5 rounded-lg border p-2 ' + (active ? 'border-indigo-300 bg-indigo-50/30' : 'border-slate-200 bg-white')}>
     <div className="flex items-start gap-2">
       <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs text-slate-500">{queue.mode === 'continuous' ? queue.items.findIndex(i => i.id === item.id) + 1 : index + 1}</span>
       <div className="min-w-0 flex-1">
@@ -217,25 +218,30 @@ function QueueCard({ item, index, queue, app, active, busy, perform }: {
       <span className={'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ' + statusColor}>{state}</span>
     </div>
     {item.state === 'filling' && item.tabId !== undefined && <FillPhase tabId={item.tabId} />}
-    {item.note && <p className="text-xs text-amber-800">{item.note}</p>}
-    {app && item.state === 'review' && <p className="text-xs text-slate-500">{app.filledCount} filled · {app.missingCount} need you</p>}
+    {item.note && <details className="text-xs text-amber-800" open={item.state === 'needs-action'}><summary className="cursor-pointer">Queue note</summary><p>{item.note}</p></details>}
     {finished && item.tabId !== undefined && <div className="space-y-1"><p className="text-xs text-amber-800">Outcome saved. This tab still occupies a slot.</p><Button variant="secondary" disabled={busy} onClick={() => action(item.state === 'submitted' ? 'submitted' : 'skip')}>Retry closing tab</Button></div>}
-    {!finished && <div className="flex items-center gap-2">
+    {!finished && <div className="flex flex-wrap items-center gap-2">
+      {app?.status === 'Submitted' && <Button className="px-2 py-1 text-xs" disabled={busy} onClick={() => action('submitted')}>Continue — close tab</Button>}
       {item.tabId !== undefined && <button type="button" disabled={busy} className={'rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-50 ' + (item.state === 'review' ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'border border-slate-300 text-slate-700 hover:bg-slate-50')} onClick={() => action('open')}>{item.waitingFor === 'login' || item.waitingFor === 'account' ? 'Open to sign in' : item.waitingFor ? 'Open application' : 'Review'}</button>}
       {workflow.canConfirmSubmission && <button type="button" disabled={busy} aria-label="Submitted — close tab" title="Confirm successful submission and close this tab" className="rounded-md border border-green-200 px-3 py-1.5 text-xs font-medium text-green-800 hover:bg-green-50 disabled:opacity-50" onClick={() => action('submitted')}>✓ Submitted</button>}
       {item.state === 'needs-action' && !item.waitingFor && <button type="button" disabled={busy} className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50" onClick={() => action('retry')}>Retry autofill</button>}
+      {item.state === 'needs-action' && !more && <Button variant="secondary" className="px-2 py-1 text-xs" disabled={busy || activeTabId === undefined || !activeTabUrl?.startsWith('http')} onClick={resolvePage}>Use this page for this job</Button>}
       {workflow.canFinishManually && <button type="button" disabled={busy} className="rounded-md border border-indigo-200 px-2 py-1.5 text-xs font-medium text-indigo-700 disabled:opacity-50" onClick={() => action('review')}>Stop autofill & review</button>}
       <button type="button" className="ml-auto rounded-md px-2 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100" aria-expanded={more} aria-controls={'queue-more-' + item.id} onClick={() => setMore(value => !value)}>{more ? 'Less' : 'More'} <span aria-hidden>{more ? '▴' : '▾'}</span></button>
     </div>}
     {!finished && <div id={'queue-more-' + item.id} hidden={!more} className="space-y-2 border-t border-slate-100 pt-2">
+      {app?.status !== 'Submitted' && <div className="space-y-1"><p className="text-xs text-slate-500">Redirect or new sign-in tab? Open the actual application, then attach it to this job. The description tab stays open.</p>
+        <Button variant="secondary" className="px-2 py-1 text-xs" disabled={busy || activeTabId === undefined || !activeTabUrl?.startsWith('http')} onClick={resolvePage}>Use this page for this job</Button></div>}
       <div className="flex flex-wrap gap-2">
-        {(['review','opening','filling'].includes(item.state) || item.waitingFor) && <button type="button" disabled={busy} className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-50" onClick={() => action('retry')}>{inFlight(item) || item.waitingFor ? 'Restart autofill' : 'Fill this step'}</button>}
-        <button type="button" disabled={busy} className="rounded-md px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50" onClick={async () => {
+        {app?.status !== 'Submitted' && (['review','opening','filling'].includes(item.state) || item.waitingFor) && <button type="button" disabled={busy} className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 disabled:opacity-50" onClick={() => action('retry')}>{inFlight(item) || item.waitingFor ? 'Restart autofill' : 'Fill this step'}</button>}
+        {app?.status !== 'Submitted' && <button type="button" disabled={busy} className="rounded-md px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50" onClick={async () => {
           if (await confirmDelete('Abandon this application?', 'Autofill will stop and its queue tab will close. The application is recorded as Abandoned, never Submitted. Save any answers you want to keep first.', 'Abandon — close tab')) await action('skip');
-        }}>Abandon — close tab</button>
+        }}>Abandon — close tab</button>}
       </div>
       <p className="break-all text-xs text-slate-500">{item.url}</p>
+      {item.resolvedUrl && <p className="break-all text-xs text-slate-500">Application page: {item.resolvedUrl}</p>}
       <p className="text-xs text-slate-500">Resume: {queue.resumeName || 'None'}</p>
+      {app && <p className="text-xs text-slate-500">{app.filledCount} filled · {app.missingCount} need you</p>}
     </div>}
   </li>;
 }

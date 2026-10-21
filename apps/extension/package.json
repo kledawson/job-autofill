@@ -1,12 +1,12 @@
 {
   "name": "@job-autofill/extension",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
     "build": "wxt build && node ../../scripts/sync-legacy-extension.mjs",
-    "zip": "wxt zip",
+    "zip": "wxt zip && node ../../scripts/sync-legacy-extension.mjs",
     "compile": "tsc --noEmit",
     "test": "vitest run",
     "postinstall": "wxt prepare"

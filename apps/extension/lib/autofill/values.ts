@@ -102,6 +102,17 @@ function chosenStartDate(value: string): string[] | null {
   return m ? dateVariants(+m[1]!, +m[2]!, +m[3]!) : nonEmpty(v);
 }
 
+/** Relative choices resolve in local calendar time on each application, including DST/month boundaries. */
+export function startDateValues(value: string, now = new Date()): string[] | null {
+  const choice = value.trim().toLowerCase();
+  if (!choice) return twoWeeksOut(now);
+  if (choice === 'today' || choice === 'tomorrow') {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + (choice === 'tomorrow' ? 1 : 0));
+    return [...dateVariants(d.getFullYear(), d.getMonth() + 1, d.getDate()), ...(choice === 'today' ? ['Immediately', 'Today'] : ['Tomorrow'])];
+  }
+  return chosenStartDate(value);
+}
+
 function normalizeCode(code: string): string {
   const digits = code.replace(/\D/g, '');
   return digits ? `+${digits}` : '';
@@ -475,7 +486,7 @@ export function valueFor(
       return employed ? ['2 weeks', '2 Weeks', '14 days', '2'] : ['0', '0 days', 'None', 'Immediate', 'Immediately'];
     }
     case 'startDate':
-      return p.preferences.startDate.trim() ? chosenStartDate(p.preferences.startDate) : twoWeeksOut(opts.now ?? new Date());
+      return startDateValues(p.preferences.startDate, opts.now ?? new Date());
     case 'workMode': {
       const mode = p.preferences.workMode;
       if (opts.yesNo) {

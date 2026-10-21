@@ -76,7 +76,9 @@ test('standalone supported confirmations retain the tab and persist their source
     await expect.poll(async () => (await appFor(url))?.status).toBe('Submitted');
     expect((await appFor(url)).submissionSource).toBe(['greenhouse-confirmation', 'lever-confirmation', 'ashby-confirmation'][index]);
     expect(page.isClosed()).toBe(false);
-    await expect(panel.getByText('Successful submission detected.', { exact: true })).toBeVisible();
+    const details = panel.getByRole('button', { name: 'Details & submission', exact: true });
+    if (await details.isVisible()) await details.click();
+    await expect(panel.getByText(/^Successful submission detected\./)).toBeVisible();
     await expect(panel.getByRole('region', { name: 'Current page review' }).getByText(/^1 missing$/)).toHaveCount(0);
     await expect.poll(async () => (await appFor(url))?.sheetSyncPending).toBe(false);
     expect((await appFor(url)).sheetError).toBeUndefined();
@@ -157,11 +159,16 @@ test('queue background success preserves focus; foreground success hands off onc
   await first.bringToFront(); const firstId = (await queue()).items[0].tabId;
   // Trusted click in a background page does not activate it in Playwright.
   await second.locator('#reference').fill('Synthetic second reference'); await second.getByRole('button', { name: 'Submit application' }).click();
+  await expect.poll(async () => (await appFor(list[1]!)).status).toBe('Submitted');
+  expect(second.isClosed()).toBe(false); expect((await queue()).items[2].state).toBe('queued');
+  await request('markSubmitted', { applicationId: (await appFor(list[1]!)).id });
   await expect.poll(() => second.isClosed()).toBe(true); await ready(list[2]!);
   expect(await panel.evaluate(async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id)).toBe(firstId);
   await expect.poll(async () => !!(await appFor(list[1]!)).sheetError).toBe(true);
   expect((await queue()).items[1].state).toBe('submitted');
   await first.locator('#reference').fill('Synthetic first reference'); await first.getByRole('button', { name: 'Submit application' }).click();
+  await expect.poll(async () => (await appFor(list[0]!)).status).toBe('Submitted'); expect(first.isClosed()).toBe(false);
+  await request('markSubmitted', { applicationId: (await appFor(list[0]!)).id });
   await expect.poll(() => first.isClosed()).toBe(true);
   const thirdId = (await queue()).items[2].tabId;
   await expect.poll(() => panel.evaluate(async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id)).toBe(thirdId);
@@ -172,8 +179,10 @@ test('queue background success preserves focus; foreground success hands off onc
   expect(writes).toBe(2); expect(sheetRows).toHaveLength(2);
   const q = await queue(); await request('controlQueue', { token: q.token, action: 'pause' });
   const third = pageFor(list[2]!); await third.locator('#reference').fill('Synthetic third reference');
-  await third.getByRole('button', { name: 'Submit application' }).click(); await expect.poll(() => third.isClosed()).toBe(true);
+  await third.getByRole('button', { name: 'Submit application' }).click();
+  await expect.poll(async () => (await appFor(list[2]!)).status).toBe('Submitted'); expect(third.isClosed()).toBe(false);
   const app = await appFor(list[2]!); await request('markSubmitted', { applicationId: app.id });
+  await expect.poll(() => third.isClosed()).toBe(true);
   await expect.poll(async () => (await appFor(list[2]!)).sheetRow).toBe(4);
   expect((await rows('applications')).filter(a => list.includes(a.url) && a.status === 'Submitted')).toHaveLength(3);
   expect(sheetRows).toHaveLength(3); await shot('submission-queue-tracking');
