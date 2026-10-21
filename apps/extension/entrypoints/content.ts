@@ -6,6 +6,7 @@ import { FillSession, waitForForm, type FillSummary } from '@/lib/autofill/engin
 import { sendToBackground, type ContentMessage, type PageStatus } from '@/lib/messages';
 import { ATS_MATCHES, platformFor } from '@/lib/platforms';
 import { readJobDetails } from '@/lib/job-details';
+import { fetchPostingDescription, findPostingLink } from '@/lib/posting-link';
 import { hasSubmissionErrors, readSubmissionEvidence } from '@/lib/submission-confirmation';
 import { isSubmitControl } from '@/lib/autofill/fill';
 import { pageReadiness, readinessDelay } from '@/lib/autofill/page-readiness';
@@ -171,8 +172,12 @@ export default defineContentScript({
             catch (err) { return { ok: false, error: err instanceof Error ? err.message : 'AI response unavailable.' }; }
           },
           onPhase: phase => { if (run === generation) showStatus({ title: 'Filling application…', lines: [phase], tone: 'working' }); },
-          jobDescription: async (info) =>
-            info.remote ? remote(sendToBackground('jobDescription', info.remote), 10000) : (await remote(adapter.fetchDescription?.(document) ?? Promise.resolve(''), 10000)) ?? '',
+          jobDescription: async (info) => {
+            const found = info.remote ? await remote(sendToBackground('jobDescription', info.remote), 10000) : (await remote(adapter.fetchDescription?.(document) ?? Promise.resolve(''), 10000)) ?? '';
+            if (found) return found;
+            // The form page shows no description: read it from the posting the form links back to on this site.
+            return remote(fetchPostingDescription(findPostingLink(document, location.href), location.href, controller.signal), 10000).catch(() => '');
+          },
           jobDetails: (target) => remote(sendToBackground('jobDetails', target), 10000),
           mapFields: (fields) => remote(sendToBackground('mapFields', { fields })),
           matchSavedAnswers: async (fields) => {
@@ -183,17 +188,19 @@ export default defineContentScript({
           onProgress: (summary) => { if (session === s && !filling && !s.processing) void report(summary); },
         });
         session = s;
-        const id =
-          applicationId ??
-          (
-            await sendToBackground('fillStarted', {
-              url: location.href,
-              company: s.info.company,
-              role: s.info.role,
-              platform,
-              runId: context.runId,
-            })
-          ).applicationId;
+        let id = applicationId;
+        if (id === undefined) {
+          const started = await sendToBackground('fillStarted', {
+            url: location.href,
+            company: s.info.company,
+            role: s.info.role,
+            platform,
+            runId: context.runId,
+          }) as { applicationId?: number; error?: string };
+          // Without an application record the result has nowhere to go; say so instead of staying on Filling.
+          if (started.applicationId === undefined) throw new Error(started.error || 'Could not record this application. Refresh the page and try again.');
+          id = started.applicationId;
+        }
         currentId = id;
         void s.jobDetails().then(() => {
           if (session === s && currentId === id && !filling) void report(s.summary());
@@ -203,6 +210,7 @@ export default defineContentScript({
         showStatus({ title: 'Filling application…', lines: ['Filling fields from your profile.', `Build ${__BUILD__.slice(5, 16).replace('T', ' ')}`], tone: 'working' });
         if (run !== generation || controller.signal.aborted) return;
         const summary = await s.run();
+        console.debug(`[Job Autofill] fill pass finished${run !== generation ? ' (superseded by a newer fill or cancel)' : ''}`);
         if (run !== generation) return;
         currentId = id;
         // The writer has finished. Review/capture must not wait on optional job metadata.
@@ -214,7 +222,7 @@ export default defineContentScript({
         }
         if (run === generation) await report(summary);
       } catch (err) {
-        if (run !== generation) return;
+        if (run !== generation) { console.debug('[Job Autofill] superseded fill stopped:', String((err as Error)?.message ?? err)); return; }
         if (runId && run === generation) await sendToBackground('queueFinished', { runId, note: String((err as Error)?.message ?? 'Autofill stopped.').slice(0, 500) }).catch(() => undefined);
         console.error('[Job Autofill]', err);
         showStatus({ title: 'Autofill stopped', lines: [String((err as Error)?.message ?? err)], tone: 'done' });
@@ -271,6 +279,7 @@ export default defineContentScript({
       if (queueRun) lines.push('Review and submit yourself. For later steps, use Fill this step in the queue.');
       else if (adapter.multiStep) lines.push('Review this page, then continue. Each next page is filled when it opens.');
       showStatus({ title: 'Ready for review', lines, tone: 'done' });
+      console.debug('[Job Autofill] reporting result');
       const details = owner.knownDetails;
       if (owner !== session || ownerRun !== currentRunId || ownerGeneration !== generation) return;
       await sendToBackground('fillFinished', {
@@ -301,6 +310,16 @@ export default defineContentScript({
           session.showField(msg.token, msg.question); sendResponse({ ok: true });
         } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not locate this field.' }); }
         return false;
+      }
+      if (msg.type === 'draftRequest' || msg.type === 'applyDraft') {
+        void (async () => {
+          try {
+            if (!session || filling || msg.runId !== currentRunId) throw new Error('Wait for this fill to finish or refresh the application results.');
+            if (msg.type === 'draftRequest') sendResponse({ ok: true, request: await session.draftRequest(msg.token, msg.question) });
+            else sendResponse({ ok: true, note: session.applyDraft(msg.token, msg.question, msg.text) });
+          } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not use this field.' }); }
+        })();
+        return true;
       }
       if (msg.type === 'captureAnswer' || msg.type === 'applyAnswer' || msg.type === 'captureAnswers' || msg.type === 'validateCaptures' || msg.type === 'finishRemembering') {
         void (async () => {
@@ -335,7 +354,7 @@ export default defineContentScript({
       }
       if (msg.type === 'cancelQueue') {
         void (async () => {
-          if (msg.runId === queueRun || msg.runId === currentRunId) {
+          if (msg.runId && (msg.runId === queueRun || msg.runId === currentRunId)) {
             if (waiting && waiting.runId === msg.runId && !waiting.controller.signal.aborted) showStatus({ title: 'Automatic resume stopped', lines: ['Your page was kept. Finish this step, then use Fill this page or retry the queue job.'], tone: 'attention' });
             const writer = session;
             generation++; writer?.disconnect(); aborter?.abort(); waiting?.controller.abort();

@@ -41,6 +41,10 @@ describe('rowFor', () => {
     expect(rowFor(app, ['location', 'workModel'])).toEqual(['Austin, TX', 'Hybrid']);
     expect(rowFor({ ...app, location: undefined, workMode: undefined }, ['location', 'workModel'])).toEqual(['', '']);
   });
+  it('links the job posting, not a separate application form', () => {
+    const form = { ...app, platform: 'other' as const, url: 'https://ats.rippling.com/contoso/jobs/b1af21a2-0000/apply?jobBoardSlug=contoso&jobId=b1af21a2-0000&step=application' };
+    expect(rowFor(form, ['jobUrl'])).toEqual(['https://ats.rippling.com/contoso/jobs/b1af21a2-0000']);
+  });
   it('neutralizes formulas from page text', () => {
     expect(rowFor(app, ['role'])).toEqual(["'=HYPERLINK(\"http://evil\")"]);
   });

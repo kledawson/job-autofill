@@ -34,10 +34,15 @@ function VariationList({ title, description, example, itemLabel, addLabel, value
   </fieldset>;
 }
 
+const COMPANY_QUESTION = /\b(work(?:ed|ing)?|employ(?:ed|ee)?|intern(?:ed)?|interview(?:ed)?|appl(?:y|ied)) (?:for|at|with|to)\b|\b(?:former|current|previous) (?:employee|intern)\b|\b(?:relatives?|family|friends?) (?:who )?(?:work|employ)/i;
+
+/** Company-specific questions default to that company; everything else is reusable across all applications. */
 export function defaultScope(question: string, context: MappingContext): MappingScope {
+  const company = context.company && !/^(unknown|company)$/i.test(context.company) ? context.company.trim() : '';
+  const mentionsCompany = !!company && new RegExp(`(^|[^a-z0-9])${company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`, 'i').test(question);
   const intent = questionMeaning(question)?.intent;
-  if (intent && !['source', 'employmentHistory', 'relocation'].includes(intent)) return 'all';
-  return context.company && !/^(unknown|company)$/i.test(context.company) ? `company:${companyKey(context.company)}` : `application:${applicationKey(context.url)}`;
+  if (!mentionsCompany && !COMPANY_QUESTION.test(question) && !(intent && ['source', 'employmentHistory'].includes(intent))) return 'all';
+  return company ? `company:${companyKey(company)}` : `application:${applicationKey(context.url)}`;
 }
 
 export function draftForCapture(capture: CapturedAnswer, context: MappingContext): MappingDraft {

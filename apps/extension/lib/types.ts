@@ -96,6 +96,14 @@ export interface Profile {
     disability: string;
   };
 
+  /** When true, that item is filled only on applications that require it; when false it is always filled if saved. */
+  fillOnlyIfRequired: {
+    address: boolean;
+    gpa: boolean;
+    /** School start and end dates. */
+    schoolDates: boolean;
+  };
+
   updatedAt: number;
 }
 
@@ -169,6 +177,7 @@ export function emptyProfile(): Profile {
     skills: [],
     preferences: { salary: '', startDate: '', relocate: '', workMode: '', nonCompete: '' },
     eeo: { gender: DECLINE, race: DECLINE, hispanic: DECLINE, veteran: DECLINE, disability: DECLINE },
+    fillOnlyIfRequired: { address: false, gpa: false, schoolDates: false },
     updatedAt: 0,
   };
 }
@@ -196,6 +205,13 @@ export interface Application {
   url: string;
   /** Normalized job identity, see jobKey() */
   jobKey: string;
+  /**
+   * Set when the application page was reloaded after this fill, which clears what was filled. The side panel
+   * then shows the page as not filled yet; the next fill clears it.
+   */
+  pageCleared?: boolean;
+  /** When the latest fill of this application started. */
+  fillStartedAt?: number;
   company: string;
   role: string;
   platform: Platform;
@@ -252,6 +268,8 @@ export interface FieldMapping {
 export interface Settings {
   geminiApiKey: string;
   geminiModel: string;
+  /** Who writes free responses: the Gemini API, or a chat website where the person sends each prompt. */
+  answerSource: import('./chat-providers').AnswerSource;
   promptTemplate: string;
   sheetId: string;
   sheetUrl: string;

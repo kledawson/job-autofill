@@ -244,6 +244,17 @@ function isUS(country: string): boolean | null {
   return /^(us|usa|u\.s\.a?\.?|united states( of america)?)$/i.test(country.trim());
 }
 
+const SCHOOL_DATE_KEYS: ReadonlySet<ProfileKey> = new Set(['eduStartMonth', 'eduStartYear', 'eduEndMonth', 'eduEndYear', 'gradDate']);
+
+/** The user asked for this item to be filled only when the application requires it. */
+function skipUnlessRequired(key: ProfileKey, p: Profile): boolean {
+  const only = p.fillOnlyIfRequired;
+  if (!only) return false;
+  if (key === 'address') return only.address;
+  if (key === 'gpa') return only.gpa;
+  return only.schoolDates && SCHOOL_DATE_KEYS.has(key);
+}
+
 /**
  * Candidate values for a profile key, best first. Several candidates let option matching
  * handle "Bachelor's Degree" vs "BS", or "January" vs "01". Null when the profile has no value.
@@ -267,6 +278,7 @@ export function valueFor(
     hasPreferredNameField?: boolean;
   } = {},
 ): string[] | null {
+  if (!opts.required && skipUnlessRequired(key, p)) return null;
   const factIndex = key === 'gpa' ? educationFactIndex(p, opts.label ?? 'GPA', opts.index) : null;
   const edu = key === 'gpa' ? (factIndex === null ? undefined : p.education[factIndex]) : opts.index !== undefined ? educationEntries(p)[opts.index] : (p.education.find((e) => e.school) ?? p.education[0]);
   const job = experienceEntries(p)[opts.index ?? 0];

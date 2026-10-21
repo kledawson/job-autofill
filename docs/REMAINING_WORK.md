@@ -54,6 +54,12 @@ See the [changelog](../CHANGELOG.md), [architecture](ARCHITECTURE.md),
 
 ## Validation at wrap-up
 
+Publication update (2026-10-20): the branch is now `codex/redesign` and includes main through
+`5fc6aba` (PR #33). Main's chat-website drafting, resume-import improvements, optional-field controls
+and parallel CI groups were retained. After resolving merge conflicts, **564 unit tests**, repository
+checks, TypeScript checks and a production build passed. Browser tests and release/benchmark checks
+were not rerun after this merge; earlier browser results below describe the pre-merge snapshot.
+
 - Repository/docs checks, TypeScript checks, final production build and whitespace checks passed.
 - Final Vitest run: **493 tests passed**.
 - Final focused Chromium run: **4 tests passed**, covering the integrated upload/review/Stop flow,

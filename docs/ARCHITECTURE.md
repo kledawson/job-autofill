@@ -291,3 +291,60 @@ Sheets starts independently after the local outcome, including when tab closure 
 Stop autofill & review disconnects/cancels and awaits the old writer before entering a capture-capable read-only session. It does not revoke the existing confirmed Memory flow or run a second fill.
 
 When a foreground owned tab finishes, the worker hands focus to another owned review/opening tab in the same still-focused window. Background completions do not change the active tab.
+
+## Job posting in free-response prompts
+
+Prompts name the posting through `{jobUrl}` (`lib/posting-link.ts`): a same-site link on the form whose text
+points back to the job ("View job description", "Job details"), otherwise the posting the form's address
+points to (`postingUrl`), otherwise the page itself. Templates without `{jobUrl}` get a `Job posting:` line
+appended. When neither the form page nor an adapter's remote source has a description, the content script
+fetches that same-site posting with the page's own credentials and reads its JobPosting data or description
+block (capped at 8,000 characters). Other sites are never fetched; the address is checked again in the worker.
+The default template asks for 3–5 sentences and to stay under the question's character limit; an unedited
+copy of the previous default is read as the current one.
+
+## Reloaded application pages
+
+A reload clears what was filled, so after one the side panel shows the page as not filled yet. When a tab with
+an unfinished application finishes loading, the worker reads only the page's load timing
+(`performance.timeOrigin` and navigation type). A document loaded after the latest fill started and finished,
+by a reload or by opening the same address again, sets `pageCleared` on the application inside a transaction
+that checks the run and status did not change. Its page status and any chat draft for it are cleared. Moving
+to another address (a confirmation page) keeps the results and manual submission controls. The application
+stays in history; the next fill resets `pageCleared`.
+
+## Chat-website free responses
+
+The **Free responses** menu above Fill this page (also Settings → Connections) chooses who writes free
+responses: None (the person), the Gemini API, or a chat website the person already uses (ChatGPT, Claude,
+Gemini web, Perplexity; `lib/chat-providers.ts`). Until the person chooses, it reads as None, or as Gemini
+API when a key is already saved, so existing setups keep working. With None, fills write no free responses. With a chat website, fills leave free responses empty and never call Gemini for
+them, even when a key is saved; field matching and resume reading still use the key when one exists.
+Empty free-response feedback carries `draft: true` whichever source filled the page, so choosing a chat
+website after filling still offers drafting. Under the Autofilled / AI-written / Need review counts,
+`NeedsAnswerList` lists the Need review questions; clicking one uses `showApplicationField`, and an answered
+question leaves the list on the next edit report. Draftable ones have **Draft in …**, and two or more add
+**Draft all N in …**: one prompt with the questions numbered in place of `{question}` and a required
+`Answer 1`/`Answer 2` reply format (`renderBatchPrompt`). Pasting the whole reply fills one box per
+question (`splitBatchReply`); each stays editable, and **Use answers** applies the filled ones, keeping
+failed or empty ones in the draft. **Need review** counts required questions that are
+unanswered or unverifiable, so it drops when the person answers on the page or uses a draft (AI drafts are
+counted under AI-written and stay amber in Review & Remember). Optional unanswered questions are listed and
+outlined yellow on the page (`optional` outline state) but not counted.
+
+The person sends every prompt themselves. **Draft in …** asks the content script for the question,
+character limit, company, role and posting text (no page answers), renders the person's prompt template
+with the run's preset profile in the worker, and stores one active draft in session storage. The panel
+copies the prompt while it still has focus, then the worker opens the provider's plain new-chat URL (no
+prompt in the URL) beside the application. If the person granted that provider's optional host
+permission (asked once from the Settings change or the Draft click), a one-shot `scripting.executeScript`
+function waits for the chat's own site (not a sign-in redirect) and puts the prompt in its empty message
+box with paste/`insertText` editing commands. It never clicks, submits, reads replies, or replaces typed
+text; a missing box keeps waiting for later loads for ten minutes. Without permission the prompt is pasted
+by the person. No content script is registered on chat sites.
+
+`ChatDraftCard` sits above the per-tab review, so it stays visible on the chat tab. The person pastes the
+reply and clicks **Use answer**: the worker revalidates the application, its tab and run; the session finds the question by its token or,
+after a page redraw or refill gave it a new token, by its exact wording, then
+writes only that still-empty field (trimmed at a sentence to the field limit), marks it AI/amber for
+review, returns focus to the application and shows the field. A typed answer is never replaced.

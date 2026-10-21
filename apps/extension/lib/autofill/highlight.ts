@@ -1,12 +1,14 @@
 import { OWN_ATTR } from './scan';
 
-export type ReviewState = 'filled' | 'ai' | 'review' | 'missing' | 'pending' | 'entered';
+export type ReviewState = 'filled' | 'ai' | 'review' | 'missing' | 'optional' | 'pending' | 'entered';
 
 const COLORS: Record<ReviewState, string> = {
   filled: '#16a34a',
   ai: '#d97706',
   review: '#d97706',
   missing: '#dc2626',
+  /** An unanswered optional question. */
+  optional: '#eab308',
   pending: '#2563eb',
   entered: '#64748b',
 };

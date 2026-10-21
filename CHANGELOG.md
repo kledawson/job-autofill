@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-20 — Shared redesign branch
+
+- Rename the working branch to `codex/redesign` and merge main through PR #33, preserving both redesign controls and the newer chat-drafting/profile-import features.
+- Retain parallel browser CI groups, add the new fill-controls spec and enable CI for `codex/redesign`.
+- Post-merge validation: 564 unit tests, repository/type checks and production build passed. Post-merge browser/release validation remains open in [remaining work](docs/REMAINING_WORK.md).
+
 Workflow redesign checkpoints below are development snapshots on `codex/application-queue`,
 not releases on `main`. Dates record the documented checkpoint day in America/Los_Angeles;
 exact implementation times were not recorded. The publication review began on
@@ -29,6 +35,10 @@ for completed work, test evidence and publication status.
 - Validation: 484 unit tests, 61 applicable browser cases across broad/fresh runs, benchmark and package/negative-guard checks passed. The interrupted full-run failures, successful reruns and one OAuth-specific skip are documented in the checkpoint record; remote CI has not run for this local checkpoint.
 
 ## 2026-10-19 — Feature-branch integration
+
+- Show Autofilled / AI-written / Need review counts instead of Fill details; drop the duplicate Review & remember link and the generic submit hint; rename the manual confirmation to **Add Applied Position to Spreadsheet**.
+- Tolerate an unusable field label when a fill finishes, so one blank or oversized label no longer leaves an application on Filling.
+- Fix the first fill on links with tracking parameters (`?utm_source=`) staying on Filling: match the job rather than the exact URL when a fill starts, and report a failed start instead of finishing silently.
 
 - Integrate the latest `main` history improvements into the redesign branch: compact company/date details and confirmed Clear all, preserving the pinned Fill, collapsible Applications section and Sheets retry actions.
 - Update the root and extension guides, architecture, contracts, roadmap and checkpoint record for collaborator review. Personal data, local screenshots and build outputs remain ignored.

@@ -25,7 +25,7 @@ export interface QueueState {
   batchSize: number; batch: number; createdAt: number; items: QueueItem[];
   mode?: 'batch' | 'continuous'; autoDetectSubmission?: boolean;
 }
-export type QueueSnapshot = Omit<FillContext, 'profile' | 'hasGeminiKey' | 'runId' | 'queue'>;
+export type QueueSnapshot = Omit<FillContext, 'profile' | 'hasGeminiKey' | 'chatProvider' | 'freeResponses' | 'runId' | 'queue'>;
 export type QueueRecord = QueueState & { presetName: string; resumeName?: string };
 const uuid = (v: unknown) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
 const integer = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0;

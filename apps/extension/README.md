@@ -73,7 +73,7 @@ Then, in onboarding or Settings → Connections → Google Sheets tracking:
 Create a sheet in Google Sheets, paste its link, and choose **Connect sheet** and approve access. There is nothing
 else to configure. Keep a Job Posting URL column so retries can identify applications; the other headers decide what is saved.
 
-When you click **I submitted this application** or the queue's **Submitted — close tab** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
+When you click **Add Applied Position to Spreadsheet** or the queue's **Submitted — close tab** in the side panel, one row is added to the tab selected in your pasted link (or the first tab when the link has no tab ID), in the topmost row with
 no company or position, and the side panel shows the row number with a link. The extension reads the header row and
 fills the columns it recognizes, whatever their order: company name, position, date applied (and a "Found" column,
 which gets the same date), link, location, work model, base pay (the pay range posted on the job page, when it
@@ -84,15 +84,39 @@ side panel offers **Retry adding to sheet**.
 
 Connections shows the linked tab name. **Test connection** reads its headers through the extension’s OAuth connection without adding a row. A renamed tab keeps working because its numeric ID is saved; a deleted tab requires reconnecting. Existing connections without a tab ID use the first tab until tested or reconnected.
 
+## Free responses in your own chat app (optional)
+
+Pick who writes free responses in the **Free responses** menu above **Fill this page** (also in Settings →
+Connections): **None** (you answer them; the default for new installs), **Gemini API**, or, to avoid using
+API credits, ChatGPT, Claude, Gemini (website) or Perplexity. Filling then leaves those questions
+empty. They are listed under **Needs your answer** below the fill counts (click a question to jump to it).
+**Draft all N in ChatGPT** asks every free response in one prompt; pasting the whole reply fills a box per
+question for you to check. **Draft in ChatGPT** (for example) on one question copies your prompt (from the Prompt tab) and
+opens a new chat. If you allowed Job Autofill to access that site when choosing it, the prompt is already
+in the message box; otherwise paste it with ⌘V / Ctrl+V. Read it, press **Send**, copy the reply with
+the chat's copy button, paste it into the **Drafting in …** card and click **Use answer**. The answer goes
+into that question (if it is still empty), outlined amber for review, and you are taken back to the
+application.
+
+The prompt includes the job posting's link and its description; when the application form doesn't show the
+description, it is read from the posting the form links to on the same site.
+
+Job Autofill never presses Send, never reads the chat's replies, and never replaces text already in the
+message box, so you use the chat service the normal way under your own account. The prompt contains the
+question, the job description and your education, experience and skills, never your contact details or
+self-identification answers; it reaches the chat service only when you send it.
+
 ## Gemini (optional)
 
 Create a free key at [Google AI Studio](https://aistudio.google.com/app/apikey) without enabling billing,
 and paste it into onboarding or Settings → Connections. The default model is `gemini-flash-latest`;
 you can change it there. Without a key, free-response questions are outlined for you to answer.
 
-Setup can fill empty profile fields from your PDF resume (**Fill my profile from resume**). The resume
+Setup can fill your profile from your PDF resume (**Fill my profile from resume**). The resume
 is read on your computer with [pdf.js](https://mozilla.github.io/pdf.js/): name, contact details, links,
-current position, education, experience, and skills. Contact details are reliable; the other sections are
+current and previous position, education, experience, and skills. Running it again with an updated resume
+adds jobs, schools, and skills that aren't saved yet, fills empty details of saved entries, and marks a saved
+current job (and the current position) as ended when the resume shows an end date; other typed values are kept. Contact details are reliable; the other sections are
 best-effort because layouts vary. If a section isn't found (or the PDF is a scan), you can have Gemini read
 just that part, which sends the resume text to Gemini. Work authorization, preferences, and
 self-identification are never inferred.
@@ -353,8 +377,7 @@ Drag a dotted handle to reorder sections, or click it for Move up/down buttons; 
 
 Profile and integrations stay in Settings; the optional Setup & connections category offers quick links and status. Unfinished onboarding offers **Continue setup** within Fill. Your pasted link draft and batch size survive reopening the panel.
 
-Below Fill, a compact application summary shows attention counts; expand **Fill details** for latest-attempt
-statistics and resume information. **Review & remember** holds missing questions, single-answer capture
+Below Fill, a compact application summary shows Autofilled, AI-written and Need review counts and the resume used. **Review & remember** holds missing questions, single-answer capture
 and Save all confirmation. Its question list scrolls within the section. Queue cards show **Review** and
 **Submitted** first; **More** contains Fill this step/Restart, Abandon and document/link details. **Submitted**
 records your confirmation and closes the owned tab; it never submits on the website.
@@ -367,6 +390,6 @@ Both queued and manual fills wait briefly for stable controls before scanning. A
 
 ## Submission and sheet recovery (workflow increment 5)
 
-Submit applications on the website yourself. Supported Greenhouse, Lever and Ashby confirmations can record success after your submit action. Validation errors keep the tab open and show **Submission needs attention**. For an unfamiliar result, use **I submitted this application** (or **Submitted — close tab** in the queue) only after verifying success. Individual tabs stay open; **Close application tab** is optional. Automatic queue closure follows its checkbox preference and advances only after confirmation. Save Memories before submitting.
+Submit applications on the website yourself. Supported Greenhouse, Lever and Ashby confirmations can record success after your submit action. Validation errors keep the tab open and show **Submission needs attention**. For an unfamiliar result, use **Add Applied Position to Spreadsheet** (or **Submitted — close tab** in the queue) only after verifying success. Individual tabs stay open; **Close application tab** is optional. Automatic queue closure follows its checkbox preference and advances only after confirmation. Save Memories before submitting.
 
 A failed Sheets write leaves the application Submitted and the queue continues. Expand **Applications** and choose **Retry sheet sync**; this retries tracking without submitting again. Existing sheets need a **Job Posting URL** column to recognize retries safely. Writes from different applications are serialized and pending writes recover when the worker restarts. Supported confirmation patterns and fictional API tests do not guarantee every website variant or Google account configuration.

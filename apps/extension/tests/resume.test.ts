@@ -109,3 +109,71 @@ describe('re-importing into a profile that already has entries', () => {
     expect(filled).toEqual(expect.arrayContaining(['education details', 'job details']));
   });
 });
+
+describe('re-importing an updated resume', () => {
+  const oldJob = { title: 'Data Analyst', company: 'Northwind', location: 'Remote', startDate: '2024-01', endDate: '', current: true, bullets: 'My own bullet' };
+  const updated = () => {
+    const p = sampleProfile();
+    p.currentTitle = 'Data Analyst';
+    p.currentCompany = 'Northwind';
+    p.previousTitle = '';
+    p.previousCompany = '';
+    p.experience = [oldJob];
+    p.skills = ['Python'];
+    return p;
+  };
+  const draft = sanitizeDraft({
+    experience: [
+      { title: 'Data Engineer', company: 'Contoso', startDate: '2026-08', endDate: 'Present', bullets: 'Built pipelines' },
+      { title: 'Data Analyst', company: 'Northwind', startDate: '2024-01', endDate: '2026-07', bullets: 'Their bullet' },
+    ],
+    education: [{ school: 'Example State University', degree: 'M.S.', major: 'Data Science', startDate: '2026-09' }],
+    skills: ['python', 'SQL', 'Airflow'],
+  });
+
+  it('adds the new job first and ends the old current one without touching its typed details', () => {
+    const { profile, filled } = mergeResumeDraft(updated(), draft);
+    expect(profile.experience.map((x) => x.company)).toEqual(['Contoso', 'Northwind']);
+    expect(profile.experience[0]).toMatchObject({ title: 'Data Engineer', current: true, bullets: 'Built pipelines' });
+    expect(profile.experience[1]).toMatchObject({ current: false, endDate: '2026-07', bullets: 'My own bullet' });
+    expect(profile).toMatchObject({ currentTitle: 'Data Engineer', currentCompany: 'Contoso', previousTitle: 'Data Analyst', previousCompany: 'Northwind' });
+    expect(filled).toEqual(expect.arrayContaining(['1 job', 'job details', 'current position', 'previous employer']));
+  });
+
+  it('adds skills and schools that are not saved yet, ignoring case', () => {
+    const { profile, filled } = mergeResumeDraft(updated(), draft);
+    expect(profile.skills).toEqual(['Python', 'SQL', 'Airflow']);
+    expect(profile.education.map((e) => e.school)).toContain('Example State University');
+    expect(profile.education.length).toBe(sampleProfile().education.length + 1);
+    expect(filled).toEqual(expect.arrayContaining(['2 skills', '1 school']));
+  });
+
+  it('adds nothing the second time', () => {
+    const once = mergeResumeDraft(updated(), draft).profile;
+    const twice = mergeResumeDraft(once, draft);
+    expect(twice.profile).toEqual(once);
+    expect(twice.filled).toEqual([]);
+  });
+
+  it('keeps a current position the resume does not show has ended', () => {
+    const p = updated();
+    p.currentCompany = 'Fabrikam';
+    p.currentTitle = 'Consultant';
+    const { profile } = mergeResumeDraft(p, draft);
+    expect(profile).toMatchObject({ currentCompany: 'Fabrikam', currentTitle: 'Consultant', previousCompany: 'Northwind' });
+  });
+});
+
+describe('a company saved with its location attached', () => {
+  it('is split when the resume is read again', () => {
+    const p = sampleProfile();
+    p.currentCompany = 'Majorly, Remote';
+    p.currentTitle = 'AI Enablement Engineer Intern';
+    p.experience = [{ title: 'AI Enablement Engineer Intern', company: 'Majorly, Remote', location: '', startDate: '2026-09', endDate: '', current: true, bullets: 'Mine' }];
+    const draft = sanitizeDraft({ experience: [{ title: 'AI Enablement Engineer Intern', company: 'Majorly', location: 'Remote', startDate: '2026-09', endDate: 'Present' }] });
+    const { profile } = mergeResumeDraft(p, draft);
+    expect(profile.experience).toHaveLength(1);
+    expect(profile.experience[0]).toMatchObject({ company: 'Majorly', location: 'Remote', bullets: 'Mine' });
+    expect(profile.currentCompany).toBe('Majorly');
+  });
+});

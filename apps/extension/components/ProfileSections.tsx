@@ -43,6 +43,15 @@ function pronounOptions(current: string): [string, string][] {
   return [['', 'Select…'], ...list.map((o) => [o, o] as [string, string])];
 }
 
+function OnlyIfRequired({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
+  return (
+    <label className="mt-1.5 flex items-start gap-2 text-xs text-slate-600">
+      <input type="checkbox" className="mt-0.5 size-3.5 rounded border-slate-300 accent-indigo-600" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span>Only fill {label ? `${label.toLowerCase()} ` : ''}if required</span>
+    </label>
+  );
+}
+
 export function BasicsSection({ profile: p, onChange }: SectionProps) {
   const set = (patch: Partial<Profile>) => onChange({ ...p, ...patch });
   return (
@@ -93,9 +102,12 @@ export function BasicsSection({ profile: p, onChange }: SectionProps) {
           </label>
         </Grid>
         <Grid>
-          <Field label="Street Address">
-            <Input value={p.address} onChange={(e) => set({ address: e.target.value })} autoComplete="street-address" />
-          </Field>
+          <div>
+            <Field label="Street Address">
+              <Input value={p.address} onChange={(e) => set({ address: e.target.value })} autoComplete="street-address" />
+            </Field>
+            <OnlyIfRequired checked={p.fillOnlyIfRequired.address} onChange={(v) => set({ fillOnlyIfRequired: { ...p.fillOnlyIfRequired, address: v } })} />
+          </div>
           <Field label="City" required>
             <Input value={p.city} onChange={(e) => set({ city: e.target.value })} />
           </Field>
@@ -213,6 +225,7 @@ function degreeOptions(current: string): [string, string][] {
 }
 
 export function EducationSection({ profile: p, onChange }: SectionProps) {
+  const setOnlyIfRequired = (patch: Partial<Profile['fillOnlyIfRequired']>) => onChange({ ...p, fillOnlyIfRequired: { ...p.fillOnlyIfRequired, ...patch } });
   const update = (i: number, patch: Partial<Education>) =>
     onChange({ ...p, education: p.education.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
   return (
@@ -251,9 +264,15 @@ export function EducationSection({ profile: p, onChange }: SectionProps) {
               <Field label="End (or Expected)">
                 <MonthInput value={e.endDate} onChange={(v) => update(i, { endDate: v })} />
               </Field>
-              <Field label="GPA">
-                <Input value={e.gpa} onChange={(ev) => update(i, { gpa: ev.target.value })} placeholder="3.7" />
-              </Field>
+              <div className="sm:col-span-2">
+                <OnlyIfRequired label="Start and end dates" checked={p.fillOnlyIfRequired.schoolDates} onChange={(v) => setOnlyIfRequired({ schoolDates: v })} />
+              </div>
+              <div>
+                <Field label="GPA">
+                  <Input value={e.gpa} onChange={(ev) => update(i, { gpa: ev.target.value })} placeholder="3.7" />
+                </Field>
+                <OnlyIfRequired checked={p.fillOnlyIfRequired.gpa} onChange={(v) => setOnlyIfRequired({ gpa: v })} />
+              </div>
               <Field label="Honors">
                 <Input value={e.honors} onChange={(ev) => update(i, { honors: ev.target.value })} />
               </Field>

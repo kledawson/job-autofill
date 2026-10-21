@@ -40,6 +40,8 @@ import {
 import { clearOutline, outline, revealField, type ReviewState } from './highlight';
 import { feedbackPriority, type FieldFeedback } from '../field-feedback';
 import { bestGpaOption, characterLimitFor } from './match';
+import { clampToLimit } from '../prompt';
+import { findPostingLink } from '../posting-link';
 import { composedCompare, isHidden, isSignInPage, scanFields, type ScannedField } from './scan';
 import { WITH_CODE_RE, isEmployerContact } from './classify';
 import { applicantLocationQueries, pickApplicantLocation, pickLocationPreference, raceChoices, valueFor } from './values';
@@ -304,6 +306,73 @@ export class FillSession {
     return rec.outcome === 'filled' ? 'Saved and applied to this field.' : 'Saved for future applications. Select the answer on this page; no unambiguous option matched.';
   }
 
+  /** The question and job details for drafting one empty free response on a chat website. Reads no page answers. */
+  async draftRequest(token: string, question: string): Promise<Omit<AnswerRequest, 'runId'>> {
+    const rec = this.liveFreeResponse(token, question);
+    if (fieldHasValue(rec.field)) throw new Error('This question already has an answer on the page.');
+    await this.loadDescription().catch(() => undefined);
+    return {
+      question: rec.field.label,
+      characterLimit: characterLimitFor(rec.field.label, rec.field.maxLength),
+      company: this.jobInfo.company,
+      role: this.jobInfo.role,
+      jobDescription: this.description ?? '',
+      jobUrl: this.postingLink(),
+    };
+  }
+
+  /** The job posting this form belongs to: a link back to it on the page, or the posting its address points to. */
+  postingLink(): string {
+    return findPostingLink(this.doc, this.doc.location?.href ?? '');
+  }
+
+  /** Writes a reply the person pasted into one empty free response, marked as an AI draft to review. */
+  applyDraft(token: string, question: string, text: string): string {
+    const rec = this.liveFreeResponse(token, question);
+    if (fieldHasValue(rec.field)) throw new Error('This question already has an answer on the page, so it was kept. Clear it there to use the draft.');
+    // A box shorter than the usual minimum still gets a reply cut at a sentence, not mid-word.
+    const limit = Math.min(characterLimitFor(rec.field.label, rec.field.maxLength), rec.field.maxLength || Infinity);
+    const full = clampToLimit(text, Infinity), answer = clampToLimit(text, limit);
+    if (!answer) throw new Error('Paste the reply first.');
+    rec.outcome = fillText(rec.field, answer);
+    if (rec.outcome !== 'filled' || !fieldHasValue(rec.field)) {
+      rec.outcome = 'failed';
+      throw new Error('Could not write the answer into this field. Paste it on the page instead.');
+    }
+    rec.cls = { kind: 'free_response' };
+    rec.ai = true;
+    rec.flag = false;
+    rec.writtenValue = fieldValueSignature(rec.field);
+    outline(rec.field.outlineTarget, 'ai');
+    this.deps.onProgress?.(this.verify());
+    return answer.length < full.length
+      ? `Added for review, shortened to fit ${limit} characters. Check it on the page before submitting.`
+      : 'Added for review. Check it on the page before submitting.';
+  }
+
+  /** A free response, including one the page redrew after filling (recorded without a fill classification). */
+  private isFreeResponse(rec: FieldRecord): boolean {
+    return isTextBox(rec.field) && (rec.cls.kind === 'free_response' || classifyField(rec.field, this.adapter.keys).kind === 'free_response');
+  }
+
+  private liveFreeResponse(token: string, question: string): FieldRecord {
+    if (this.busy || this.stopped) throw new Error('Wait for autofill to finish, then try again.');
+    let rec = [...this.records.values()].find(r => r.token === token);
+    let field = rec && this.relocate(rec);
+    if (!rec || !field || !labelMatches(field, question)) {
+      // The page redrew the question (a new element and token) or it was filled again: find it by its wording.
+      this.collectFresh(true);
+      const same = [...this.records.values()].filter(r => r.field.el.isConnected && labelMatches(r.field, question) && this.isFreeResponse(r));
+      rec = same.length === 1 ? same[0] : undefined;
+      field = rec && this.relocate(rec);
+    }
+    if (!rec || !field || !labelMatches(field, question) || !this.isFreeResponse(rec)) {
+      throw new Error('This question is no longer on the page. Click Fill this page to refresh the results.');
+    }
+    rec.field = { ...field, label: rec.field.label };
+    return rec;
+  }
+
   private root(): ParentNode {
     return this.adapter.formRoot(this.doc);
   }
@@ -315,8 +384,10 @@ export class FillSession {
     // pass runs, before observe() starts, so keep scanning until a pass finds nothing new.
     for (let round = 0; round < 5; round++) {
       await sleep(timing.settle);
+      console.debug(`[Job Autofill] rescan round ${round + 1}`);
       if (!(await this.processNew())) break;
     }
+    console.debug('[Job Autofill] rescans done');
     // Hydration/options can finish after the first pass. Retry only empty local facts;
     // essays, uploads and user-entered values are never replayed here.
     if (!this.stopped) {
@@ -324,6 +395,7 @@ export class FillSession {
         ['failed', 'nomatch'].includes(rec.outcome ?? '') &&
         !['free_response', 'challenge', 'consent'].includes(rec.cls.kind) && !rec.ai && rec.field.kind !== 'file');
       if (retry.length) {
+        console.debug(`[Job Autofill] retrying ${retry.length} empty field(s)`);
         await sleep(timing.settle);
         const before = new Map(retry.map(rec => [rec, { el: rec.field.el, label: rec.field.label, kind: rec.field.kind, options: JSON.stringify(rec.field.options), saved: rec.saved?.id }]));
         const current = new Map(scanFields(this.root()).map(field => [field.el, field]));
@@ -345,6 +417,7 @@ export class FillSession {
         }
       }
     }
+    console.debug('[Job Autofill] verifying');
     return this.verify();
   }
 
@@ -964,6 +1037,14 @@ export class FillSession {
       rec.outcome = 'already';
       return;
     }
+    // The person answers free responses themselves.
+    if (this.deps.context.freeResponses === 'none') return;
+    const chat = this.deps.context.chatProvider;
+    if (chat) {
+      // Drafted on the chat website only when the person asks, from the side panel.
+      this.aiNote = chatDraftNote(chat);
+      return;
+    }
     if (!this.deps.context.hasGeminiKey) {
       rec.flag = true;
       this.aiNote = 'Add a Gemini API key in settings to have free responses written for you.';
@@ -977,6 +1058,7 @@ export class FillSession {
       company: this.jobInfo.company,
       role: this.jobInfo.role,
       jobDescription: this.description ?? '',
+      jobUrl: this.postingLink(),
     });
     if (!res.ok) {
       rec.flag = true;
@@ -1010,6 +1092,7 @@ export class FillSession {
     const reviewFields: ReviewField[] = [];
     const fieldFeedback: FieldFeedback[] = [];
     const memoryQuestions = new Set<string>();
+    let drafts = 0;
     for (const [el, rec] of this.records) {
       if (!el.isConnected) {
         this.records.delete(el);
@@ -1055,6 +1138,9 @@ export class FillSession {
 
       if (field.label.trim() && field.label.length <= 700) {
         const readable = currentValue !== undefined;
+        // Any empty free response: the side panel offers drafting whenever a chat website is chosen, even after filling.
+        const draftable = !has && this.isFreeResponse(rec);
+        if (draftable) drafts++;
         const status: FieldFeedback['status'] = state === 'missing' ? 'missing' : !has ? 'optional' :
           changed || !weFilled ? 'entered' : rec.ai || !readable || rec.writtenValue === undefined ? 'review' : 'verified';
         const source: FieldFeedback['source'] = !has ? 'none' : status === 'entered' ? 'page' : rec.ai ? 'ai' :
@@ -1062,22 +1148,26 @@ export class FillSession {
         const reason = isEmployerContact(field) ? 'Enter the employer’s contact or address details on the website. Your personal details are never used here.' : reviewReason || (status === 'missing' || status === 'optional' ?
           field.kind === 'file' ? 'Upload this document on the application page.' : rec.cls.kind === 'consent' ? 'Read and confirm this agreement on the website.' :
           rec.suggestionId ? 'A similar Memory needs your confirmation before reuse.' :
+          draftable && this.deps.context.chatProvider ? `Click Draft in ${this.deps.context.chatProvider} to write it there, or answer on the page.` :
           rec.cls.kind === 'profile' ? 'A saved Profile answer or a matching option was unavailable. Answer on the page, then confirm where to save it.' :
           'Answer this question on the page. Reusable answers can be confirmed and saved here.' :
           status === 'entered' ? 'Your page answer was preserved. It has not been verified against a saved answer.' :
           status === 'review' ? rec.ai ? 'Review this AI draft or interpretation before submitting.' : 'The widget does not expose enough information to verify the complete answer. Check it on the website.' :
           source === 'memory' ? 'An approved Memory was applied and its current selection was verified.' : source === 'preset' ? 'Your prepared preset response was applied and read back.' :
           'Your saved Profile answer was applied and read back. Check that the saved fact is current.');
-        fieldFeedback.push({ token: rec.token!, label: field.label, required: field.required, status, source, reason });
+        fieldFeedback.push({ token: rec.token!, label: field.label, required: field.required, status, source, reason, ...(draftable ? { draft: true as const } : {}) });
         if (status === 'review') state = rec.ai ? 'ai' : 'review';
         else if (status === 'entered') state = 'entered';
+        else if (status === 'optional') state = 'optional';
       }
 
       if (state) outline(field.outlineTarget, state);
       else if (field.outlineTarget.hasAttribute('data-jaf-state')) clearOutline(field.outlineTarget);
     }
     return { filledCount, aiAnswers, missingLabels, missingQuestions, reviewFields: reviewFields.slice(0, 200), fieldFeedback: fieldFeedback.sort((a, b) => feedbackPriority(a) - feedbackPriority(b)).slice(0, 200), memoryQuestions: [...memoryQuestions].slice(0, 200),
-      usedMappingIds: [...new Set([...this.records.values()].filter(r => r.saved && r.outcome === 'filled' && r.writtenValue !== undefined && fieldValueSignature(r.field) === r.writtenValue && fieldHasValue(r.field) && (r.saved.target.kind !== 'answers' || sameSelections(selectedValues(r.field), r.selectionLabels ?? []))).map(r => r.saved!.id))].slice(0, 200), aiNote: this.aiNote };
+      usedMappingIds: [...new Set([...this.records.values()].filter(r => r.saved && r.outcome === 'filled' && r.writtenValue !== undefined && fieldValueSignature(r.field) === r.writtenValue && fieldHasValue(r.field) && (r.saved.target.kind !== 'answers' || sameSelections(selectedValues(r.field), r.selectionLabels ?? []))).map(r => r.saved!.id))].slice(0, 200),
+      // The drafting hint goes once every free response has an answer.
+      aiNote: this.aiNote === chatDraftNote(this.deps.context.chatProvider) && !drafts ? undefined : this.aiNote };
   }
 }
 
@@ -1145,6 +1235,14 @@ function sameLabel(a: string, b: string): boolean {
   const qy = y.indexOf('?');
   if (qx > 10 && qy > 10) return x.slice(0, qx) === y.slice(0, qy);
   return x.length > 20 && y.length > 20 && (x.includes(y) || y.includes(x));
+}
+
+function chatDraftNote(chat: string | undefined): string {
+  return `Free responses are left for you: click Draft in ${chat} for each one.`;
+}
+
+function isTextBox(field: ScannedField): boolean {
+  return field.kind === 'text' || field.kind === 'textarea';
 }
 
 function canRemember(rec: FieldRecord): boolean {

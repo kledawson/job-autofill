@@ -1,6 +1,5 @@
-import { useSidebarVisibility } from '@/components/SidebarPreferences';
-import { readSidebarVisibility, SIDEBAR_VISIBILITY_KEY, type SidebarId } from '@/lib/sidebar-layout';
 import { SidebarLayout } from '@/components/SidebarLayout';
+import { readSidebarVisibility, SIDEBAR_VISIBILITY_KEY, type SidebarId } from '@/lib/sidebar-layout';
 import { SidebarSection } from '@/components/SidebarSection';
 import { ApplicationQueue } from '@/components/ApplicationQueue';
 import { PresetSelector } from '@/components/Presets';
@@ -8,9 +7,13 @@ import { ProfileAnswer } from '@/components/ProfileAnswer';
 import { useEffect, useRef, useState } from 'react';
 import { FieldReviewList } from '@/components/FieldReviewList';
 import { BuildInfo } from '@/components/BuildInfo';
+import { ChatDraftCard } from '@/components/ChatDraftCard';
+import { NeedsAnswerList } from '@/components/NeedsAnswerList';
+import { FreeResponsePicker } from '@/components/FreeResponsePicker';
+import { chatProviderFor, type ChatProvider } from '@/lib/chat-providers';
 import { browser } from 'wxt/browser';
 import { useLiveQuery, usePublicSettings } from '@/components/hooks';
-import { Button, cx, Input, Notice } from '@/components/ui';
+import { Button, cx, Input, Notice, Select } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { missingRequired } from '@/components/ProfileSections';
 import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
@@ -20,7 +23,7 @@ import { draftForCapture, MappingEditor } from '@/components/KnowledgeBase';
 import { confirmDelete } from '@/components/confirm-delete';
 import { BatchRemember } from '@/components/BatchRemember';
 import type { CapturedAnswer, MappingDraft, ReviewField } from '@/lib/remembered-mappings';
-import { applicationWorkflow } from '@/lib/application-workflow';
+import { applicationWorkflow, needReviewCount, showsFillResults } from '@/lib/application-workflow';
 import type { QueueItem } from '@/lib/application-queue';
 
 const STATUS_STYLE: Record<ApplicationStatus, string> = {
@@ -104,11 +107,20 @@ const ACCESS_DENIED = 'To fill applications outside Greenhouse, Lever, Ashby, an
 const when = (ms: number) =>
   new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
+type HistoryFilter = 'all' | 'review' | 'submitted';
+const HISTORY_FILTERS: [HistoryFilter, string, ApplicationStatus?][] = [
+  ['all', 'All'], ['review', 'Ready for review', 'Ready for review'], ['submitted', 'Submitted', 'Submitted'],
+];
+
 export default function SidePanel() {
   const { settings } = usePublicSettings();
-  const visibility = useSidebarVisibility();
   const profile = useLiveQuery(() => getProfile());
-  const applications = useLiveQuery(() => db.applications.orderBy('filledAt').reverse().limit(50).toArray()) ?? [];
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
+  const applications = useLiveQuery(() => {
+    const status = HISTORY_FILTERS.find(f => f[0] === historyFilter)?.[2];
+    const all = db.applications.orderBy('filledAt').reverse();
+    return (status ? all.filter(a => a.status === status) : all).limit(50).toArray();
+  }, [historyFilter]) ?? [];
   const { id: tabId, url: tabUrl } = useActiveTab();
   // History is intentionally bounded; the active job must survive more than 50 later fills.
   const tabApplications = useLiveQuery(() => tabId === undefined ? Promise.resolve([]) : db.applications.where('tabId').equals(tabId).sortBy('filledAt'), [tabId]);
@@ -119,7 +131,6 @@ export default function SidePanel() {
   const pageStatus = usePageStatus(tabId, tabUrl);
   const queue = useLiveQuery(() => db.applicationQueue.get('current'));
   const [presetId, setPresetId] = useState<string>();
-  const preset = useLiveQuery(() => presetId ? db.presets.get(presetId) : Promise.resolve(undefined), [presetId]);
   const queueItem = queue && ['running', 'paused'].includes(queue.status) ? queue.items.find(i => i.tabId === tabId && !['submitted', 'skipped'].includes(i.state)) : undefined;
   const workflow = applicationWorkflow(current, queueItem);
   let sameForm = false;
@@ -135,7 +146,8 @@ export default function SidePanel() {
   /** Set by Open and fill, whose new tab has no id yet: its details open once the application exists. */
   const [opened, setOpened] = useState(false);
   const here = tabId !== undefined && tabUrl ? { tabId, key: jobKey(tabUrl) } : undefined;
-  const showing = !!here && ((shown?.tabId === here.tabId && shown.key === here.key) || !!queue?.items.some(i => i.tabId === here.tabId && i.applicationId === current?.id) || !!current && ['Ready for review', 'Submitted'].includes(current.status));
+  // A reload clears what was filled: the page then looks as it did before the first fill.
+  const showing = !!here && (!current || showsFillResults(current)) && ((shown?.tabId === here.tabId && shown.key === here.key) || !!queue?.items.some(i => i.tabId === here.tabId && i.applicationId === current?.id) || !!current && ['Ready for review', 'Submitted'].includes(current.status));
   useEffect(() => {
     if (opened && current && here) {
       setShown(here);
@@ -164,9 +176,12 @@ export default function SidePanel() {
     const stored = await browser.storage.local.get(SIDEBAR_VISIBILITY_KEY);
     const next = readSidebarVisibility(stored[SIDEBAR_VISIBILITY_KEY]);
     if (!next[id]) await browser.storage.local.set({ [SIDEBAR_VISIBILITY_KEY]: { version: 1, categories: { ...next, [id]: true } } });
-    const toggle = document.getElementById('sidebar-' + id + '-toggle');
-    if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
-    requestAnimationFrame(() => { toggle?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); toggle?.focus({ preventScroll: true }); });
+    await browser.storage.local.set({ ['sidebarSection:' + id]: true });
+    requestAnimationFrame(() => {
+      const toggle = document.getElementById('sidebar-' + id + '-toggle');
+      toggle?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      toggle?.focus({ preventScroll: true });
+    });
   }
 
   async function fillThisPage() {
@@ -209,11 +224,8 @@ export default function SidePanel() {
 
       <section aria-label="Fill this page" className="space-y-2">
         {settings && !settings.onboardingComplete && <p className="text-xs text-slate-600">New here? <button className="font-medium text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button> to add your profile.</p>}
-        <div className="flex items-center justify-between gap-2 text-xs text-slate-500"><span className="truncate">Preset: {queueItem ? queue?.presetName + ' · locked' : preset?.name || 'Default'}</span>
-          <button className="shrink-0 text-indigo-700 underline" onClick={() => {
-            if (visibility.presets) void revealSection('presets');
-            else void browser.tabs.create({ url: browser.runtime.getURL('/options.html#presets' as never) });
-          }}>Change preset</button></div>
+        <PresetSelector onSelected={setPresetId} locked={queueItem ? queue?.presetName ?? '' : undefined} />
+        <FreeResponsePicker settings={settings} />
         <div className="flex gap-2"><Button className="flex-1" disabled={!presetId || stopping || current?.status === 'Submitted'} onClick={fillThisPage}>
           {needsPageResolution ? 'Use this page & fill' : queueItem && ['opening', 'filling'].includes(queueItem.state) ? 'Restart autofill' : 'Fill this page'}
         </Button>
@@ -222,12 +234,13 @@ export default function SidePanel() {
         {error && <Notice tone="error">{error}</Notice>}
       </section>
       </div>
+      <ChatDraftCard />
       <section id="current-page-review" aria-label="Current page review" className="scroll-mt-40 rounded-xl border border-slate-200 bg-white p-3 shadow-sm" hidden={!showing}>
         {showing &&
           (queueItem?.state === 'needs-action' && !current ? <PageStatusBox status={{ title: workflow.title, lines: [queueItem.note || 'Finish this step on the website, then retry autofill.'], tone: 'attention' }} /> : current ? (
-            <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl}
-              queueItem={queueItem}
-              queueEntry={queueItem && queue ? { token: queue.token, itemId: queueItem.id, ready: queueItem.state === 'review', autoDetectSubmission: queue.autoDetectSubmission } : undefined} onReview={() => void revealSection('review')} />
+            <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} chat={chatProviderFor(settings?.answerSource)}
+              queueItem={queueItem} onReview={() => void revealSection('review')}
+              queueEntry={queueItem && queue ? { token: queue.token, itemId: queueItem.id, ready: queueItem.state === 'review', autoDetectSubmission: queue.autoDetectSubmission } : undefined} />
           ) : (
             <PageStatusBox status={pageStatus ?? { title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' }} />
           ))}
@@ -239,32 +252,42 @@ export default function SidePanel() {
       <SidebarSection id="review" title="Review & remember" summary={showing && current ? current.status === 'Submitted' ? 'Completed' : (current.reviewFields?.filter(field => field.answered).length || 0) + ' ready · ' + current.missingCount + ' missing' : undefined}>
         {showing && current ? <ApplicationReview key={current.id} app={current} canRemember={workflow.canRemember && sameForm} moved={!sameForm} queued={!!queueItem} /> : <p className="text-xs text-slate-500">Fill an application to review missing questions and remember answers here.</p>}
       </SidebarSection>
-      <SidebarSection id="setup" title="Setup & connections">
+      <SidebarSection id="setup" title="Setup & Connections">
         <div className="space-y-2 text-xs text-slate-600">
           <p>{settings?.onboardingComplete ? profile && missingRequired(profile).length ? missingRequired(profile).length + ' required profile fields missing.' : 'Your profile is ready.' : 'Finish setup to add your profile.'}</p>
           {!settings?.onboardingComplete && <button className="text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button>}
           <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#profile' as never)} target="_blank" rel="noreferrer">Edit profile</a>
-          <p>AI responses: {settings?.hasGeminiKey ? 'Connected' : 'Not connected'}</p>
+          <p>Free responses: {chatProviderFor(settings?.answerSource) ? `Drafted in ${chatProviderFor(settings?.answerSource)!.name}` : settings?.answerSource === 'gemini-api' ? settings.hasGeminiKey ? 'Gemini API' : 'Gemini API (no key yet)' : 'Answered by you'}</p>
           <p>Google Sheets: {settings?.sheetUrl ? 'Connected' : 'Not connected'}</p>
           <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#connections' as never)} target="_blank" rel="noreferrer">Manage connections</a>
         </div>
       </SidebarSection>
-      <SidebarSection id="track" title="Track without autofill">
+      <SidebarSection id="track" title="Track Without Autofill">
         <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
       </SidebarSection>
 
       <SidebarSection id="history" title="Applications" summary={String(applications.length)}>
       <section>
-        <div className="mb-2 flex items-center justify-end">
-          <div className="flex items-center gap-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+            Show
+            <Select className="w-auto" aria-label="Filter applications by status" options={HISTORY_FILTERS.map(f => [f[0], f[1]] as [string, string])} value={historyFilter} onChange={e => setHistoryFilter(e.target.value as HistoryFilter)} />
+          </label>
+          <div className="flex shrink-0 items-center gap-3">
             {applications.length > 0 && (
               <button
                 type="button"
-                className="text-xs font-medium text-red-700 underline focus-visible:ring-2 focus-visible:ring-indigo-500"
+                className="whitespace-nowrap text-xs font-medium text-red-700 underline focus-visible:ring-2 focus-visible:ring-indigo-500"
                 onClick={async () => {
-                  const total = await db.applications.count();
-                  if (!(await confirmDelete(`Delete all ${total} application${total === 1 ? '' : 's'}?`, 'Every application will be removed from this list, including older ones that are not shown. Your Google Sheet is not changed.', 'Delete all'))) return;
-                  const res = await sendToBackground('clearApplications', {});
+                  const filter = HISTORY_FILTERS.find(f => f[0] === historyFilter);
+                  const status = filter?.[2];
+                  const total = status ? await db.applications.where('status').equals(status).count() : await db.applications.count();
+                  const noun = `application${total === 1 ? '' : 's'}`;
+                  const [title, detail] = status
+                    ? [`Delete ${total} "${filter![1]}" ${noun}?`, `Only "${filter![1]}" applications will be removed, including older ones that are not shown. Other statuses are kept. Your Google Sheet is not changed.`]
+                    : [`Delete all ${total} ${noun}?`, 'Every application will be removed from this list, including older ones that are not shown. Your Google Sheet is not changed.'];
+                  if (!(await confirmDelete(title, detail, 'Delete all'))) return;
+                  const res = await sendToBackground('clearApplications', { status });
                   if (!res.ok) setError(res.error);
                 }}
               >
@@ -272,14 +295,14 @@ export default function SidePanel() {
               </button>
             )}
             {settings?.sheetUrl && (
-              <a className="text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
+              <a className="whitespace-nowrap text-xs font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
                 Open sheet
               </a>
             )}
           </div>
         </div>
         {applications.length === 0 ? (
-          <p className="text-slate-500">Applications you fill show up here.</p>
+          <p className="text-slate-500">{historyFilter === 'all' ? 'Applications you fill show up here.' : 'No applications match this filter.'}</p>
         ) : (
           <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
             {applications.map((a) => (
@@ -314,9 +337,6 @@ export default function SidePanel() {
           </ul>
         )}
       </section>
-      </SidebarSection>
-      <SidebarSection id="presets" title="Application preset" summary={preset?.name || 'Default'}>
-        <PresetSelector onSelected={setPresetId} />
       </SidebarSection>
       </SidebarLayout>
       <BuildInfo />
@@ -387,6 +407,15 @@ function TrackOnly({ tabUrl, sheetUrl }: { tabUrl?: string; sheetUrl?: string })
   );
 }
 
+function Stat({ value, label, color }: { value: number; label: string; color: string }) {
+  return (
+    <div className="rounded-lg bg-slate-50 px-2 py-2">
+      <p className={cx('text-lg font-semibold', color)}>{value}</p>
+      <p className="text-xs text-slate-500">{label}</p>
+    </div>
+  );
+}
+
 function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: boolean }) {
   if (hideTitle && !status.lines.length) return null;
   return (
@@ -404,7 +433,7 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
   );
 }
 
-function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, onReview }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean }; onReview(): void }) {
+function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, chat, onReview }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean }; chat?: ChatProvider; onReview(): void }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -415,8 +444,8 @@ function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, 
   }, []);
   useEffect(() => { if (app.submissionIssue === 'validation') setExpanded(true); }, [app.submissionIssue]);
   const workflow = applicationWorkflow(app, queueItem);
+  const attentionCount = needReviewCount(app);
   const toCheck = app.fieldFeedback?.filter(f => f.status === 'review').length ?? app.aiAnswers;
-  const attentionCount = app.fieldFeedback?.filter(f => ['missing', 'review', 'optional'].includes(f.status) || app.reviewFields?.some(r => r.token === f.token)).length ?? (app.reviewFields?.length || app.missingCount);
   return (
     <div className="space-y-2">
       <div className="flex items-start justify-between gap-2">
@@ -438,7 +467,16 @@ function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, 
       <div id={'application-actions-' + app.id} hidden={!expanded} className="space-y-2 border-t border-slate-100 pt-2">
       {/* The pill already names the status, so a matching title is left out. */}
       {workflow.writing && pageStatus?.tone === 'working' && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
-      {!workflow.writing && <details className="text-xs text-slate-500"><summary className="cursor-pointer">Fill details</summary><p>{app.filledCount} filled in the latest attempt{app.aiAnswers > 0 && ` · ${app.aiAnswers} AI-written`}</p>{pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}{app.resumeName && <p className="mt-1">Resume: {app.resumeName}</p>}</details>}
+      {!workflow.writing && (
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <Stat value={app.filledCount} label="Autofilled" color="text-green-700" />
+          <Stat value={app.aiAnswers} label="AI-written" color="text-blue-700" />
+          <Stat value={attentionCount} label="Need review" color={attentionCount ? 'text-red-700' : 'text-slate-400'} />
+        </div>
+      )}
+      {!workflow.writing && app.status === 'Ready for review' && <NeedsAnswerList app={app} chat={chat} disabled={busy} />}
+      {!workflow.writing && pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
+      {!workflow.writing && app.resumeName && <p className="text-xs text-slate-500">Resume: {app.resumeName}</p>}
 
       {app.submissionIssue === 'validation' && <Notice tone="warn">Submission needs attention. Fix the website’s missing or invalid answers, then submit again. This application has stayed open.</Notice>}
       {workflow.canConfirmSubmission && (
@@ -448,11 +486,14 @@ function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, 
             className="w-full" disabled={busy}
             onClick={async () => {
               setBusy(true); setError('');
-              try { const res = await sendToBackground('markSubmitted', { applicationId: app.id! }); if (!res.ok) setError(res.error); }
+              try {
+                const res = await sendToBackground('markSubmitted', { applicationId: app.id! });
+                if (!res.ok) setError(res.error);
+              }
               catch { setError('Could not confirm submission. Try again.'); } finally { setBusy(false); }
             }}
           >
-            {busy ? 'Confirming…' : queueEntry ? 'Submitted — close tab' : 'I submitted this application'}
+            {busy ? 'Confirming…' : queueEntry ? 'Submitted — close tab' : 'Add Applied Position to Spreadsheet'}
           </Button>
         </>
       )}

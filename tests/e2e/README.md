@@ -4,8 +4,10 @@ These Playwright tests load the built extension in an isolated Chromium profile 
 HTTPS application forms. They do not use your Chrome profile or submit applications to employers.
 
 From the repository root, run `npm run setup` once to install dependencies and Chromium, then
-`npm run test:e2e` to build and run the full suite. A focused run such as
-`npx playwright test tests/e2e/submission.spec.ts` uses the existing build; rebuild after source changes.
+`npm run test:e2e` to build and run the full suite. While developing, run only the related spec:
+`npm run test:e2e -- tests/e2e/submission.spec.ts` builds and runs that file, and
+`npx playwright test tests/e2e/submission.spec.ts` reuses the existing build. CI runs every spec in
+parallel groups defined in `.github/workflows/ci.yml`; add new spec files to a group there.
 
 | Test file | Main coverage |
 | --- | --- |

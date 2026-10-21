@@ -83,8 +83,7 @@ test('standalone supported confirmations retain the tab and persist their source
     await expect.poll(async () => (await appFor(url))?.sheetSyncPending).toBe(false);
     expect((await appFor(url)).sheetError).toBeUndefined();
     await shot('submission-standalone-' + index);
-    await panel.getByRole('button', { name: 'Close application tab', exact: true }).click();
-    await expect.poll(() => page.isClosed()).toBe(true);
+    await page.close();
   }
 });
 
@@ -106,7 +105,7 @@ test('validation keeps the tab open; an unfamiliar result retains explicit confi
   await page.locator('#reference').fill('Synthetic review reference'); await page.evaluate(() => { (window as any).outcome = 'unknown'; });
   await page.getByRole('button', { name: 'Submit application', exact: true }).click();
   expect((await appFor(url)).status).toBe('Ready for review');
-  await expect(panel.getByRole('button', { name: 'I submitted this application', exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Add Applied Position to Spreadsheet', exact: true })).toBeVisible();
   const app = await appFor(url);
   expect(await request('markSubmitted', { applicationId: app.id })).toMatchObject({ ok: true });
   const submitted = await appFor(url); expect(submitted.submissionSource).toBe('user');

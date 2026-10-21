@@ -102,14 +102,14 @@ test('creates and duplicates easy-to-select presets without changing the shared 
   expect((await readRows('presetFiles')).map(f => f.name).sort()).toEqual(['Taylor_Hardware.pdf', 'Taylor_Software.pdf']);
   const sidebar = await context.newPage(); await sidebar.goto('chrome-extension://' + extensionId + '/sidepanel.html');
   await sidebar.setViewportSize({ width: 380, height: 920 });
-  await sidebar.getByRole('button', { name: 'Toggle Application preset', exact: true }).click();
-  await expect(sidebar.getByRole('combobox', { name: 'Application preset', exact: true })).toHaveValue(hardwareId);
+  await expect(sidebar.locator('#sidebar-fill').getByRole('combobox', { name: 'Application Preset', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('combobox', { name: 'Application Preset', exact: true })).toHaveValue(hardwareId);
   await expect(sidebar.getByRole('region', { name: 'Application preset' })).toContainText('Taylor_Hardware.pdf');
-  await sidebar.getByRole('combobox', { name: 'Application preset', exact: true }).selectOption(softwareId);
+  await sidebar.getByRole('combobox', { name: 'Application Preset', exact: true }).selectOption(softwareId);
   await expect(sidebar.getByRole('region', { name: 'Application preset' })).toContainText('Taylor_Software.pdf');
   await screenshot(sidebar, 'preset-sidebar');
   await sidebar.reload();
-  await expect(sidebar.getByRole('combobox', { name: 'Application preset', exact: true })).toHaveValue(softwareId);
+  await expect(sidebar.getByRole('combobox', { name: 'Application Preset', exact: true })).toHaveValue(softwareId);
   await expect(sidebar.getByRole('button', { name: 'Fill this page', exact: true })).toBeEnabled();
   await expect(sidebar.getByRole('region', { name: 'Application preset' })).toContainText('Taylor_Software.pdf');
   expect(await sidebar.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -268,7 +268,7 @@ test('tracking without autofill still reads the posting and deletes its record w
   await appearance.getByRole('checkbox',{name:/^Track without autofill/}).check();
   await expect(appearance.getByRole('status')).toContainText('Track without autofill shown');
   await appearance.close();
-  await sidebar.getByRole('button', { name: 'Toggle Track without autofill', exact: true }).click();
+  await sidebar.getByRole('button', { name: 'Toggle Track Without Autofill', exact: true }).click();
   const tracking = sidebar.locator('#sidebar-track-body');
   await tracking.getByLabel('Application Link', { exact: true }).fill(url);
   await tracking.getByRole('button', { name: 'Mark as submitted', exact: true }).click();

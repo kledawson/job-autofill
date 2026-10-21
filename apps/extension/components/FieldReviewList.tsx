@@ -5,7 +5,7 @@ import { Button, cx } from './ui';
 
 const STYLE: Record<FieldFeedback['status'], string> = {
   missing: 'border-red-200 bg-red-50/40', review: 'border-amber-200 bg-amber-50/60',
-  verified: 'border-green-200 bg-green-50/40', entered: 'border-slate-200 bg-white', optional: 'border-slate-200 bg-white',
+  verified: 'border-green-200 bg-green-50/40', entered: 'border-slate-200 bg-white', optional: 'border-yellow-300 bg-yellow-50',
 };
 const SOURCE = { profile: 'Profile', memory: 'Memory', preset: 'Preset', ai: 'AI', page: 'Page answer', none: '' };
 
@@ -37,7 +37,7 @@ export function FieldReviewList({ app, disabled, capturing, onRemember, onShow }
     </li>;
   }
   return <div className="space-y-2">
-    <details className="text-xs text-slate-500"><summary className="cursor-pointer">Review guide</summary><p>Required gaps first, then answers to review. Green means a saved answer was verified; amber needs review; red needs attention.</p></details>
+    <details className="text-xs text-slate-500"><summary className="cursor-pointer">Review guide</summary><p>Required gaps first, then answers to review. Green means a saved answer was verified; amber needs review; red needs attention; yellow is optional.</p></details>
     <ul aria-label="Questions to review" className="mt-2 max-h-64 space-y-1.5 overflow-y-auto overscroll-contain pr-1">{attention.map(row)}
       {!app.fieldFeedback && app.missingLabels.filter((_, i) => !app.missingQuestions?.[i] || !fields.some(f => f.label === app.missingQuestions?.[i])).map((label, i) => <li key={`manual-${i}`} className="rounded-lg bg-slate-50 p-3 text-xs text-slate-700">{label}<p className="mt-1">{app.reviewFields ? 'Complete this field on the page.' : 'Click Fill this page to refresh results and enable field review.'}</p></li>)}
     </ul>

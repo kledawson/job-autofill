@@ -339,7 +339,7 @@ test('remembered mappings are taught in the panel, persisted, reused, edited and
   await form.bringToFront();
   expect(await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'fillActiveTab' }))).toMatchObject({ ok: true });
   await expect(form.locator('#learn-source')).toHaveAttribute('data-jaf-state', 'missing', { timeout: 30_000 });
-  await panel.getByRole('button', { name: /^Review & remember \(/ }).click();
+  await panel.evaluate(() => { const t = document.getElementById('sidebar-review-toggle')!; if (t.getAttribute('aria-expanded') === 'false') t.click(); });
   const missing = panel.getByRole('list', { name: 'Questions to review', exact: true }).getByRole('listitem').filter({ hasText: 'Application discovery channel' });
   await expect(missing.getByRole('button', { name: 'Remember answer', exact: true })).toHaveClass(/bg-white/);
   await form.locator('#learn-source').selectOption('Company website');
@@ -1152,7 +1152,10 @@ test('merged history controls confirm clearing older records without deleting Pr
     target: { kind: 'answer', value: 'Retain this answer' },
   } }));
   expect(keptMemory.ok).toBe(true);
+  // An earlier test's Lever fill can finish after this seeding and stamp its record with the current
+  // time, so the fixtures are dated a minute ahead to stay the newest rows.
   await panel.evaluate(async profile => {
+    const newest = Date.now() + 60_000;
     await chrome.storage.local.set({ 'sidebarSection:history': true });
     await new Promise<void>((resolve, reject) => {
       const request = indexedDB.open('job-autofill'); request.onerror = () => reject(request.error);
@@ -1162,7 +1165,7 @@ test('merged history controls confirm clearing older records without deleting Pr
         for (let i = 0; i < 51; i++) tx.objectStore('applications').add({
           jobKey: `fictional-history-${i}`, url: `https://jobs.example.test/history/${i}`,
           company: 'Fictional History Company', role: `Fictional role ${i}`, platform: 'greenhouse',
-          status: 'Submitted', filledAt: Date.now() + i, filledCount: 0, missingCount: 0, aiAnswers: 0,
+          status: 'Submitted', filledAt: newest + i, filledCount: 0, missingCount: 0, aiAnswers: 0,
         });
         tx.oncomplete = () => { d.close(); resolve(); }; tx.onabort = () => { d.close(); reject(tx.error); };
       };

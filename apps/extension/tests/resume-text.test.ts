@@ -215,3 +215,23 @@ describe('local resume reader', () => {
     }
   });
 });
+
+describe('company and location on one line', () => {
+  const job = (second: string) =>
+    parseResumeText(['Jordan Rivera', 'jordan@example.com', 'Experience', 'AI Enablement Engineer Intern\tSep. 2026 – Present', second, '◦ Develop AI workflows', '◦ Evaluate LLM outputs'])
+      .experience[0];
+
+  it.each([
+    ['Majorly, Remote', 'Majorly', 'Remote'],
+    ['Majorly, San Francisco, CA', 'Majorly', 'San Francisco, CA'],
+    ['Majorly\tRemote', 'Majorly', 'Remote'],
+    ['Majorly | Austin, Texas', 'Majorly', 'Austin, Texas'],
+    ['Majorly (Hybrid)', 'Majorly', 'Hybrid'],
+  ])('reads %s as the company and location', (line, company, location) => {
+    expect(job(line)).toMatchObject({ title: 'AI Enablement Engineer Intern', company, location, current: true, bullets: 'Develop AI workflows\nEvaluate LLM outputs' });
+  });
+
+  it('cleans a Gemini reply that put the location in the company', () => {
+    expect(sanitizeDraft({ experience: [{ title: 'Intern', company: 'Majorly, Remote' }] }).experience[0]).toMatchObject({ company: 'Majorly', location: 'Remote' });
+  });
+});
