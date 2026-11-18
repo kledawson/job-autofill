@@ -85,7 +85,7 @@ export function usePublicSettings() {
   useEffect(() => {
     void refresh();
     const onChange = (changes: Record<string, unknown>, area: string) => {
-      if (area === 'local' && ['geminiApiKey','geminiModel','answerSource','promptTemplate','sheetId','sheetUrl','sheetTabId','sheetTabName','onboardingComplete'].some(key => key in changes)) void refresh();
+      if (area === 'local' && ['geminiApiKey','geminiModel','answerSource','promptTemplate','sheetId','sheetUrl','sheetTabId','sheetTabName','sheetTitle','docsId','docsUrl','docsTitle','generalCoverLetter','coverLetterPrompt','onboardingComplete'].some(key => key in changes)) void refresh();
     };
     browser.storage.onChanged.addListener(onChange);
     return () => browser.storage.onChanged.removeListener(onChange);
