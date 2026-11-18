@@ -78,6 +78,8 @@ export interface ChatDraft {
   createdAt: number;
 }
 export const CHAT_DRAFT_KEY = 'chatDraft';
+export const coverLetterInsertKey = (tabId: number) => `coverLetterInsert:${tabId}`;
+export const COVER_LETTER_FLOW_KEY = 'coverLetterFlow';
 /** Session-storage key marking a chat tab that should receive the draft's prompt once it loads. */
 export const chatInsertKey = (tabId: number) => `chatInsert:${tabId}`;
 
@@ -113,6 +115,8 @@ export interface BackgroundMessages {
       location?: string;
       workMode?: string;
       basePay?: string;
+      jobDescription?: string;
+      postingUrl?: string;
     };
     res: {};
   };
@@ -181,8 +185,14 @@ export interface BackgroundMessages {
   };
   /** Links the spreadsheet at `url` after checking the signed-in Google account can open it. */
   connectSheets: { req: { url: string }; res: Result<{ sheetUrl: string }> };
-  testSheets: { req: {}; res: Result<{ tab: string; columns: string[] }> };
+  testSheets: { req: { interactive?: boolean }; res: Result<{ tab: string; columns: string[] }> };
   disconnectSheets: { req: {}; res: {} };
+  connectDocs: { req: { url: string }; res: Result<{ docsUrl: string }> };
+  testDocs: { req: { interactive?: boolean }; res: Result<{ title: string }> };
+  disconnectDocs: { req: {}; res: {} };
+  approveCoverLetter: { req: { text: string; signatureName?: string }; res: Result };
+  fillCoverLetterField: { req: { applicationId: number; text: string }; res: Result<{ note: string }> };
+  openCoverLetterPrompt: { req: { provider: import('./chat-providers').ChatProviderId; prompt: string }; res: Result<{ inserting: boolean }> };
   getPublicSettings: { req: {}; res: PublicSettings };
   deleteAllData: { req: {}; res: {} };
 }
@@ -208,7 +218,8 @@ export type ContentMessage = { type: 'fill'; applicationId?: number; runId?: str
   { type: 'finishRemembering'; entries: { token: string; captureId: string }[] } |
   { type: 'applyAnswer'; token: string; captureId: string; mapping: RememberedMapping } |
   { type: 'draftRequest'; token: string; question: string; runId?: string } |
-  { type: 'applyDraft'; token: string; question: string; text: string; runId?: string };
+  { type: 'applyDraft'; token: string; question: string; text: string; runId?: string } |
+  { type: 'applyCoverLetter'; token: string; question: string; text: string; runId?: string };
 
 export function fileToPayload(file: { name: string; type: string }, bytes: ArrayBuffer): FilePayload {
   const u8 = new Uint8Array(bytes);
