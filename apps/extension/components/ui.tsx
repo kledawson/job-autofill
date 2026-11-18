@@ -1,5 +1,6 @@
 import {
   cloneElement,
+  forwardRef,
   type ComponentProps,
   useEffect,
   useId,
@@ -58,9 +59,9 @@ export function PrefixInput({ prefix, ...props }: ComponentProps<'input'> & { pr
   );
 }
 
-export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea {...props} className={cx(control, 'min-h-24', props.className)} />;
-}
+export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea(props, ref) {
+  return <textarea {...props} ref={ref} className={cx(control, 'min-h-24', props.className)} />;
+});
 
 export const SELECT_ARROW =
   `appearance-none bg-[url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2020%2020'%20fill='none'%20stroke='%23475569'%20stroke-width='2'%3E%3Cpath%20d='m5%208%205%205%205-5'/%3E%3C/svg%3E")] bg-[length:1.25rem] bg-[position:right_0.75rem_center] bg-no-repeat`;
