@@ -46,6 +46,14 @@ Future work: refine the supported-form benchmark and measure coverage and review
 - Prompts include the posting link and, when the form lacks it, the description from the same-site posting.
   The default asks for 3–5 sentences within the question's character limit.
 
+## Cover-letter tailoring
+
+- Missed cover-letter uploads surface a sidebar flow with either saved-PDF text extraction or an editable
+  general-letter reference, the job posting link/description, and editable writing instructions.
+- The selected chat LLM opens in a new tab with a locally composed prompt copied for the user to send.
+- Settings → Connections accepts a Google Docs link. The user reviews and explicitly approves the finished
+  letter before the extension replaces the connected document body; the document title remains.
+
 Later: Copilot once its new-chat address settles.
 
 ## Implemented application presets
