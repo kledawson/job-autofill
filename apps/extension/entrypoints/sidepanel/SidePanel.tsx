@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from 'react';
 import { FieldReviewList } from '@/components/FieldReviewList';
 import { ChatDraftCard } from '@/components/ChatDraftCard';
 import { NeedsAnswerList } from '@/components/NeedsAnswerList';
+import { CoverLetterDraft } from '@/components/CoverLetterDraft';
+import { CHAT_PROVIDERS, onProviderSite } from '@/lib/chat-providers';
 import { FreeResponsePicker } from '@/components/FreeResponsePicker';
 import { chatProviderFor, type ChatProvider } from '@/lib/chat-providers';
 import { browser } from 'wxt/browser';
@@ -14,7 +16,7 @@ import { useLiveQuery, usePublicSettings } from '@/components/hooks';
 import { Button, cx, Input, Notice, Select } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { missingRequired } from '@/components/ProfileSections';
-import { pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
+import { COVER_LETTER_FLOW_KEY, pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
 import { ALL_SITES, detectPlatform, jobKey } from '@/lib/platforms';
 import type { Application, ApplicationStatus } from '@/lib/types';
 import { draftForCapture, MappingEditor } from '@/components/KnowledgeBase';
@@ -123,11 +125,41 @@ export default function SidePanel() {
   // History is intentionally bounded; the active job must survive more than 50 later fills.
   const tabApplications = useLiveQuery(() => tabId === undefined ? Promise.resolve([]) : db.applications.where('tabId').equals(tabId).sortBy('filledAt'), [tabId]);
   const current = tabApplications?.findLast(a => a.status !== 'Submitted') ?? tabApplications?.at(-1);
+  const [coverLetterFlow, setCoverLetterFlow] = useState<{ applicationId: number; draft: string; promptText: string } | null>(null);
+  const [coverLetterExpanded, setCoverLetterExpanded] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const load = () => void browser.storage.session.get(COVER_LETTER_FLOW_KEY).then(values => {
+      if (active) setCoverLetterFlow((values[COVER_LETTER_FLOW_KEY] as typeof coverLetterFlow) ?? null);
+    }).catch(() => undefined);
+    load();
+    const changed = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area === 'session' && COVER_LETTER_FLOW_KEY in changes) setCoverLetterFlow((changes[COVER_LETTER_FLOW_KEY]?.newValue as typeof coverLetterFlow) ?? null);
+    };
+    browser.storage.onChanged.addListener(changed);
+    return () => { active = false; browser.storage.onChanged.removeListener(changed); };
+  }, []);
+  const coverLetterOriginApp = useLiveQuery(() => coverLetterFlow?.applicationId ? db.applications.get(coverLetterFlow.applicationId) : Promise.resolve(undefined), [coverLetterFlow?.applicationId]);
   const pageStatus = usePageStatus(tabId, tabUrl);
   const queue = useLiveQuery(() => db.applicationQueue.get('current'));
   const [presetId, setPresetId] = useState<string>();
   const queueItem = queue && ['running', 'paused'].includes(queue.status) ? queue.items.find(i => i.tabId === tabId && !['submitted', 'skipped'].includes(i.state)) : undefined;
   const workflow = applicationWorkflow(current, queueItem);
+  const onChatProvider = Object.values(CHAT_PROVIDERS).some(provider => onProviderSite(provider, tabUrl));
+  const coverLetterApp = current?.id === coverLetterFlow?.applicationId ? current : coverLetterOriginApp;
+  function openCoverLetterDraft() {
+    setCoverLetterExpanded(true);
+    if (current?.id) {
+      void browser.storage.session.get(COVER_LETTER_FLOW_KEY).then(values => {
+        const existing = values[COVER_LETTER_FLOW_KEY] as { applicationId?: number; draft?: string; promptText?: string } | undefined;
+        if (existing?.applicationId !== current.id) {
+          return browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId: current.id, draft: '', promptText: '' } });
+        }
+        return undefined;
+      }).catch(() => undefined);
+    }
+    requestAnimationFrame(() => document.getElementById('cover-letter-draft')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+  }
 
   const [error, setError] = useState('');
   /** The tab and job where Fill this page was clicked. Its details show only there: another tab or application starts hidden. */
@@ -197,12 +229,16 @@ export default function SidePanel() {
       </section>
       </div>
       <ChatDraftCard />
+      {coverLetterApp && ((current?.id === coverLetterApp.id && showing) || (onChatProvider && !!coverLetterFlow)) &&
+        <CoverLetterDraft key={coverLetterApp.id} app={coverLetterApp} settings={settings} open={coverLetterExpanded} onOpen={openCoverLetterDraft} flowActive={!!coverLetterFlow && coverLetterFlow.applicationId === coverLetterApp.id} />}
       <section id="current-page-review" aria-label="Current page review" className="scroll-mt-40 rounded-xl border border-slate-200 bg-white p-3 shadow-sm" hidden={!showing}>
         {showing &&
           (queueItem?.state === 'needs-action' && !current ? <PageStatusBox status={{ title: workflow.title, lines: [queueItem.note || 'Finish this step on the website, then retry autofill.'], tone: 'attention' }} /> : current ? (
-            <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} chat={chatProviderFor(settings?.answerSource)}
+            <>
+            <ApplicationSummary key={current.id} app={current} pageStatus={pageStatus} sheetUrl={settings?.sheetUrl} chat={chatProviderFor(settings?.answerSource)} onOpenCoverLetter={openCoverLetterDraft}
               queueItem={queueItem}
               queueEntry={queueItem && queue ? { token: queue.token, itemId: queueItem.id, ready: queueItem.state === 'review', autoDetectSubmission: queue.autoDetectSubmission } : undefined} />
+            </>
           ) : (
             <PageStatusBox status={pageStatus ?? { title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' }} />
           ))}
@@ -220,7 +256,8 @@ export default function SidePanel() {
           {!settings?.onboardingComplete && <button className="text-indigo-700 underline" onClick={() => browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') })}>Continue setup</button>}
           <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#profile' as never)} target="_blank" rel="noreferrer">Edit profile</a>
           <p>Free responses: {chatProviderFor(settings?.answerSource) ? `Drafted in ${chatProviderFor(settings?.answerSource)!.name}` : settings?.answerSource === 'gemini-api' ? settings.hasGeminiKey ? 'Gemini API' : 'Gemini API (no key yet)' : 'Answered by you'}</p>
-          <p>Google Sheets: {settings?.sheetUrl ? 'Connected' : 'Not connected'}</p>
+          <p>Google Sheets Application Tracking: {settings?.sheetUrl ? `Connected - ${settings.sheetTitle || 'Google spreadsheet'}` : 'Not connected'}</p>
+          <p>Google Docs Cover Letter: {settings?.docsUrl ? `Connected - ${settings.docsTitle || 'Google Doc'}` : 'Not connected'}</p>
           <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#connections' as never)} target="_blank" rel="noreferrer">Manage connections</a>
         </div>
       </SidebarSection>
@@ -394,7 +431,7 @@ function PageStatusBox({ status, hideTitle }: { status: PageStatus; hideTitle?: 
   );
 }
 
-function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, chat }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean }; chat?: ChatProvider }) {
+function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, chat, onOpenCoverLetter }: { app: Application; pageStatus: PageStatus | null; sheetUrl?: string; queueItem?: QueueItem; queueEntry?: { token: string; itemId: string; ready: boolean; autoDetectSubmission?: boolean }; chat?: ChatProvider; onOpenCoverLetter?: () => void }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const workflow = applicationWorkflow(app, queueItem);
@@ -419,7 +456,7 @@ function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, 
           <Stat value={attentionCount} label="Need review" color={attentionCount ? 'text-red-700' : 'text-slate-400'} />
         </div>
       )}
-      {!workflow.writing && app.status === 'Ready for review' && <NeedsAnswerList app={app} chat={chat} disabled={busy} />}
+      {!workflow.writing && app.status === 'Ready for review' && <NeedsAnswerList app={app} chat={chat} disabled={busy} onOpenCoverLetter={onOpenCoverLetter} />}
       {!workflow.writing && pageStatus && <PageStatusBox status={pageStatus} hideTitle={pageStatus.title === app.status} />}
       {!workflow.writing && app.resumeName && <p className="text-xs text-slate-500">Resume: {app.resumeName}</p>}
 
