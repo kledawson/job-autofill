@@ -297,6 +297,8 @@ export default defineContentScript({
         location: details?.location,
         workMode: details?.workMode,
         basePay: details?.pay,
+        jobDescription: session.postingDescription(),
+        postingUrl: session.postingLink(),
       });
     }
 
@@ -310,11 +312,12 @@ export default defineContentScript({
         } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not locate this field.' }); }
         return false;
       }
-      if (msg.type === 'draftRequest' || msg.type === 'applyDraft') {
+      if (msg.type === 'draftRequest' || msg.type === 'applyDraft' || msg.type === 'applyCoverLetter') {
         void (async () => {
           try {
             if (!session || filling || msg.runId !== currentRunId) throw new Error('Wait for this fill to finish or refresh the application results.');
             if (msg.type === 'draftRequest') sendResponse({ ok: true, request: await session.draftRequest(msg.token, msg.question) });
+            else if (msg.type === 'applyCoverLetter') sendResponse({ ok: true, note: session.applyCoverLetter(msg.token, msg.question, msg.text) });
             else sendResponse({ ok: true, note: session.applyDraft(msg.token, msg.question, msg.text) });
           } catch (err) { sendResponse({ ok: false, error: err instanceof Error ? err.message : 'Could not use this field.' }); }
         })();
