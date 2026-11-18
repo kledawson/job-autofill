@@ -14,6 +14,9 @@ const DEFAULTS: Settings = {
   sheetUrl: '',
   sheetTabId: null,
   sheetTabName: '',
+  sheetTitle: '',
+  docsUrl: '', docsId: '', docsTitle: '', generalCoverLetter: '',
+  coverLetterPrompt: 'Tailor this cover letter to the role. Keep it truthful to the reference letter and focus on relevant experience. Return only the finished letter.',
   onboardingComplete: false,
 };
 
@@ -36,4 +39,5 @@ export async function updateSettings(patch: Partial<Settings>): Promise<void> {
 export interface PublicSettings extends Omit<Settings, 'geminiApiKey'> {
   hasGeminiKey: boolean;
   sheetsAvailable: boolean;
+  docsAvailable: boolean;
 }
