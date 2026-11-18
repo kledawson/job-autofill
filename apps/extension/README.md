@@ -56,9 +56,9 @@ viewing them does not capture or save anything. Refresh older application tabs t
 
 Sheets sync needs a Google OAuth client. Filling works without it.
 
-1. In Google Cloud Console, create a project and enable the **Google Sheets API**.
+1. In Google Cloud Console, create a project and enable the **Google Sheets API** and **Google Docs API**.
 2. Configure the OAuth consent screen (External, add yourself as a test user) with the
-   `https://www.googleapis.com/auth/spreadsheets` scope.
+   `https://www.googleapis.com/auth/spreadsheets` and `https://www.googleapis.com/auth/documents` scopes.
 3. Create an OAuth client ID of type **Chrome Extension** with item ID `kjepjmmbimmbpdfinkippakkmhbglccc`.
 4. Copy `apps/extension/.env.example` to `apps/extension/.env`, set `WXT_GOOGLE_CLIENT_ID`, and run `npm run build` again.
 
