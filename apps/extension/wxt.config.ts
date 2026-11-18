@@ -56,7 +56,7 @@ export default defineConfig({
       ? {
           oauth2: {
             client_id: GOOGLE_CLIENT_ID,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+            scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/documents'],
           },
         }
       : {}),
