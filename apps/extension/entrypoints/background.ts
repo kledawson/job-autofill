@@ -13,6 +13,7 @@ import { sanitizeDraft, sectionRequest } from '@/lib/resume';
 import {
   CHAT_DRAFT_KEY,
   chatInsertKey,
+  coverLetterInsertKey,
   fileToPayload,
   pageStatusKey,
   type BackgroundMessage,
@@ -26,7 +27,8 @@ import { CHAT_PROVIDERS, chatProviderFor, composerSelectors, insertPrompt, onPro
 import { detectPlatform, platformFor, isWebUrl, jobKey, toApplicationUrl } from '@/lib/platforms';
 import { clampToLimit, renderBatchPrompt, renderPrompt, type PromptContext } from '@/lib/prompt';
 import { getSettings, updateSettings, type PublicSettings } from '@/lib/settings';
-import { appendApplication, SHEET_COLUMNS, parseSheetUrl, sheetTabId, testSheetConnection, sheetsConfigured } from '@/lib/sheets';
+import { appendApplication, SHEET_COLUMNS, parseSheetUrl, testSheetConnection, sheetsConfigured } from '@/lib/sheets';
+import { connectDoc, docsConfigured, parseDocsUrl, replaceDocText } from '@/lib/google-docs';
 import type { Application, StoredFile } from '@/lib/types';
 import { formatLocation, formatPay, normalizeWorkMode, WORK_MODELS } from '@/lib/job-details';
 import { proposeConfirmedProfileUpdate } from '@/lib/profile-learning';
@@ -90,7 +92,7 @@ async function syncSheet(id: number) {
 
 async function writeSheetRow(id: number) {
   console.info(`[Job Autofill] adding application ${id} to the sheet`);
-  const { sheetId, sheetTabId: tabId } = await getSettings();
+  const { sheetId } = await getSettings();
   const app = await db.applications.get(id);
   if (!app || app.status !== 'Submitted') return;
   if (app.sheetRow) {
@@ -114,7 +116,7 @@ async function writeSheetRow(id: number) {
     return;
   }
   try {
-    const sheetRow = await appendApplication(sheetId, app, tabId ?? undefined);
+    const sheetRow = await appendApplication(sheetId, app);
     console.info(`[Job Autofill] application ${id} added to the sheet at row ${sheetRow}`);
     await db.applications.update(id, { sheetRow, sheetError: undefined, sheetSyncPending: false });
   } catch (err) {
@@ -407,6 +409,23 @@ async function insertChatPrompt(tabId: number, url: string | undefined) {
   } finally {
     insertingTabs.delete(tabId);
   }
+}
+
+/** Inserts a prepared cover-letter prompt into the empty composer of its selected chat provider. */
+async function insertCoverLetterPrompt(tabId: number, url: string | undefined) {
+  const key = coverLetterInsertKey(tabId);
+  const pending = (await browser.storage.session.get(key))[key] as { provider: keyof typeof CHAT_PROVIDERS; prompt: string; expires: number } | undefined;
+  if (!pending || insertingTabs.has(tabId)) return;
+  if (Date.now() > pending.expires) { await browser.storage.session.remove(key); return; }
+  const provider = CHAT_PROVIDERS[pending.provider];
+  if (!provider || !onProviderSite(provider, url)) return;
+  insertingTabs.add(tabId);
+  try {
+    const [run] = await browser.scripting.executeScript({ target: { tabId }, func: insertPrompt, args: [pending.prompt, composerSelectors(provider), 15000] });
+    const result = run?.result as InsertResult | undefined;
+    if (result && result !== 'missing' && result !== 'busy') await browser.storage.session.remove(key);
+  } catch (err) { console.warn('[Job Autofill] could not put the cover-letter prompt in the chat', errorText(err)); }
+  finally { insertingTabs.delete(tabId); }
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +837,7 @@ const handlers: Handlers = {
       .map(q => typeof q === 'string' && q.trim() && q.length <= 700 ? q : null);
     while (missingQuestions && missingQuestions.length < req.missingLabels.length) missingQuestions.push(null);
     const first = app.status === 'Filling';
+    const jobDescription = typeof req.jobDescription === 'string' ? req.jobDescription.slice(0, 20000) : '';
     if (req.usedMappingIds !== undefined) {
       const usedIds = Array.isArray(req.usedMappingIds) ? req.usedMappingIds.filter(id => Number.isSafeInteger(id) && id >= 1).slice(0, 200) : [];
       const context = { platform: app.platform, company: app.company, url: app.url };
@@ -837,6 +857,8 @@ const handlers: Handlers = {
       reviewFields,
       fieldFeedback,
       memoryQuestions,
+      ...(jobDescription ? { jobDescription } : {}),
+      ...(typeof req.postingUrl === 'string' && /^https:\/\//.test(req.postingUrl) ? { postingUrl: req.postingUrl.slice(0, 2000) } : {}),
       location: (typeof req.location === 'string' && formatLocation(req.location)) || app.location,
       workMode: WORK_MODELS.find((m) => m === req.workMode) ?? app.workMode,
       basePay: (typeof req.basePay === 'string' && req.basePay.trim().length <= 60 && req.basePay.trim()) || app.basePay,
@@ -1111,32 +1133,100 @@ const handlers: Handlers = {
     const sheetId = parseSheetUrl(url);
     if (!sheetId) return { ok: false, error: 'That is not a Google Sheets link. It should look like https://docs.google.com/spreadsheets/d/…' };
     try {
-      const sheet = await testSheetConnection(sheetId, sheetTabId(url));
-      await updateSettings({ sheetId, sheetUrl: sheet.url, sheetTabId: sheet.tabId, sheetTabName: sheet.tab });
+      const sheet = await testSheetConnection(sheetId);
+      await updateSettings({ sheetId, sheetUrl: sheet.url, sheetTabId: sheet.tabId, sheetTabName: sheet.tab, sheetTitle: sheet.title });
       return { ok: true, sheetUrl: sheet.url };
     } catch (err) {
       return { ok: false, error: `Could not open that sheet with your Google account: ${errorText(err)}` };
     }
   },
 
-  async testSheets(_req, sender) {
+  async testSheets({ interactive = true }, sender) {
     requireExtensionPage(sender);
     const settings = await getSettings();
     if (!settings.sheetId || !sheetsConfigured()) throw new Error('Connect a sheet and configure Google sign-in first (see README).');
-    const sheet = await testSheetConnection(settings.sheetId, settings.sheetTabId ?? undefined);
-    await updateSettings({ sheetTabName: sheet.tab, sheetUrl: sheet.url, sheetTabId: sheet.tabId });
+    const sheet = await testSheetConnection(settings.sheetId, undefined, interactive);
+    await updateSettings({ sheetTabName: sheet.tab, sheetUrl: sheet.url, sheetTabId: sheet.tabId, sheetTitle: sheet.title });
     return { ok: true, tab: sheet.tab, columns: sheet.columns.map(key => SHEET_COLUMNS.find(column => column.key === key)!.label) };
   },
 
   async disconnectSheets(_req, sender) {
     requireExtensionPage(sender);
-    await updateSettings({ sheetId: '', sheetUrl: '', sheetTabId: null, sheetTabName: '' });
+    await updateSettings({ sheetId: '', sheetUrl: '', sheetTabId: null, sheetTabName: '', sheetTitle: '' });
     return {};
+  },
+
+  async connectDocs({ url }, sender) {
+    requireExtensionPage(sender);
+    if (!docsConfigured()) return { ok: false, error: 'Google sign-in is not configured in this build. Configure the OAuth client and rebuild.' };
+    try {
+      const doc = await connectDoc(url);
+      await updateSettings({ docsId: doc.id, docsUrl: doc.url, docsTitle: doc.title });
+      return { ok: true, docsUrl: doc.url };
+    } catch (err) { return { ok: false, error: errorText(err) }; }
+  },
+
+  async testDocs({ interactive = true }, sender) {
+    requireExtensionPage(sender);
+    const settings = await getSettings();
+    if (!settings.docsId || !settings.docsUrl || !docsConfigured()) throw new Error('Connect a Google Doc and configure Google sign-in first.');
+    const doc = await connectDoc(settings.docsUrl, interactive);
+    await updateSettings({ docsTitle: doc.title });
+    return { ok: true, title: doc.title };
+  },
+
+  async disconnectDocs(_req, sender) {
+    requireExtensionPage(sender);
+    await updateSettings({ docsId: '', docsUrl: '', docsTitle: '' });
+    return {};
+  },
+
+  async approveCoverLetter({ text, signatureName }, sender) {
+    requireExtensionPage(sender);
+    const settings = await getSettings();
+    if (!settings.docsId || !parseDocsUrl(settings.docsUrl) || typeof text !== 'string' || !text.trim() || text.length > 30000) {
+      return { ok: false, error: 'Connect a Google Doc and provide a cover letter under 30,000 characters.' };
+    }
+    try { await replaceDocText(settings.docsId, text.trim(), typeof signatureName === 'string' ? signatureName.trim().slice(0, 200) : ''); return { ok: true }; }
+    catch (err) { return { ok: false, error: `Could not update the Google Doc: ${errorText(err)}` }; }
+  },
+
+  async fillCoverLetterField({ applicationId, text }, sender) {
+    requireExtensionPage(sender);
+    if (!Number.isSafeInteger(applicationId) || typeof text !== 'string' || !text.trim() || text.length > 30000) throw new Error('Paste a cover letter under 30,000 characters.');
+    const app = await draftApplication(applicationId);
+    const matchingFields = (app.fieldFeedback ?? []).filter(f => /cover\s*letter/i.test(f.label));
+    const textFields = matchingFields.filter(f => f.kind === 'text' || f.kind === 'textarea');
+    const legacyTextFields = matchingFields.filter(f => !f.kind && ['review', 'entered'].includes(f.status));
+    const fields = textFields.length ? textFields : legacyTextFields.length ? legacyTextFields : matchingFields.length === 1 ? matchingFields : [];
+    if (fields.length !== 1) throw new Error('Could not identify one cover-letter text box. Refresh the application with Fill this page and try again.');
+    if (app.tabId === undefined || !app.runId) throw new Error('The application page is no longer available. Fill this application again.');
+    const tab = await browser.tabs.get(app.tabId).catch(() => undefined);
+    if (!tab?.url || applicationKey(tab.url) !== applicationKey(app.topUrl ?? app.url)) throw new Error('This tab has moved to another application. Refresh its fill results.');
+    const field = fields[0]!;
+    const result = await browser.tabs.sendMessage(app.tabId, { type: 'applyCoverLetter', token: field.token, question: field.label, text: text.trim(), runId: app.runId } satisfies ContentMessage, { frameId: app.frameId ?? 0 }).catch(() => null);
+    if (!result?.ok) throw new Error(result?.error ?? 'Could not fill the cover-letter text box. Refresh the application and try again.');
+    await browser.tabs.update(app.tabId, { active: true });
+    return { ok: true, note: result.note ?? 'Cover letter added for review.' };
+  },
+
+  async openCoverLetterPrompt({ provider: providerId, prompt }, sender) {
+    requireExtensionPage(sender);
+    const provider = CHAT_PROVIDERS[providerId];
+    if (!provider || typeof prompt !== 'string' || !prompt.trim() || prompt.length > 30000) return { ok: false, error: 'The cover-letter prompt or chat provider is invalid.' };
+    const allowed = await browser.permissions.contains({ origins: provider.origins }).catch(() => false);
+    const tab = await browser.tabs.create({ url: provider.url, active: true });
+    if (!allowed || tab.id === undefined) return { ok: true, inserting: false };
+    const key = coverLetterInsertKey(tab.id);
+    await browser.storage.session.set({ [key]: { provider: providerId, prompt, expires: Date.now() + 10 * 60 * 1000 } });
+    const loaded = await browser.tabs.get(tab.id).catch(() => undefined);
+    if (loaded?.status === 'complete') void insertCoverLetterPrompt(tab.id, loaded.url);
+    return { ok: true, inserting: true };
   },
 
   async getPublicSettings() {
     const { geminiApiKey, ...rest } = await getSettings();
-    const settings: PublicSettings = { ...rest, hasGeminiKey: !!geminiApiKey, sheetsAvailable: sheetsConfigured() };
+    const settings: PublicSettings = { ...rest, hasGeminiKey: !!geminiApiKey, sheetsAvailable: sheetsConfigured(), docsAvailable: docsConfigured() };
     return settings;
   },
 
@@ -1201,11 +1291,13 @@ export default defineBackground(() => {
   browser.tabs.onUpdated.addListener((tabId, change, tab) => {
     if (change.status !== 'complete') return;
     void insertChatPrompt(tabId, tab.url);
+    void insertCoverLetterPrompt(tabId, tab.url);
     void noticePageReload(tabId, tab.url).catch(err => console.warn('[Job Autofill] could not check the reloaded page', errorText(err)));
   });
 
   browser.tabs.onRemoved.addListener(async (tabId) => {
     await browser.storage.session.remove(chatInsertKey(tabId));
+    await browser.storage.session.remove(coverLetterInsertKey(tabId));
     await forgetSubmissionTab(tabId);
     await queueRemoved(tabId);
     fillingFrames.delete(tabId);
