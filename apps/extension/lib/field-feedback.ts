@@ -1,3 +1,5 @@
+import type { FieldKind } from './autofill/scan';
+
 /** Review metadata never contains applicant values. Tokens belong to one live fill session. */
 export interface FieldFeedback {
   token: string;
@@ -6,6 +8,8 @@ export interface FieldFeedback {
   status: 'verified' | 'review' | 'missing' | 'entered' | 'optional';
   source: 'profile' | 'memory' | 'preset' | 'ai' | 'page' | 'none';
   reason: string;
+  /** The scanned control type lets the sidebar distinguish cover-letter text fields from uploads. */
+  kind?: FieldKind;
   /** An empty free response that can be drafted on the chosen chat website. */
   draft?: boolean;
 }
@@ -24,8 +28,9 @@ export function parseFieldFeedback(value: unknown): FieldFeedback[] {
       typeof f.label !== 'string' || !f.label.trim() || f.label.length > 700 || typeof f.required !== 'boolean' ||
       !['verified', 'review', 'missing', 'entered', 'optional'].includes(f.status) ||
       !['profile', 'memory', 'preset', 'ai', 'page', 'none'].includes(f.source) ||
+      (f.kind !== undefined && !['text', 'textarea', 'select', 'combobox', 'radio', 'checkbox', 'checkboxGroup', 'yesno', 'file', 'listbox', 'prompt'].includes(f.kind)) ||
       typeof f.reason !== 'string' || f.reason.length > 300 || (f.draft !== undefined && f.draft !== true)) throw new Error('Invalid field feedback.');
     tokens.add(f.token);
-    return { token: f.token, label: f.label, required: f.required, status: f.status, source: f.source, reason: f.reason, ...(f.draft ? { draft: true as const } : {}) };
+    return { token: f.token, label: f.label, required: f.required, status: f.status, source: f.source, reason: f.reason, ...(f.kind ? { kind: f.kind } : {}), ...(f.draft ? { draft: true as const } : {}) };
   });
 }
