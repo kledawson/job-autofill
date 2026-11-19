@@ -27,7 +27,7 @@ import { CHAT_PROVIDERS, chatProviderFor, composerSelectors, insertPrompt, onPro
 import { detectPlatform, platformFor, isWebUrl, jobKey, toApplicationUrl } from '@/lib/platforms';
 import { clampToLimit, renderBatchPrompt, renderPrompt, type PromptContext } from '@/lib/prompt';
 import { getSettings, updateSettings, type PublicSettings } from '@/lib/settings';
-import { appendApplication, SHEET_COLUMNS, parseSheetUrl, testSheetConnection, sheetsConfigured } from '@/lib/sheets';
+import { appendApplication, SHEET_COLUMNS, parseSheetUrl, sheetTabId, testSheetConnection, sheetsConfigured } from '@/lib/sheets';
 import { connectDoc, docsConfigured, parseDocsUrl, replaceDocText } from '@/lib/google-docs';
 import type { Application, StoredFile } from '@/lib/types';
 import { formatLocation, formatPay, normalizeWorkMode, WORK_MODELS } from '@/lib/job-details';
@@ -92,7 +92,7 @@ async function syncSheet(id: number) {
 
 async function writeSheetRow(id: number) {
   console.info(`[Job Autofill] adding application ${id} to the sheet`);
-  const { sheetId } = await getSettings();
+  const { sheetId, sheetTabId: tabId } = await getSettings();
   const app = await db.applications.get(id);
   if (!app || app.status !== 'Submitted') return;
   if (app.sheetRow) {
@@ -116,7 +116,7 @@ async function writeSheetRow(id: number) {
     return;
   }
   try {
-    const sheetRow = await appendApplication(sheetId, app);
+    const sheetRow = await appendApplication(sheetId, app, tabId ?? undefined);
     console.info(`[Job Autofill] application ${id} added to the sheet at row ${sheetRow}`);
     await db.applications.update(id, { sheetRow, sheetError: undefined, sheetSyncPending: false });
   } catch (err) {
@@ -1133,7 +1133,7 @@ const handlers: Handlers = {
     const sheetId = parseSheetUrl(url);
     if (!sheetId) return { ok: false, error: 'That is not a Google Sheets link. It should look like https://docs.google.com/spreadsheets/d/…' };
     try {
-      const sheet = await testSheetConnection(sheetId);
+      const sheet = await testSheetConnection(sheetId, sheetTabId(url));
       await updateSettings({ sheetId, sheetUrl: sheet.url, sheetTabId: sheet.tabId, sheetTabName: sheet.tab, sheetTitle: sheet.title });
       return { ok: true, sheetUrl: sheet.url };
     } catch (err) {
@@ -1145,7 +1145,7 @@ const handlers: Handlers = {
     requireExtensionPage(sender);
     const settings = await getSettings();
     if (!settings.sheetId || !sheetsConfigured()) throw new Error('Connect a sheet and configure Google sign-in first (see README).');
-    const sheet = await testSheetConnection(settings.sheetId, undefined, interactive);
+    const sheet = await testSheetConnection(settings.sheetId, settings.sheetTabId ?? undefined, interactive);
     await updateSettings({ sheetTabName: sheet.tab, sheetUrl: sheet.url, sheetTabId: sheet.tabId, sheetTitle: sheet.title });
     return { ok: true, tab: sheet.tab, columns: sheet.columns.map(key => SHEET_COLUMNS.find(column => column.key === key)!.label) };
   },
