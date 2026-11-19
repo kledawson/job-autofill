@@ -390,7 +390,7 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
         </section>}
         {settings.sheetId ? (
           <div className="flex flex-wrap items-center gap-3">
-            <Notice tone="success" title={settings.sheetTitle || undefined}>Connected · {settings.sheetTabName || 'First tab'}</Notice>
+            <span title={settings.sheetTitle || undefined}><Notice tone="success">Connected · {settings.sheetTabName || 'First tab'}</Notice></span>
             <a className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1" href={settings.sheetUrl} target="_blank" rel="noreferrer">
               Open tracking sheet
             </a>
