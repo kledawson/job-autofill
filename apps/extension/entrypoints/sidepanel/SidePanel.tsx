@@ -125,7 +125,7 @@ export default function SidePanel() {
   // History is intentionally bounded; the active job must survive more than 50 later fills.
   const tabApplications = useLiveQuery(() => tabId === undefined ? Promise.resolve([]) : db.applications.where('tabId').equals(tabId).sortBy('filledAt'), [tabId]);
   const current = tabApplications?.findLast(a => a.status !== 'Submitted') ?? tabApplications?.at(-1);
-  const [coverLetterFlow, setCoverLetterFlow] = useState<{ applicationId: number; draft: string; promptText: string } | null>(null);
+  const [coverLetterFlow, setCoverLetterFlow] = useState<{ applicationId: number; draft: string; promptText: string; expanded?: boolean } | null>(null);
   const [coverLetterExpanded, setCoverLetterExpanded] = useState(false);
   useEffect(() => {
     let active = true;
@@ -153,9 +153,9 @@ export default function SidePanel() {
       void browser.storage.session.get(COVER_LETTER_FLOW_KEY).then(values => {
         const existing = values[COVER_LETTER_FLOW_KEY] as { applicationId?: number; draft?: string; promptText?: string } | undefined;
         if (existing?.applicationId !== current.id) {
-          return browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId: current.id, draft: '', promptText: '' } });
+          return browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId: current.id, draft: '', promptText: '', jobDescription: current.jobDescription, expanded: true } });
         }
-        return undefined;
+        return browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { ...existing, expanded: true } });
       }).catch(() => undefined);
     }
     requestAnimationFrame(() => document.getElementById('cover-letter-draft')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
@@ -228,9 +228,10 @@ export default function SidePanel() {
         {error && <Notice tone="error">{error}</Notice>}
       </section>
       </div>
-      <ChatDraftCard />
-      {coverLetterApp && ((current?.id === coverLetterApp.id && showing) || (onChatProvider && !!coverLetterFlow)) &&
-        <CoverLetterDraft key={coverLetterApp.id} app={coverLetterApp} settings={settings} open={coverLetterExpanded} onOpen={openCoverLetterDraft} flowActive={!!coverLetterFlow && coverLetterFlow.applicationId === coverLetterApp.id} />}
+      <ChatDraftCard>
+        {coverLetterApp && ((current?.id === coverLetterApp.id && showing) || (onChatProvider && !!coverLetterFlow)) &&
+          <CoverLetterDraft key={coverLetterApp.id} app={coverLetterApp} settings={settings} open={coverLetterExpanded || coverLetterFlow?.expanded === true} onClose={() => { setCoverLetterExpanded(false); void browser.storage.session.get(COVER_LETTER_FLOW_KEY).then(values => { const flow = values[COVER_LETTER_FLOW_KEY] as Record<string, unknown> | undefined; if (flow?.applicationId === coverLetterApp.id) void browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { ...flow, expanded: false } }); }).catch(() => undefined); }} flowActive={!!coverLetterFlow && coverLetterFlow.applicationId === coverLetterApp.id} />}
+      </ChatDraftCard>
       <section id="current-page-review" aria-label="Current page review" className="scroll-mt-40 rounded-xl border border-slate-200 bg-white p-3 shadow-sm" hidden={!showing}>
         {showing &&
           (queueItem?.state === 'needs-action' && !current ? <PageStatusBox status={{ title: workflow.title, lines: [queueItem.note || 'Finish this step on the website, then retry autofill.'], tone: 'attention' }} /> : current ? (
