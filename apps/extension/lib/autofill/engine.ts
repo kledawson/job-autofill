@@ -309,6 +309,9 @@ export class FillSession {
     return findPostingLink(this.doc, this.doc.location?.href ?? '');
   }
 
+  /** Job text already collected for this fill, for a user-reviewed cover-letter prompt. */
+  postingDescription(): string { return (this.description ?? '').slice(0, 20000); }
+
   /** Writes a reply the person pasted into one empty free response, marked as an AI draft to review. */
   applyDraft(token: string, question: string, text: string): string {
     const rec = this.liveFreeResponse(token, question);
@@ -330,6 +333,41 @@ export class FillSession {
     this.deps.onProgress?.(this.verify());
     return answer.length < full.length
       ? `Added for review, shortened to fit ${limit} characters. Check it on the page before submitting.`
+      : 'Added for review. Check it on the page before submitting.';
+  }
+
+  /** Replaces a cover-letter text field with the user's reviewed LLM draft, even if autofill already populated it. */
+  applyCoverLetter(token: string, question: string, text: string): string {
+    if (this.busy || this.stopped) throw new Error('Wait for autofill to finish, then try again.');
+    let rec = [...this.records.values()].find(r => r.token === token);
+    let field = rec && this.relocate(rec);
+    if (!rec || !field || !labelMatches(field, question)) {
+      this.collectFresh(true);
+      const matches = [...this.records.values()].filter(r => r.field.el.isConnected && /cover\s*letter/i.test(r.field.label) && isTextBox(r.field));
+      rec = matches.length === 1 ? matches[0] : undefined;
+      field = rec && this.relocate(rec);
+    }
+    if (!rec || !field || !labelMatches(field, question) || !/cover\s*letter/i.test(field.label) || !isTextBox(field)) {
+      throw new Error('This cover-letter text box is no longer on the page. Click Fill this page to refresh the results.');
+    }
+    const full = text.trim();
+    if (!full) throw new Error('Paste the cover-letter draft first.');
+    rec.field = { ...field, label: rec.field.label };
+    const limit = Math.min(30000, field.maxLength && field.maxLength > 0 ? field.maxLength : 30000);
+    const answer = full.slice(0, limit);
+    rec.outcome = fillText(rec.field, answer);
+    if (rec.outcome !== 'filled' || !fieldHasValue(rec.field)) {
+      rec.outcome = 'failed';
+      throw new Error('Could not write the cover letter into this text box. Paste it on the page instead.');
+    }
+    rec.cls = { kind: 'free_response' };
+    rec.ai = true;
+    rec.flag = false;
+    rec.writtenValue = fieldValueSignature(rec.field);
+    outline(rec.field.outlineTarget, 'ai');
+    this.deps.onProgress?.(this.verify());
+    return answer.length < full.length
+      ? `Added for review, shortened to fit the ${limit}-character field. Check it on the page before submitting.`
       : 'Added for review. Check it on the page before submitting.';
   }
 
@@ -1118,7 +1156,7 @@ export class FillSession {
           status === 'review' ? rec.ai ? 'Review this AI draft or interpretation before submitting.' : 'The widget does not expose enough information to verify the complete answer. Check it on the website.' :
           source === 'memory' ? 'An approved Memory was applied and its current selection was verified.' : source === 'preset' ? 'Your prepared preset response was applied and read back.' :
           'Your saved Profile answer was applied and read back. Check that the saved fact is current.');
-        fieldFeedback.push({ token: rec.token!, label: field.label, required: field.required, status, source, reason, ...(draftable ? { draft: true as const } : {}) });
+        fieldFeedback.push({ token: rec.token!, label: field.label, required: field.required, status, source, reason, kind: field.kind, ...(draftable ? { draft: true as const } : {}) });
         if (status === 'review') state = rec.ai ? 'ai' : 'review';
         else if (status === 'entered') state = 'entered';
         else if (status === 'optional') state = 'optional';

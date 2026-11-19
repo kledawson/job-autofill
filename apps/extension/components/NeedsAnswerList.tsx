@@ -10,7 +10,7 @@ import { Button, Notice } from './ui';
  * The questions counted as Need review. Clicking one shows it on the application; answering it removes it here.
  * Free responses can be drafted on the chosen chat website, one at a time or all in one prompt.
  */
-export function NeedsAnswerList({ app, chat, disabled }: { app: Application; chat?: ChatProvider; disabled: boolean }) {
+export function NeedsAnswerList({ app, chat, disabled, onOpenCoverLetter }: { app: Application; chat?: ChatProvider; disabled: boolean; onOpenCoverLetter?: () => void }) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState('');
   const fields = needReviewFields(app);
@@ -41,9 +41,10 @@ export function NeedsAnswerList({ app, chat, disabled }: { app: Application; cha
         {fields.map(f => (
           <li key={f.token} className={`flex items-start justify-between gap-2 rounded-lg border p-2 text-xs ${!f.required || f.status === 'optional' ? 'border-yellow-300 bg-yellow-50' : f.status === 'review' ? 'border-amber-200 bg-amber-50/60' : 'border-red-200 bg-red-50/40'}`}>
             <button type="button" className="min-w-0 text-left text-slate-800 hover:underline focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:no-underline" disabled={disabled || !!busy}
-              title="Show this question on the application" onClick={() => void show(f.token)}>
+              title={/cover\s*letter/i.test(f.label) ? 'Open cover-letter drafting' : 'Show this question on the application'}
+              onClick={() => /cover\s*letter/i.test(f.label) && onOpenCoverLetter ? onOpenCoverLetter() : void show(f.token)}>
               <span className="block break-words font-medium">{f.label}</span>
-              <span className="block text-[11px] text-slate-500">{f.status === 'review' ? 'Check this answer on the page' : f.required ? 'Required' : 'Optional'} · Show on page</span>
+              <span className="block text-[11px] text-slate-500">{/cover\s*letter/i.test(f.label) ? 'Open cover-letter drafting' : `${f.status === 'review' ? 'Check this answer on the page' : f.required ? 'Required' : 'Optional'} · Show on page`}</span>
             </button>
             {f.draft && chat && <Button className="shrink-0 px-2 py-1 text-xs" variant="secondary" disabled={disabled || !!busy} onClick={() => draft(f.token, [f.token])}>
               {busy === f.token ? 'Preparing…' : `Draft in ${chat.name}`}

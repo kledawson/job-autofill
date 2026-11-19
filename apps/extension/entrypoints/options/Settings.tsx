@@ -12,7 +12,7 @@ import {
   SkillsSection,
   WorkAuthSection,
 } from '@/components/ProfileSections';
-import { AnswerSourceSection, DataSection, DocumentsSection, GeminiSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
+import { AnswerSourceSection, CoverLetterSection, DataSection, DocumentsSection, GeminiSection, GoogleDocsSection, PromptSection, SheetsSection } from '@/components/SettingsSections';
 import { Button, SELECT_ARROW, cx } from '@/components/ui';
 import { mergeResumeDraft } from '@/lib/resume';
 import { PresetsSection } from '@/components/Presets';
@@ -24,8 +24,8 @@ const NAV = [
   ['memories', 'Memories'],
   ['documents', 'Documents'],
   ['connections', 'Connections'],
+  ['prompt', 'AI Writing & Prompts'],
   ['sidebar', 'Sidebar'],
-  ['prompt', 'Prompt'],
   ['data', 'Data'],
 ] as const;
 type Tab = (typeof NAV)[number][0];
@@ -138,12 +138,16 @@ export default function Settings() {
         )}
         {tab === 'connections' && settings && (
           <>
-            <AnswerSourceSection settings={settings} />
-            <GeminiSection settings={settings} />
             <SheetsSection settings={settings} />
+            <GoogleDocsSection settings={settings} />
+            <GeminiSection settings={settings} />
           </>
         )}
-        {tab === 'prompt' && settings && <PromptSection settings={settings} />}
+        {tab === 'prompt' && settings && <>
+          <AnswerSourceSection settings={settings} />
+          <PromptSection settings={settings} />
+          <CoverLetterSection settings={settings} />
+        </>}
         {tab === 'presets' && <PresetsSection onDirtyChange={setPresetDirty} />}
         {tab === 'sidebar' && <SidebarPreferences />}
         {tab === 'memories' && <KnowledgeSection />}

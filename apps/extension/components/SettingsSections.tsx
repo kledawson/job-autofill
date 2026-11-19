@@ -1,5 +1,5 @@
 import { confirmDelete } from './confirm-delete';
-import { useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { browser } from 'wxt/browser';
 import { db, getProfile, saveProfile } from '@/lib/db';
 import type { ResumeDraft } from '@/lib/resume';
@@ -343,6 +343,10 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  useEffect(() => {
+    if (!settings?.sheetId || settings.sheetTitle) return;
+    void sendToBackground('testSheets', { interactive: false }).catch(() => undefined);
+  }, [settings?.sheetId, settings?.sheetTitle]);
   if (!settings) return null;
 
   async function connect() {
@@ -377,8 +381,8 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
         {showSetup && !settings.sheetsAvailable && <section className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm" aria-label="Google sign-in setup steps">
           <p className="font-semibold">One-time setup for this extension build</p>
           <ol className="list-decimal space-y-2 pl-5">
-            <li>In <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="text-indigo-700 underline">Google Cloud Console</a>, enable the Google Sheets API and create an OAuth client of type <strong>Chrome Extension</strong>.</li>
-            <li>Use extension ID <code className="break-all">kjepjmmbimmbpdfinkippakkmhbglccc</code>. Add your Google account as a test user and include the spreadsheets scope.</li>
+            <li>In <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="text-indigo-700 underline">Google Cloud Console</a>, enable the Google Sheets API and Google Docs API, then create an OAuth client of type <strong>Chrome Extension</strong>.</li>
+            <li>Use extension ID <code className="break-all">kjepjmmbimmbpdfinkippakkmhbglccc</code>. Add your Google account as a test user. The extension requests Sheets and Docs access when connecting those files.</li>
             <li>Copy <code>apps/extension/.env.example</code> to <code>apps/extension/.env</code> and set <code>WXT_GOOGLE_CLIENT_ID</code> to the public client ID.</li>
             <li>Run <code>npm run build</code>, reload Job Autofill at <code>chrome://extensions</code>, and reopen Settings. Then paste your sheet link and connect.</li>
           </ol>
@@ -386,8 +390,8 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
         </section>}
         {settings.sheetId ? (
           <div className="flex flex-wrap items-center gap-3">
-            <Notice tone="success">Connected{settings.sheetTabName ? ` · ${settings.sheetTabName}` : ' · First tab'}</Notice>
-            <a className="text-sm font-medium text-indigo-700 underline" href={settings.sheetUrl} target="_blank" rel="noreferrer">
+            <span title={settings.sheetTitle || undefined}><Notice tone="success">Connected · {settings.sheetTabName || 'First tab'}</Notice></span>
+            <a className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1" href={settings.sheetUrl} target="_blank" rel="noreferrer">
               Open tracking sheet
             </a>
             <Button variant="secondary" disabled={busy} onClick={async () => {
@@ -436,13 +440,98 @@ export function SheetsSection({ settings }: { settings: PublicSettings | null })
   );
 }
 
+export function GoogleDocsSection({ settings }: { settings: PublicSettings | null }) {
+  const [link, setLink] = useState(settings?.docsUrl ?? '');
+  const [documentTitle, setDocumentTitle] = useState(settings?.docsTitle ?? '');
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setDocumentTitle(settings?.docsTitle ?? '');
+    if (!settings?.docsUrl || settings.docsTitle) return;
+    let active = true;
+    void sendToBackground('testDocs', { interactive: false }).then(res => {
+      if (res.ok && active) setDocumentTitle(res.title);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [settings?.docsId, settings?.docsTitle, settings?.docsUrl]);
+  if (!settings) return null;
+  async function connect() {
+    setBusy(true); setError(''); setStatus('');
+    try {
+      const res = await sendToBackground('connectDocs', { url: link });
+      if (!res.ok) throw new Error(res.error);
+      setLink(res.docsUrl); setStatus('Connected to this document.');
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not connect the Google Doc.'); }
+    finally { setBusy(false); }
+  }
+  return <Card title="Google Docs Cover Letter" description="Connect the document that will receive your approved cover-letter body.">
+      <div className="space-y-3">
+        {settings.docsUrl ? <div className="flex flex-wrap items-center gap-3">
+          <Notice tone="success">Connected - {documentTitle || settings.docsTitle || 'Google Doc'}</Notice>
+          <a className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1" href={settings.docsUrl} target="_blank" rel="noreferrer">Open connected document</a>
+          <Button variant="secondary" disabled={busy} onClick={async () => {
+            setBusy(true); setError(''); setStatus('');
+            try { const res = await sendToBackground('testDocs', {}); if (!res.ok) throw new Error(res.error); setStatus(`Connection works — document: ${res.title}. No changes were made.`); }
+            catch (err) { setError(err instanceof Error ? err.message : 'Could not test the Google Doc.'); }
+            finally { setBusy(false); }
+          }}>{busy ? 'Testing…' : 'Test connection'}</Button>
+          <Button variant="secondary" disabled={busy} onClick={async () => {
+            setBusy(true); setError(''); setStatus('');
+            try { await sendToBackground('disconnectDocs', {}); setLink(''); setStatus('Disconnected.'); }
+            catch (err) { setError(err instanceof Error ? err.message : 'Could not disconnect the Google Doc.'); }
+            finally { setBusy(false); }
+          }}>Disconnect</Button>
+        </div> : <div className="flex flex-wrap items-end gap-2">
+          <Field label="Google Docs link" className="min-w-[16rem] flex-1"><Input className="text-sm" value={link} onChange={e => setLink(e.target.value)} placeholder="https://docs.google.com/document/d/…" /></Field>
+          <Button disabled={busy || !link.trim()} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect document'}</Button>
+        </div>}
+        {status && <div role="status"><Notice tone="success">{status}</Notice></div>}
+        {error && <Notice tone="error">{error}</Notice>}
+        {!settings.docsAvailable && <p className="mt-2 text-xs text-amber-700">Google OAuth must be configured for this build with the Google Docs scope before connecting.</p>}
+        <p className="mt-2 text-xs text-slate-500">The document title and existing salutation and closing are preserved where present.</p>
+      </div>
+  </Card>;
+}
+
+export function CoverLetterSection({ settings }: { settings: PublicSettings | null }) {
+  const [letter, setLetter] = useState(settings?.generalCoverLetter ?? '');
+  const [instructions, setInstructions] = useState(settings?.coverLetterPrompt ?? '');
+  const [saved, setSaved] = useState(false);
+  const letterRef = useRef<HTMLTextAreaElement>(null);
+  const instructionsRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    for (const textarea of [letterRef.current, instructionsRef.current]) {
+      if (!textarea) continue;
+      textarea.style.height = 'auto';
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+  }, [letter, instructions]);
+  if (!settings) return null;
+  return <Card title="Cover Letter Instructions" description="When both are present, only body paragraphs between the salutation and complimentary close are replaced. Their font, size, line spacing, and paragraph spacing are preserved. If either is missing, a standard greeting or closing is added around the new body.">
+    <div className="space-y-3">
+      <Field label="General cover letter (optional text reference)"><Textarea ref={letterRef} rows={1} className="!min-h-0 resize-none overflow-hidden" value={letter} onChange={e => { setLetter(e.target.value); setSaved(false); }} /></Field>
+      <Field label="Cover-letter instructions"><Textarea ref={instructionsRef} rows={1} className="!min-h-0 resize-none overflow-hidden" value={instructions} onChange={e => { setInstructions(e.target.value); setSaved(false); }} /></Field>
+      <Button variant="secondary" onClick={async () => { await updateSettings({ generalCoverLetter: letter, coverLetterPrompt: instructions }); setSaved(true); }}>Save cover-letter settings</Button>
+      {saved && <span role="status" className="ml-2 text-xs text-green-700">Saved</span>}
+    </div>
+  </Card>;
+}
+
 export function PromptSection({ settings }: { settings: PublicSettings | null }) {
   const [template, setTemplate] = useState(settings?.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE);
   const [saved, setSaved] = useState(false);
+  const templateRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const textarea = templateRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [template]);
   const missing = PROMPT_PLACEHOLDERS.filter((p) => p === '{question}' && !template.includes(p));
 
   return (
-    <Card title="Free-Response Prompt" description="The instructions Gemini gets for every free-response question">
+    <Card title="Free-Response Prompt" description="The instructions used for free-response answers, whether drafted in a chat LLM or with the Gemini API">
       <div className="space-y-3">
         <p className="text-sm text-slate-600">
           Placeholders:{' '}
@@ -453,8 +542,9 @@ export function PromptSection({ settings }: { settings: PublicSettings | null })
           ))}
         </p>
         <Textarea
-          rows={16}
-          className="font-mono text-xs leading-relaxed"
+          ref={templateRef}
+          rows={1}
+          className="!min-h-0 resize-none overflow-hidden font-mono text-xs leading-relaxed"
           value={template}
           onChange={(e) => {
             setTemplate(e.target.value);

@@ -202,6 +202,7 @@ export interface Application {
   runId?: string;
   id?: number;
   url: string;
+  postingUrl?: string;
   /** Normalized job identity, see jobKey() */
   jobKey: string;
   /**
@@ -244,6 +245,8 @@ export interface Application {
   /** Set once the submitted application's row is in the sheet; prevents duplicate rows. */
   sheetRow?: number;
   sheetError?: string;
+  /** Posting text used to prepare a cover-letter prompt; capped at 20k characters. */
+  jobDescription?: string;
 }
 
 export interface SavedAnswer {
@@ -274,5 +277,11 @@ export interface Settings {
   sheetUrl: string;
   sheetTabId?: number | null;
   sheetTabName?: string;
+  sheetTitle?: string;
+  docsUrl: string;
+  docsId: string;
+  docsTitle?: string;
+  generalCoverLetter: string;
+  coverLetterPrompt: string;
   onboardingComplete: boolean;
 }
