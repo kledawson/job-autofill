@@ -80,18 +80,18 @@ export function sheetTabId(text: string): number | undefined {
   if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error('The sheet tab ID is invalid. Copy its link again.');
   return Number(raw);
 }
-/** Resolve every sheet connection to the first (leftmost) tab, ignoring any gid in a pasted link. */
-export async function openSheet(sheetId: string, interactive = false, _tabId?: number): Promise<{ url: string; title: string; tab: string; tabId: number }> {
+/** Resolve the requested tab, falling back to the first tab for older connections without a tab ID. */
+export async function openSheet(sheetId: string, interactive = false, tabId?: number): Promise<{ url: string; title: string; tab: string; tabId: number }> {
   const body = await request('/' + sheetId + '?fields=properties.title,spreadsheetUrl,sheets.properties(title,sheetId)', { method: 'GET' }, interactive);
   const tabs = body?.sheets ?? [];
-  const chosen = tabs[0]?.properties;
-  if (!chosen || typeof chosen.title !== 'string' || !Number.isSafeInteger(chosen.sheetId)) throw new Error('That spreadsheet has no tabs.');
+  const chosen = tabId === undefined ? tabs[0]?.properties : tabs.find((t: any) => t.properties?.sheetId === tabId)?.properties;
+  if (!chosen || typeof chosen.title !== 'string' || !Number.isSafeInteger(chosen.sheetId)) throw new Error(tabId === undefined ? 'That spreadsheet has no tabs.' : 'The selected sheet tab no longer exists. Reconnect using the correct tab link.');
   const url = new URL(body.spreadsheetUrl); url.hash = 'gid=' + chosen.sheetId;
   return { url: url.href, title: typeof body?.properties?.title === 'string' ? body.properties.title : 'Google Sheet', tab: chosen.title, tabId: chosen.sheetId };
 }
 /** Read-only test, using the same OAuth and tab resolution as submission writes. */
-export async function testSheetConnection(sheetId: string, _tabId?: number, interactive = true) {
-  const sheet = await openSheet(sheetId, interactive);
+export async function testSheetConnection(sheetId: string, tabId?: number, interactive = true) {
+  const sheet = await openSheet(sheetId, interactive, tabId);
   const top = await request('/' + sheetId + '/values/' + encodeURIComponent(quoteTab(sheet.tab)) + '!A1:AZ10?valueRenderOption=FORMULA', { method: 'GET' });
   const grid: string[][] = top?.values ?? [];
   const headers = grid.find(r => r.filter(c => String(c).trim()).length >= 2) ?? grid.find(r => r.some(c => String(c).trim())) ?? [];
@@ -217,7 +217,7 @@ export function firstEmptyRow(rows: string[][], targets: number[], firstCol: num
 }
 
 /**
- * Adds the application to the spreadsheet's leftmost tab, in the topmost row with no company or position, with each
+ * Adds the application to the selected tab, in the topmost row with no company or position, with each
  * detail under the header that names it. Other cells in the row are left alone (dropdowns, defaults).
  * An empty sheet gets a header row first. Returns the 1-based row number.
  */
