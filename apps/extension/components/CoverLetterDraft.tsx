@@ -8,7 +8,7 @@ import { extractPdfText } from '@/lib/resume-pdf';
 import { COVER_LETTER_FLOW_KEY, sendToBackground } from '@/lib/messages';
 import { Button, Notice, Textarea } from './ui';
 
-type CoverLetterFlow = { applicationId: number; draft: string; promptText: string; completed?: 'document' | 'application' };
+type CoverLetterFlow = { applicationId: number; draft: string; promptText: string; destination?: 'document' | 'application'; source?: 'pdf' | 'text'; jobDescription?: string; hasTextDestination?: boolean; expanded?: boolean; completed?: 'document' | 'application'; completedAt?: number };
 
 function referenceSignature(reference: string): string {
   const lines = reference.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -24,8 +24,16 @@ function addSincerelyAndName(text: string, name: string): string {
   return `${body}\n\nSincerely,\n${name || suppliedName}`.trim();
 }
 
-export function CoverLetterDraft({ app, settings, flowActive = false, open = false, onOpen }: { app: Application; settings: PublicSettings | null; flowActive?: boolean; open?: boolean; onOpen?: () => void }) {
+function ensureHiringManagerGreeting(text: string): string {
+  const letter = text.trim();
+  if (/^dear hiring manager,?\s*(?:\r?\n|$)/i.test(letter)) return letter;
+  return `Dear Hiring Manager,\n\n${letter}`;
+}
+
+export function CoverLetterDraft({ app, settings, flowActive = false, open = false, onClose }: { app: Application; settings: PublicSettings | null; flowActive?: boolean; open?: boolean; onClose?: () => void }) {
   const [source, setSource] = useState<'pdf' | 'text'>(settings?.generalCoverLetter?.trim() ? 'text' : 'pdf');
+  const [destination, setDestination] = useState<'application' | 'document'>('application');
+  const [flowHasTextDestination, setFlowHasTextDestination] = useState(false);
   const [jobDescription, setJobDescription] = useState(app.jobDescription ?? '');
   const [draft, setDraft] = useState('');
   const [promptText, setPromptText] = useState('');
@@ -41,7 +49,16 @@ export function CoverLetterDraft({ app, settings, flowActive = false, open = fal
     setDone(false);
     const hydrate = (value: unknown) => {
       const flow = value as CoverLetterFlow | undefined;
-      if (flow && flow.applicationId === applicationId && active) { setDraft(flow.draft ?? ''); setPromptText(flow.promptText ?? ''); setDone(!!flow.completed); setCompletion(flow.completed); }
+      if (flow && flow.applicationId === applicationId && active) {
+        setDraft(flow.draft ?? '');
+        setPromptText(flow.promptText ?? '');
+        if (flow.destination) setDestination(flow.destination);
+        if (flow.source) setSource(flow.source);
+        if (flow.jobDescription !== undefined) setJobDescription(flow.jobDescription);
+        if (flow.hasTextDestination !== undefined) setFlowHasTextDestination(flow.hasTextDestination);
+        setDone(!!flow.completed);
+        setCompletion(flow.completed);
+      }
     };
     void browser.storage.session.get(COVER_LETTER_FLOW_KEY).then(values => hydrate(values[COVER_LETTER_FLOW_KEY]));
     const changed = (changes: Record<string, { newValue?: unknown }>, area: string) => {
@@ -56,17 +73,28 @@ export function CoverLetterDraft({ app, settings, flowActive = false, open = fal
     coverLetterField.kind === 'text' || coverLetterField.kind === 'textarea' ||
     (!coverLetterField.kind && ['review', 'entered'].includes(coverLetterField.status))
   );
+  const hasTextDestination = isTextCoverLetter || flowHasTextDestination;
+  const hasDocumentDestination = !!settings?.docsUrl;
+  const selectedDestination = hasTextDestination && hasDocumentDestination ? destination : hasTextDestination ? 'application' : 'document';
   const needsLetter = app.fieldFeedback?.some(f => /cover\s*letter/i.test(f.label) && f.status !== 'verified') || app.missingLabels.some(label => /cover\s*letter/i.test(label));
   const applicationId = app.id ?? -1;
+  useEffect(() => {
+    if (!done || completion !== 'application' || !app.fillStartedAt || applicationId < 0) return;
+    void browser.storage.session.get(COVER_LETTER_FLOW_KEY).then(values => {
+      const flow = values[COVER_LETTER_FLOW_KEY] as CoverLetterFlow | undefined;
+      if (flow?.applicationId !== applicationId || flow.completed !== 'application' ||
+        !flow.completedAt || app.fillStartedAt! <= flow.completedAt) return;
+      setDone(false);
+      setCompletion(undefined);
+      const draftFlow = { ...flow };
+      delete draftFlow.completed;
+      delete draftFlow.completedAt;
+      void browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: draftFlow });
+    }).catch(() => undefined);
+  }, [app.fillStartedAt, applicationId, completion, done]);
   if (applicationId < 0) return null;
-  if (done) return <section id="cover-letter-draft" className="rounded-lg border border-green-200 bg-green-50 p-3" aria-label="Cover letter updated">
-    <p className="text-sm font-medium text-green-800">{completion === 'application' ? 'Cover letter added to the application' : 'Cover letter updated'}</p>
-    {completion === 'document' && settings?.docsUrl && <a className="mt-1 inline-block text-sm font-medium text-indigo-700 underline" href={settings.docsUrl} target="_blank" rel="noreferrer">Open Google Doc</a>}
-  </section>;
-  if (!needsLetter && !flowActive) return null;
-  if (!open && !flowActive) return <section id="cover-letter-draft" className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3" aria-label="Cover letter drafting">
-    <Button variant="secondary" onClick={onOpen}>Open cover-letter drafting</Button>
-  </section>;
+  if (!needsLetter && !flowActive && !hasTextDestination) return null;
+  if (!open) return null;
 
   async function openPrompt() {
     setError(''); setBusy(true);
@@ -87,13 +115,13 @@ export function CoverLetterDraft({ app, settings, flowActive = false, open = fal
       const profileName = [profile.preferredName || profile.firstName, profile.lastName].filter(Boolean).join(' ').trim();
       const signer = profileName || referenceSignature(reference);
       setSignatureName(signer);
-      const writingRequest = isTextCoverLetter
-        ? `Write a complete cover letter with a greeting, tailored body paragraphs, and a closing. End with exactly “Sincerely,” on one line and “${signer || 'the applicant name from the reference letter'}” on the next line. Do not include contact details or Markdown formatting. Preserve the facts and tone of the reference letter.`
+      const writingRequest = selectedDestination === 'application'
+        ? `Write a complete cover letter that begins exactly with “Dear Hiring Manager,” on the first line, followed by a blank line, tailored body paragraphs, and a closing. End with exactly “Sincerely,” on one line and “${signer || 'the applicant name from the reference letter'}” on the next line. Do not include contact details or Markdown formatting. Preserve the facts and tone of the reference letter.`
         : 'Write only the replacement body paragraphs of this cover letter. Do not include a salutation, complimentary closing, signature, contact details, or Markdown formatting. Preserve the facts and tone of the reference letter, and tailor the body to the job.';
-      const signatureRequirement = isTextCoverLetter && signer ? `\n\nFinal format requirement: the complete letter must end with “Sincerely,” followed by “${signer}” on the next line.` : '';
+      const signatureRequirement = selectedDestination === 'application' && signer ? `\n\nFinal format requirement: the complete letter must end with “Sincerely,” followed by “${signer}” on the next line.` : '';
       const prompt = `${writingRequest}\n\nAdditional writing instructions:\n${settings?.coverLetterPrompt?.trim() || 'Keep the letter truthful and focus on relevant experience.'}${signatureRequirement}\n\nJob link: ${app.postingUrl || app.url}\n\nJob description:\n${jobDescription.trim().slice(0, 20000)}\n\nGeneral cover letter reference:\n${reference}`;
       setPromptText(prompt);
-      await browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft, promptText: prompt } satisfies CoverLetterFlow });
+      await browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft, promptText: prompt, destination: selectedDestination, source, jobDescription, hasTextDestination, expanded: true } satisfies CoverLetterFlow });
       await navigator.clipboard.writeText(prompt).catch(() => undefined);
       const opened = await sendToBackground('openCoverLetterPrompt', { provider: provider.id, prompt });
       if (!opened.ok) throw new Error(opened.error);
@@ -106,33 +134,43 @@ export function CoverLetterDraft({ app, settings, flowActive = false, open = fal
   async function approve() {
     setError(''); setBusy(true);
     try {
-      const textField = isTextCoverLetter ? coverLetterField : undefined;
-      const res = textField
-        ? await sendToBackground('fillCoverLetterField', { applicationId, text: addSincerelyAndName(draft, signatureName || referenceSignature(settings?.generalCoverLetter ?? '')) })
+      const isApplicationDestination = selectedDestination === 'application';
+      const res = isApplicationDestination
+        ? await sendToBackground('fillCoverLetterField', { applicationId, text: addSincerelyAndName(ensureHiringManagerGreeting(draft), signatureName || referenceSignature(settings?.generalCoverLetter ?? '')) })
         : await sendToBackground('approveCoverLetter', { text: draft, signatureName: signatureName || referenceSignature(settings?.generalCoverLetter ?? '') });
       if (!res.ok) throw new Error(res.error);
-      const mode = textField ? 'application' : 'document';
+      const mode = isApplicationDestination ? 'application' : 'document';
+      const completedAt = Date.now();
       setDone(true);
       setCompletion(mode);
-      await browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft, promptText, completed: mode } satisfies CoverLetterFlow });
+      await browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft, promptText, destination: selectedDestination, source, jobDescription, hasTextDestination, expanded: true, completed: mode, completedAt } satisfies CoverLetterFlow });
     }
-    catch (err) { setError(err instanceof Error ? err.message : isTextCoverLetter ? 'Could not fill the cover-letter text box.' : 'Could not update the Google Doc.'); }
+    catch (err) { setError(err instanceof Error ? err.message : selectedDestination === 'application' ? 'Could not fill the cover-letter text box.' : 'Could not update the Google Doc.'); }
     finally { setBusy(false); }
   }
   return <section id="cover-letter-draft" tabIndex={-1} className="mt-3 space-y-2 rounded-lg border border-indigo-200 bg-indigo-50/50 p-3" aria-label="Tailor cover letter">
-    <h3 className="font-medium text-slate-800">Cover letter needs your attention</h3>
+    <div className="flex items-center"><h3 className="flex-1 font-medium text-slate-800">Cover letter needs your attention</h3><Button variant="ghost" className="px-2 py-1" onClick={onClose}>Close</Button></div>
     {!settings?.generalCoverLetter?.trim() && !pdfAvailable && <Notice tone="error">Add an editable general cover letter in Settings, or upload a cover-letter PDF with selectable text. One reference is required before tailoring.</Notice>}
+    {hasTextDestination && hasDocumentDestination && <fieldset className="space-y-1 text-xs">
+      <legend className="font-medium">Where should the approved draft go?</legend>
+      <label className="flex items-center gap-2"><input type="radio" name="cover-letter-destination" value="application" checked={selectedDestination === 'application'} onChange={() => { setDestination('application'); void browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft, promptText, destination: 'application', source, jobDescription, hasTextDestination, expanded: true } satisfies CoverLetterFlow }); }} /> Fill the cover-letter text box in this application</label>
+      <label className="flex items-center gap-2"><input type="radio" name="cover-letter-destination" value="document" checked={selectedDestination === 'document'} onChange={() => { setDestination('document'); void browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft, promptText, destination: 'document', source, jobDescription, hasTextDestination, expanded: true } satisfies CoverLetterFlow }); }} /> Replace the body in my Google Doc</label>
+    </fieldset>}
+    {hasTextDestination && !hasDocumentDestination && <p className="text-xs text-slate-600">The draft will be added to the cover-letter text box in this application.</p>}
+    {!hasTextDestination && !hasDocumentDestination && <Notice tone="error">A cover-letter text box or connected Google Doc is required to use this draft.</Notice>}
     <label className="block text-xs font-medium">Reference letter
-      <select className="mt-1 block w-full rounded border border-slate-300 bg-white p-2" value={source} onChange={e => setSource(e.target.value as 'pdf' | 'text')}>
+      <select className="mt-1 block w-full rounded border border-slate-300 bg-white p-2" value={source} onChange={e => { const value = e.target.value as 'pdf' | 'text'; setSource(value); void browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft, promptText, destination: selectedDestination, source: value, jobDescription, hasTextDestination, expanded: true } satisfies CoverLetterFlow }); }}>
         <option value="text">Editable general cover letter</option><option value="pdf">Saved cover-letter PDF</option>
       </select>
     </label>
-    <label className="block text-xs font-medium">Job description<Textarea rows={5} value={jobDescription} onChange={e => setJobDescription(e.target.value)} placeholder="Paste the job description" />{app.jobDescription && <span className="font-normal text-slate-500">Loaded from the application page. Edit if needed.</span>}</label>
+    <label className="block text-xs font-medium">Job description<Textarea rows={5} value={jobDescription} onChange={e => { const value = e.target.value; setJobDescription(value); void browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft, promptText, destination: selectedDestination, source, jobDescription: value, hasTextDestination, expanded: true } satisfies CoverLetterFlow }); }} placeholder="Paste the job description" />{app.jobDescription && <span className="font-normal text-slate-500">Loaded from the application page. Edit if needed.</span>}</label>
     <Button variant="secondary" disabled={busy} onClick={() => void openPrompt()}>{busy ? 'Preparing…' : `Open ${provider?.name ?? 'selected LLM'} with prompt`}</Button>
     {promptText && <details className="text-xs"><summary className="cursor-pointer font-medium">Show or copy prompt</summary><Textarea rows={8} className="mt-2" value={promptText} readOnly /><Button className="mt-2" variant="secondary" onClick={() => void navigator.clipboard.writeText(promptText).catch(() => setError('Select and copy the prompt text above.'))}>Copy prompt</Button></details>}
-    <label className="block text-xs font-medium">Draft from the LLM<Textarea rows={7} value={draft} onChange={e => { const value = e.target.value; setDraft(value); setDone(false); if (flowActive) void browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft: value, promptText } satisfies CoverLetterFlow }); }} placeholder="Paste the finished cover letter here for review" /></label>
-    <Button disabled={busy || !draft.trim() || (!isTextCoverLetter && !settings?.docsUrl)} onClick={() => void approve()}>{busy ? 'Adding…' : isTextCoverLetter ? 'Use cover letter in application' : 'Approve and replace body in Google Doc'}</Button>
-    {!isTextCoverLetter && !settings?.docsUrl && <p className="text-xs text-slate-600">Connect a Google Doc in Settings → Connections before approving.</p>}
+    <label className="block text-xs font-medium">Draft from the LLM<Textarea rows={7} value={draft} onChange={e => { const value = e.target.value; setDraft(value); setDone(false); void browser.storage.session.set({ [COVER_LETTER_FLOW_KEY]: { applicationId, draft: value, promptText, destination: selectedDestination, source, jobDescription, hasTextDestination, expanded: true } satisfies CoverLetterFlow }); }} placeholder="Paste the finished cover letter here for review" /></label>
+    <Button disabled={busy || !draft.trim() || (selectedDestination === 'application' && !hasTextDestination) || (selectedDestination === 'document' && !hasDocumentDestination)} onClick={() => void approve()}>{busy ? 'Adding…' : selectedDestination === 'application' ? 'Fill cover-letter text box' : 'Approve and replace body in Google Doc'}</Button>
+    {done && <Notice tone="success">
+      {completion === 'application' ? 'Cover letter added to the application.' : <>Cover letter updated. {settings?.docsUrl && <a className="font-medium underline" href={settings.docsUrl} target="_blank" rel="noreferrer">Open the connected Google Doc</a>}</>} You can edit the draft or close this panel.
+    </Notice>}
     {error && <Notice tone={error.startsWith('Prompt copied') ? 'success' : 'error'}>{error}</Notice>}
   </section>;
 }
