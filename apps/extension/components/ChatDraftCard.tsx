@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { browser } from 'wxt/browser';
 import { CHAT_PROVIDERS, type ChatProvider } from '@/lib/chat-providers';
 import { splitBatchReply } from '@/lib/prompt';
@@ -54,7 +55,7 @@ function chatStatus(draft: ChatDraft, name: string): string {
 }
 
 /** The free responses being drafted on a chat website. Shown on every tab, since replies are copied from the chat tab. */
-export function ChatDraftCard() {
+export function ChatDraftCard({ children }: { children?: ReactNode }) {
   const draft = useChatDraft();
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [whole, setWhole] = useState('');
@@ -64,7 +65,11 @@ export function ChatDraftCard() {
   const [note, setNote] = useState('');
   const [copied, setCopied] = useState(false);
   useEffect(() => { setAnswers({}); setWhole(''); setError(''); setFailures({}); setCopied(false); }, [draft?.id]);
-  if (!draft) return note ? <div role="status"><Notice tone="success" onDismiss={() => setNote('')}>{note}</Notice></div> : null;
+  if (!draft) return children || note ? <section aria-label="Drafting in ChatGPT" className="space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 text-xs text-slate-700 shadow-sm">
+    <p className="text-sm font-semibold text-slate-900">Drafting in ChatGPT</p>
+    {note && <div role="status"><Notice tone="success" onDismiss={() => setNote('')}>{note}</Notice></div>}
+    {children}
+  </section> : null;
   const name = CHAT_PROVIDERS[draft.provider]?.name ?? 'the chat';
   const total = draft.questions.length;
   const ready = draft.questions.filter(q => answers[q.token]?.trim());
@@ -79,10 +84,6 @@ export function ChatDraftCard() {
     const used = res.results.filter(r => r.ok), failed = res.results.filter(r => !r.ok);
     setFailures(Object.fromEntries(failed.map(r => [r.token, r.note])));
     if (used.length) setNote(used.length === 1 ? used[0]!.note : `Added ${used.length} answers for review. Check them on the page before submitting.`);
-  });
-  const reopen = () => run(async () => {
-    const res = await sendToBackground('openChatDraft', { draftId: draft.id });
-    if (!res.ok) throw new Error(res.error);
   });
   const cancel = () => run(async () => { await sendToBackground('cancelChatDraft', { draftId: draft.id }); setNote(''); });
   /** A whole pasted reply fills the answer boxes it has markers for; each box stays editable. */
@@ -110,7 +111,6 @@ export function ChatDraftCard() {
       </ol>
       <div className="flex flex-wrap gap-2">
         <Button className="px-2 py-1 text-xs" variant="secondary" disabled={busy} onClick={async () => setCopied(await copyText(draft.prompt))}>{copied ? 'Prompt copied' : 'Copy prompt'}</Button>
-        <Button className="px-2 py-1 text-xs" variant="secondary" disabled={busy} onClick={() => void reopen()}>Open {name} again</Button>
       </div>
       <details>
         <summary className="cursor-pointer font-medium text-slate-600">Show prompt</summary>
@@ -137,6 +137,7 @@ export function ChatDraftCard() {
         </Button>
         <Button className="px-2 py-1 text-xs" variant="secondary" disabled={busy} onClick={() => void cancel()}>Cancel draft</Button>
       </div>
+      {children}
       {error && <Notice tone="error">{error}</Notice>}
     </section>
   );
