@@ -13,7 +13,7 @@ import { FreeResponsePicker } from '@/components/FreeResponsePicker';
 import { chatProviderFor, type ChatProvider } from '@/lib/chat-providers';
 import { browser } from 'wxt/browser';
 import { useLiveQuery, usePublicSettings } from '@/components/hooks';
-import { Button, cx, Input, Notice, Select } from '@/components/ui';
+import { Button, cx, Notice, Select } from '@/components/ui';
 import { db, getProfile } from '@/lib/db';
 import { missingRequired } from '@/components/ProfileSections';
 import { COVER_LETTER_FLOW_KEY, pageStatusKey, sendToBackground, type PageStatus } from '@/lib/messages';
@@ -162,6 +162,10 @@ export default function SidePanel() {
   }
 
   const [error, setError] = useState('');
+  const [tracking, setTracking] = useState(false);
+  const [trackError, setTrackError] = useState('');
+  const [trackResult, setTrackResult] = useState<{ note: string; sheetRow?: number; sheetError?: string } | null>(null);
+  const [trackResultPage, setTrackResultPage] = useState<{ tabId: number; key: string }>();
   /** The tab and job where Fill this page was clicked. Its details show only there: another tab or application starts hidden. */
   const [shown, setShown] = useState<{ tabId: number; key: string }>();
   /** Set by Open and fill, whose new tab has no id yet: its details open once the application exists. */
@@ -207,6 +211,30 @@ export default function SidePanel() {
     }
   }
 
+  async function addAppliedPosition() {
+    if (!tabUrl || !/^https?:\/\//i.test(tabUrl) || tracking) return;
+    const requestedPage = here;
+    if (requestedPage) setTrackResultPage(requestedPage);
+    setTrackError('');
+    setTrackResult(null);
+    await ensureAccess(tabUrl).catch(() => false);
+    setTracking(true);
+    const res = await sendToBackground('trackApplication', { url: tabUrl });
+    setTracking(false);
+    if (!res.ok) return setTrackError(res.error);
+    setTrackResult({ note: res.note, sheetRow: res.sheetRow, sheetError: res.sheetError });
+  }
+
+  function AppliedPositionButton() {
+    return <div className="space-y-2">
+      <Button type="button" variant="secondary" className="w-full" disabled={!tabUrl || !/^https?:\/\//i.test(tabUrl) || tracking} onClick={addAppliedPosition}>
+        {tracking ? 'Adding to spreadsheet…' : 'Add applied position to spreadsheet'}
+      </Button>
+    </div>;
+  }
+
+  const showTrackFeedback = !!here && trackResultPage?.tabId === here.tabId && trackResultPage.key === here.key;
+
   return (
     <div className="flex min-h-screen flex-col gap-2 p-3 text-sm">
       <div id="sidebar-fill" className="sticky top-0 z-20 -mx-3 -mt-3 space-y-2 border-b border-slate-200 bg-slate-50 px-3 pb-3 pt-3">
@@ -225,6 +253,7 @@ export default function SidePanel() {
         <Button className="w-full" disabled={!presetId} onClick={fillThisPage}>
           {queueItem && ['opening', 'filling'].includes(queueItem.state) ? 'Restart autofill' : 'Fill this page'}
         </Button>
+        {!showing && <AppliedPositionButton />}
         {error && <Notice tone="error">{error}</Notice>}
       </section>
       </div>
@@ -244,6 +273,13 @@ export default function SidePanel() {
             <PageStatusBox status={pageStatus ?? { title: 'Filling application…', lines: ['Looking for the form.'], tone: 'working' }} />
           ))}
       </section>
+      {showTrackFeedback && <div className="space-y-2">
+        {trackError && <Notice tone="error">{trackError}</Notice>}
+        {trackResult && <>
+          <Notice tone="info">Applied position recorded. {trackResult.note}</Notice>
+          {trackResult.sheetRow && settings?.sheetUrl ? <Notice tone="success">Added to your sheet (row {trackResult.sheetRow}). <a className="underline" href={`${settings.sheetUrl}#range=A${trackResult.sheetRow}`} target="_blank" rel="noreferrer">Open sheet</a></Notice> : trackResult.sheetError ? <Notice tone="warn">Sheet not updated: {trackResult.sheetError}</Notice> : null}
+        </>}
+      </div>}
       <SidebarLayout>
       <SidebarSection id="queue" title="Application Queue" defaultOpen summary={queue && !['stopped','complete'].includes(queue.status) ? queue.mode === 'continuous' ? 'Next job after each finish' : 'Batch ' + (queue.batch || 1) : undefined}>
         <ApplicationQueue presetId={presetId} activeTabId={tabId} />
@@ -262,10 +298,6 @@ export default function SidePanel() {
           <a className="block text-indigo-700 underline" href={browser.runtime.getURL('/options.html#connections' as never)} target="_blank" rel="noreferrer">Manage connections</a>
         </div>
       </SidebarSection>
-      <SidebarSection id="track" title="Track Without Autofill">
-        <TrackOnly tabUrl={tabUrl} sheetUrl={settings?.sheetUrl} />
-      </SidebarSection>
-
       <SidebarSection id="history" title="Applications" summary={String(applications.length)}>
       <section>
         <div className="mb-2 flex items-center justify-between gap-3">
@@ -343,69 +375,6 @@ export default function SidePanel() {
   );
 }
 
-/** For postings with no form to fill (e.g. a one-click apply): log the link as submitted and add it to the sheet. */
-function TrackOnly({ tabUrl, sheetUrl }: { tabUrl?: string; sheetUrl?: string }) {
-  const [link, setLink] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [done, setDone] = useState<{ note: string; sheetRow?: number; sheetError?: string } | null>(null);
-
-  async function submit() {
-    setError('');
-    setDone(null);
-    // Reading the open posting needs site access; tracking still works if it is declined. Must be the first await in the click.
-    await ensureAccess(link.trim()).catch(() => false);
-    setBusy(true);
-    const res = await sendToBackground('trackApplication', { url: link });
-    setBusy(false);
-    if (!res.ok) return setError(res.error);
-    setDone({ note: res.note, sheetRow: res.sheetRow, sheetError: res.sheetError });
-    setLink('');
-  }
-
-  const usable = tabUrl && /^https?:\/\//i.test(tabUrl) ? tabUrl : '';
-  return (
-    <section className="space-y-2">
-      <p className="text-xs text-slate-500">For postings with just an Apply button. Log the link as submitted and add it to your sheet.</p>
-      <form
-        className="space-y-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (link.trim()) void submit();
-        }}
-      >
-        <div className="flex gap-2">
-          <Input aria-label="Application Link" value={link} onChange={(e) => setLink(e.target.value)} placeholder="Application Link" />
-          {usable && !link && (
-            <Button type="button" variant="secondary" className="shrink-0" onClick={() => setLink(usable)}>
-              This tab
-            </Button>
-          )}
-        </div>
-        <Button type="submit" className="w-full" disabled={busy || !link.trim()}>
-          Mark as submitted
-        </Button>
-      </form>
-      {error && <Notice tone="error">{error}</Notice>}
-      {done && (
-        <>
-          <Notice tone="info">Marked as submitted. {done.note}</Notice>
-          {done.sheetRow && sheetUrl ? (
-            <Notice tone="success">
-              Added to your sheet (row {done.sheetRow}).{' '}
-              <a className="underline" href={`${sheetUrl}#range=A${done.sheetRow}`} target="_blank" rel="noreferrer">
-                Open sheet
-              </a>
-            </Notice>
-          ) : done.sheetError ? (
-            <Notice tone="warn">Sheet not updated: {done.sheetError}</Notice>
-          ) : null}
-        </>
-      )}
-    </section>
-  );
-}
-
 function Stat({ value, label, color }: { value: number; label: string; color: string }) {
   return (
     <div className="rounded-lg bg-slate-50 px-2 py-2">
@@ -476,7 +445,7 @@ function ApplicationSummary({ app, pageStatus, sheetUrl, queueItem, queueEntry, 
               catch { setError('Could not confirm submission. Try again.'); } finally { setBusy(false); }
             }}
           >
-            {busy ? 'Confirming…' : queueEntry ? 'Submitted — close tab' : 'Add Applied Position to Spreadsheet'}
+            {busy ? 'Confirming…' : queueEntry ? 'Submitted — close tab' : 'Add applied position to spreadsheet'}
           </Button>
         </>
       )}
