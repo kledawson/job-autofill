@@ -260,7 +260,6 @@ test('compact sidebar defaults and user layout/link drafts survive reopening', a
   await expect(panel.locator('#sidebar-fill-move')).toHaveCount(0);
   await expect(toggle('queue')).toHaveAttribute('aria-expanded','true');
   await expect(panel.locator('#sidebar-setup')).toBeHidden();
-  await expect(panel.locator('#sidebar-track')).toBeHidden();
   for(const name of ['review','history'])await expect(toggle(name)).toHaveAttribute('aria-expanded','false');
   const order=await panel.locator('[id^="sidebar-"][id$="-toggle"]:visible').evaluateAll(nodes=>nodes.map(n=>n.id));
   expect(order[0]).toBe('sidebar-queue-toggle');expect(order.at(-1)).toBe('sidebar-history-toggle');
@@ -322,19 +321,11 @@ test('drag and keyboard section ordering preserve live drafts, open sections and
 });
 
 
-test('Sidebar settings toggle optional categories live, preserve drafts, and keep Fill available', async () => {
+test('Sidebar settings toggle optional categories live and keep Fill available', async () => {
   const settings=await context.newPage();await settings.goto('chrome-extension://'+extensionId+'/options.html#sidebar');
   const checkbox=(title:string)=>settings.getByRole('checkbox',{name:new RegExp('^'+title)});
   await expect(checkbox('Fill this page')).toBeChecked();await expect(checkbox('Fill this page')).toBeDisabled();
-  await expect(checkbox('Track without autofill')).not.toBeChecked();
   await expect(checkbox('Setup & connections')).not.toBeChecked();
-  await checkbox('Track without autofill').check();await expect(settings.getByRole('status')).toContainText('Track without autofill shown');
-  await expect(panel.locator('#sidebar-track')).toBeVisible();
-  await panel.locator('#sidebar-track-toggle').click();await panel.getByLabel('Application Link',{exact:true}).fill(url('manual-draft'));
-  await checkbox('Track without autofill').uncheck();await expect(settings.getByRole('status')).toContainText('Track without autofill hidden');
-  await expect(panel.locator('#sidebar-track')).toBeHidden();
-  await checkbox('Track without autofill').check();await expect(settings.getByRole('status')).toContainText('Track without autofill shown');
-  await expect(panel.getByLabel('Application Link',{exact:true})).toHaveValue(url('manual-draft'));
   await checkbox('Applications').uncheck();await expect(settings.getByRole('status')).toContainText('Applications hidden');
   await expect(panel.locator('#sidebar-history')).toBeHidden();
   await checkbox('Application queue').uncheck();await expect(settings.getByRole('status')).toContainText('Application queue hidden');
@@ -345,7 +336,6 @@ test('Sidebar settings toggle optional categories live, preserve drafts, and kee
   await checkbox('Application queue').check();await expect(settings.getByRole('status')).toContainText('Application queue shown');
   await expect(panel.getByLabel('Job links',{exact:true})).toHaveValue(url('draft-test'));
   await checkbox('Setup & connections').uncheck();await expect(settings.getByRole('status')).toContainText('Setup & connections hidden');
-  await checkbox('Track without autofill').uncheck();await expect(settings.getByRole('status')).toContainText('Track without autofill hidden');
   await settings.setViewportSize({width:1000,height:850});
   if(process.env.SCREENSHOTS)await settings.screenshot({path:join(process.env.SCREENSHOTS,'sidebar-settings.png'),fullPage:true});
   // Corrupted preferences cannot hide the recovery action or treat strings as booleans.
