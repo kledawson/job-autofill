@@ -167,14 +167,35 @@ export function bestDegreeOption(candidates: string[], options: string[]): numbe
 }
 
 /** Character limit stated by the field or its label ("max 500 characters", "250 words"). */
+export function detectedCharacterLimit(label: string, maxLength?: number): number | undefined {
+  const limits: number[] = [];
+  if (maxLength && maxLength > 0 && maxLength < 100000) limits.push(maxLength);
+  const chars = label.match(/(\d[\d,]*)\s*(characters|chars|character)/i);
+  if (chars?.[1]) limits.push(parseInt(chars[1].replace(/,/g, ''), 10));
+  return limits.length ? Math.max(1, Math.min(...limits)) : undefined;
+}
+
+/** Explicit maximum word count in a field label or associated help text. */
+export function detectedWordLimit(label: string): number | undefined {
+  const text = label.replace(/,/g, '');
+  const patterns = [
+    /(?:maximum|max(?:imum)?(?:\s+(?:word count|limit|of))?|no more than|up to|at most|limit(?:ed)? to)\s*(?:is\s*)?(\d+)\s*words?\b/i,
+    /(\d+)\s*words?\s*(?:maximum|max|or less|or fewer)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const value = Number(pattern.exec(text)?.[1]);
+    if (Number.isSafeInteger(value) && value > 0 && value <= 5000) return value;
+  }
+  return undefined;
+}
+
+/** Character limit used by an answer, falling back when the form does not state one. */
 export function characterLimitFor(label: string, maxLength?: number): number {
   const DEFAULT = 1500;
-  let limit = maxLength && maxLength > 0 && maxLength < 100000 ? maxLength : DEFAULT;
-  const chars = label.match(/(\d[\d,]*)\s*(characters|chars|character)/i);
-  if (chars?.[1]) limit = Math.min(limit, parseInt(chars[1].replace(/,/g, ''), 10));
+  let limit = detectedCharacterLimit(label, maxLength) ?? DEFAULT;
   const words = label.match(/(\d[\d,]*)\s*words?/i);
   if (words?.[1]) limit = Math.min(limit, parseInt(words[1].replace(/,/g, ''), 10) * 6);
-  return Math.max(100, limit);
+  return Math.max(1, limit);
 }
 
 /** GPA is numeric, so shared text tokens must never choose a different score. */
