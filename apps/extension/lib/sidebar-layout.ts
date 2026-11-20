@@ -1,4 +1,4 @@
-export const SIDEBAR_ORDER = ['fill', 'queue', 'review', 'setup', 'track', 'history'] as const;
+export const SIDEBAR_ORDER = ['fill', 'queue', 'review', 'setup', 'history'] as const;
 export type SidebarId = typeof SIDEBAR_ORDER[number];
 export const isSidebarId = (id: string): id is SidebarId => (SIDEBAR_ORDER as readonly string[]).includes(id);
 export const SIDEBAR_ORDER_KEY = 'sidebarOrder';
@@ -8,7 +8,6 @@ export const SIDEBAR_CATEGORIES: Record<SidebarId, { title: string; description:
   queue: { title: 'Application queue', description: 'Paste job links and review applications in batches.', defaultVisible: true },
   review: { title: 'Review & remember', description: 'Review missing questions and save answers for next time.', defaultVisible: true },
   setup: { title: 'Setup & connections', description: 'Quick links to your profile, AI and Google Sheets settings.', defaultVisible: false },
-  track: { title: 'Track without autofill', description: 'Record an application you submitted without using autofill.', defaultVisible: false },
   history: { title: 'Applications', description: 'See your recent applications and their status.', defaultVisible: true },
 };
 export type SidebarVisibility = Record<SidebarId, boolean>;
