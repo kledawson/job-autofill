@@ -163,6 +163,10 @@ export function clampToLimit(text: string, limit: number): string {
 export interface BatchQuestion {
   question: string;
   characterLimit: number;
+  /** Explicit per-question maximum, overriding only this answer. */
+  overrideCharacterLimit?: number;
+  /** Explicit per-question word maximum. */
+  overrideWordLimit?: number;
 }
 
 /**
@@ -171,11 +175,22 @@ export interface BatchQuestion {
  */
 export function renderBatchPrompt(template: string, questions: BatchQuestion[], ctx: Omit<PromptContext, 'question' | 'characterLimit'>, profile: Profile): string {
   const list = questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n');
-  const limit = Math.min(...questions.map(q => q.characterLimit));
+  const fallbackLimits = questions.filter(q => !q.overrideCharacterLimit).map(q => q.characterLimit);
+  const limit = questions.some(q => q.overrideCharacterLimit)
+    ? Math.max(...questions.map(q => q.overrideCharacterLimit ?? q.characterLimit))
+    : Math.min(...fallbackLimits);
   const example = questions.map((_, i) => `Answer ${i + 1}\n<your answer to question ${i + 1}>`).join('\n\n');
+  const wordRules = questions.flatMap((q, i) => q.overrideWordLimit ? [`${i + 1}. ${q.overrideWordLimit} words maximum`] : []);
   return renderPrompt(template, { ...ctx, question: list, characterLimit: limit }, profile) +
-    `\n\nThere are ${questions.length} questions above. Write a separate answer to each one, following the rules above for every answer and keeping each under its question's character limit. ` +
+    `\n\nThere are ${questions.length} questions above. Write a separate answer to each one, following the rules above for every answer and using no more than its question's character limit. ` +
+    `For each answer, follow its maximum below even if it differs from shared guidance above. Count spaces and punctuation:\n${questions.map((q, i) => `${i + 1}. ${q.overrideCharacterLimit ?? q.characterLimit} characters maximum`).join('\n')}\n\n` +
+    (wordRules.length ? `Word limits for answers that have one (follow these even if they require fewer sentences):\n${wordRules.join('\n')}\n\n` : '') +
     `Format the reply exactly like this, with each marker on its own line and nothing before the first marker:\n\n${example}`;
+}
+
+/** Count whitespace-delimited words in a plain-text response. */
+export function countWords(text: string): number {
+  return text.trim() ? text.trim().split(/\s+/u).length : 0;
 }
 
 const ANSWER_MARKER = /^[\s>#*_=-]*answer\s+(\d{1,2})\b[\s:.)*_=-]*$/gim;
