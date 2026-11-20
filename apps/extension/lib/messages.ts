@@ -64,7 +64,7 @@ export interface ChatDraft {
   id: string;
   applicationId: number;
   /** The free responses this prompt asks for, in prompt order. Answered ones are removed. */
-  questions: { token: string; question: string; required: boolean; /** Its number in the prompt. */ number: number }[];
+  questions: { token: string; question: string; required: boolean; /** Its number in the prompt. */ number: number; /** User-entered maximum; omitted uses the form's detected limit and normal prompt rules. */ characterLimit?: number; /** User-entered maximum word count. */ wordLimit?: number }[];
   /** True when the prompt asked for several numbered answers at once. */
   batch?: boolean;
   company: string;
@@ -156,7 +156,7 @@ export interface BackgroundMessages {
   capturePageAnswers: { req: { applicationId: number; tokens: string[] }; res: Result<{ captures: CapturedAnswer[]; skipped: { label: string; reason: string }[] }> };
   savePageAnswers: { req: { applicationId: number; entries: { token: string; captureId: string; mapping?: MappingDraft; profile?: import('./profile-learning').ProfileConfirmation }[] }; res: Result<{ count: number; profileCount: number; note: string }> };
   /** Builds the prompt for one free response and makes it the active {@link ChatDraft}. */
-  startChatDraft: { req: { applicationId: number; tokens: string[] }; res: Result<{ draft: ChatDraft }> };
+  startChatDraft: { req: { applicationId: number; tokens: string[]; characterLimits?: Record<string, number>; wordLimits?: Record<string, number> }; res: Result<{ draft: ChatDraft }> };
   /** Opens the active draft's chat website in a new tab, putting the prompt in its message box when allowed. */
   openChatDraft: { req: { draftId: string }; res: Result<{ inserting: boolean }> };
   /** Writes the replies the person pasted into the draft's fields, then returns to the application tab. */
