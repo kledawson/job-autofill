@@ -8,6 +8,10 @@ export interface FieldFeedback {
   status: 'verified' | 'review' | 'missing' | 'entered' | 'optional';
   source: 'profile' | 'memory' | 'preset' | 'ai' | 'page' | 'none';
   reason: string;
+  /** A limit found in the field's label or native maxlength, excluding the generic fallback. */
+  characterLimit?: number;
+  /** An explicit maximum word count found in the field label or associated help text. */
+  wordLimit?: number;
   /** The scanned control type lets the sidebar distinguish cover-letter text fields from uploads. */
   kind?: FieldKind;
   /** An empty free response that can be drafted on the chosen chat website. */
@@ -28,9 +32,11 @@ export function parseFieldFeedback(value: unknown): FieldFeedback[] {
       typeof f.label !== 'string' || !f.label.trim() || f.label.length > 700 || typeof f.required !== 'boolean' ||
       !['verified', 'review', 'missing', 'entered', 'optional'].includes(f.status) ||
       !['profile', 'memory', 'preset', 'ai', 'page', 'none'].includes(f.source) ||
+      (f.characterLimit !== undefined && (!Number.isInteger(f.characterLimit) || f.characterLimit < 1 || f.characterLimit >= 100000)) ||
+      (f.wordLimit !== undefined && (!Number.isInteger(f.wordLimit) || f.wordLimit < 1 || f.wordLimit > 5000)) ||
       (f.kind !== undefined && !['text', 'textarea', 'select', 'combobox', 'radio', 'checkbox', 'checkboxGroup', 'yesno', 'file', 'listbox', 'prompt'].includes(f.kind)) ||
       typeof f.reason !== 'string' || f.reason.length > 300 || (f.draft !== undefined && f.draft !== true)) throw new Error('Invalid field feedback.');
     tokens.add(f.token);
-    return { token: f.token, label: f.label, required: f.required, status: f.status, source: f.source, reason: f.reason, ...(f.kind ? { kind: f.kind } : {}), ...(f.draft ? { draft: true as const } : {}) };
+    return { token: f.token, label: f.label, required: f.required, status: f.status, source: f.source, reason: f.reason, ...(f.characterLimit ? { characterLimit: f.characterLimit } : {}), ...(f.wordLimit ? { wordLimit: f.wordLimit } : {}), ...(f.kind ? { kind: f.kind } : {}), ...(f.draft ? { draft: true as const } : {}) };
   });
 }

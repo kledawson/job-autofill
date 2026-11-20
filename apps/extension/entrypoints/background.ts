@@ -25,7 +25,7 @@ import {
 } from '@/lib/messages';
 import { CHAT_PROVIDERS, chatProviderFor, composerSelectors, insertPrompt, onProviderSite, type InsertResult } from '@/lib/chat-providers';
 import { detectPlatform, platformFor, isWebUrl, jobKey, toApplicationUrl } from '@/lib/platforms';
-import { clampToLimit, renderBatchPrompt, renderPrompt, type PromptContext } from '@/lib/prompt';
+import { clampToLimit, countWords, renderBatchPrompt, renderPrompt, type PromptContext } from '@/lib/prompt';
 import { getSettings, updateSettings, type PublicSettings } from '@/lib/settings';
 import { appendApplication, SHEET_COLUMNS, parseSheetUrl, sheetTabId, testSheetConnection, sheetsConfigured } from '@/lib/sheets';
 import { connectDoc, docsConfigured, parseDocsUrl, replaceDocText } from '@/lib/google-docs';
@@ -585,22 +585,27 @@ const handlers: Handlers = {
     const provider = chatProviderFor(settings.answerSource);
     if (!provider) throw new Error('Choose a chat website for free responses in Settings → Connections first.');
     if (!Array.isArray(req.tokens) || !req.tokens.length || req.tokens.length > 20 || req.tokens.some(t => typeof t !== 'string') || new Set(req.tokens).size !== req.tokens.length) throw new Error('Choose up to 20 questions to draft.');
+    const characterLimits = req.characterLimits ?? {};
+    if (!characterLimits || typeof characterLimits !== 'object' || Array.isArray(characterLimits) || Object.entries(characterLimits).some(([token, limit]) => !req.tokens.includes(token) || !Number.isInteger(limit) || limit < 1 || limit > 20000)) throw new Error('Character limits must be whole numbers from 1 to 20,000 for selected questions.');
+    const wordLimits = req.wordLimits ?? {};
+    if (!wordLimits || typeof wordLimits !== 'object' || Array.isArray(wordLimits) || Object.entries(wordLimits).some(([token, limit]) => !req.tokens.includes(token) || !Number.isInteger(limit) || limit < 1 || limit > 5000)) throw new Error('Word limits must be whole numbers from 1 to 5,000 for selected questions.');
     const app = await draftApplication(req.applicationId);
     const fields = req.tokens.map(token => app.fieldFeedback?.find(f => f.token === token));
     if (fields.some(f => !f?.draft)) throw new Error('A question already has an answer or changed on the page. Click Fill this page to refresh it.');
-    const requests: PromptContext[] = [];
+    const requests: (PromptContext & { overrideCharacterLimit?: number; overrideWordLimit?: number })[] = [];
     for (const field of fields) {
       const result = await browser.tabs.sendMessage(app.tabId!, { type: 'draftRequest', token: field!.token, question: field!.label, runId: app.runId } satisfies ContentMessage, { frameId: app.frameId ?? 0 }).catch(() => null);
       if (!result?.ok) throw new Error(result?.error ?? 'The application page is not ready. Fill it again first.');
-      requests.push(parseDraftRequest(result.request));
+      const request = parseDraftRequest(result.request);
+      requests.push({ ...request, ...(characterLimits[field!.token] ? { characterLimit: characterLimits[field!.token]!, overrideCharacterLimit: characterLimits[field!.token]! } : {}), ...(wordLimits[field!.token] ? { overrideWordLimit: wordLimits[field!.token]! } : {}) });
     }
     const run = app.runId ? await db.fillRuns.get(app.runId) : undefined;
     const context = run && run.tabId === app.tabId ? run.context : await buildPresetContext();
     const [first] = requests;
-    const prompt = requests.length === 1 ? answerPrompt(renderPrompt(settings.promptTemplate, first!, context.profile), context)
+    const prompt = requests.length === 1 ? answerPrompt(renderPrompt(settings.promptTemplate, first!, context.profile) + `\n\nCharacter limit: no more than ${first!.characterLimit} characters, including spaces and punctuation.${first!.overrideWordLimit ? `\nWord limit: no more than ${first!.overrideWordLimit} words; follow this limit even if it requires fewer sentences.` : ''}`, context)
       : answerPrompt(renderBatchPrompt(settings.promptTemplate, requests, { company: first!.company, role: first!.role, jobDescription: first!.jobDescription, jobUrl: first!.jobUrl }, context.profile), context);
     const draft: ChatDraft = {
-      id: crypto.randomUUID(), applicationId: app.id!, questions: fields.map((f, i) => ({ token: f!.token, question: f!.label, required: f!.required, number: i + 1 })),
+      id: crypto.randomUUID(), applicationId: app.id!, questions: fields.map((f, i) => ({ token: f!.token, question: f!.label, required: f!.required, number: i + 1, characterLimit: requests[i]!.characterLimit, ...(requests[i]!.overrideWordLimit ? { wordLimit: requests[i]!.overrideWordLimit } : {}) })),
       ...(requests.length > 1 ? { batch: true } : {}), company: app.company, role: app.role, provider: provider.id, prompt, createdAt: Date.now(),
     };
     await clearChatInserts();
@@ -639,8 +644,9 @@ const handlers: Handlers = {
     // filled again); the page session finds it by the draft's token or its exact wording.
     const app = await draftApplication(draft.applicationId);
     const frame = { frameId: app.frameId ?? 0 };
-    const results: { token: string; ok: boolean; note: string }[] = [];
-    for (const a of answers) {
+    const results: { token: string; ok: boolean; note: string }[] = answers.filter(a => a.characterLimit && a.answer.length > a.characterLimit).map(a => ({ token: a.token, ok: false, note: `This answer is ${a.answer.length} characters; shorten it to ${a.characterLimit} or fewer before using it.` }));
+    results.push(...answers.filter(a => a.wordLimit && countWords(a.answer) > a.wordLimit).map(a => ({ token: a.token, ok: false, note: `This answer is ${countWords(a.answer)} words; shorten it to ${a.wordLimit} or fewer before using it.` })));
+    for (const a of answers.filter(a => (!a.characterLimit || a.answer.length <= a.characterLimit) && (!a.wordLimit || countWords(a.answer) <= a.wordLimit))) {
       const result = await browser.tabs.sendMessage(app.tabId!, { type: 'applyDraft', token: a.token, question: a.question, text: a.answer, runId: app.runId } satisfies ContentMessage, frame).catch(() => null);
       const note = typeof result?.note === 'string' ? result.note : typeof result?.error === 'string' ? result.error : 'The application page stopped responding. Refresh it, click Fill this page, then use the answer again (your reply is still here).';
       results.push({ token: a.token, ok: !!result?.ok, note: note.slice(0, 300) });

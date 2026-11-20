@@ -249,7 +249,7 @@ test('opening a pasted link pins the requested preset before loading and cleans 
   await expect.poll(async () => (await readRows('fillRuns')).length).toBe(0);
 });
 
-test('tracking without autofill still reads the posting and deletes its record without filling the form', async () => {
+test('Add applied position records the current page without filling the form', async () => {
   const baseline = await readRows('profile');
   const url = URL.replace('preset-proof', 'tracking-proof');
   const form = await context.newPage();
@@ -263,16 +263,11 @@ test('tracking without autofill still reads the posting and deletes its record w
   });
   const sidebar = await context.newPage();
   await sidebar.goto('chrome-extension://' + extensionId + '/sidepanel.html');
-  const appearance = await context.newPage();
-  await appearance.goto('chrome-extension://' + extensionId + '/options.html#sidebar');
-  await appearance.getByRole('checkbox',{name:/^Track without autofill/}).check();
-  await expect(appearance.getByRole('status')).toContainText('Track without autofill shown');
-  await appearance.close();
-  await sidebar.getByRole('button', { name: 'Toggle Track Without Autofill', exact: true }).click();
-  const tracking = sidebar.locator('#sidebar-track-body');
-  await tracking.getByLabel('Application Link', { exact: true }).fill(url);
-  await tracking.getByRole('button', { name: 'Mark as submitted', exact: true }).click();
-  await expect(tracking).toContainText('Marked as submitted.');
+  await form.bringToFront();
+  const tracking = sidebar.getByRole('button', { name: 'Add applied position to spreadsheet', exact: true });
+  await expect(tracking).toBeVisible();
+  await tracking.click();
+  await expect(sidebar.getByText(/Applied position recorded\./)).toBeVisible();
   const application = (await readRows('applications')).find(a => a.url === url);
   expect(application).toMatchObject({ company: 'Contoso', role: 'Fictional Hardware Engineer', status: 'Submitted', filledCount: 0 });
   expect(application.presetId).toBeUndefined();

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { browser } from 'wxt/browser';
 import { CHAT_PROVIDERS, type ChatProvider } from '@/lib/chat-providers';
-import { splitBatchReply } from '@/lib/prompt';
+import { countWords, splitBatchReply } from '@/lib/prompt';
 import { CHAT_DRAFT_KEY, sendToBackground, type ChatDraft } from '@/lib/messages';
 import { Button, Notice, Textarea } from './ui';
 
@@ -31,9 +31,9 @@ export async function copyText(text: string): Promise<boolean> {
  * from a click: Chrome shows the site permission prompt only then. Declining still works; the prompt is then only
  * copied for the person to paste.
  */
-export async function startChatDraft(applicationId: number, tokens: string[], chat: ChatProvider): Promise<void> {
+export async function startChatDraft(applicationId: number, tokens: string[], chat: ChatProvider, characterLimits?: Record<string, number>, wordLimits?: Record<string, number>): Promise<void> {
   await browser.permissions.request({ origins: chat.origins }).catch(() => false);
-  const res = await sendToBackground('startChatDraft', { applicationId, tokens });
+  const res = await sendToBackground('startChatDraft', { applicationId, tokens, ...(characterLimits ? { characterLimits } : {}), ...(wordLimits ? { wordLimits } : {}) });
   if (!res.ok) throw new Error(res.error);
   // Copy while this panel still has focus; opening the chat tab moves focus away.
   await copyText(res.draft.prompt);
@@ -123,11 +123,15 @@ export function ChatDraftCard({ children }: { children?: ReactNode }) {
       </>}
       {draft.questions.map(q => {
         const id = `chat-draft-${q.token}`;
+        const overLimit = !!q.characterLimit && (answers[q.token]?.length ?? 0) > q.characterLimit;
+        const overWordLimit = !!q.wordLimit && countWords(answers[q.token] ?? '') > q.wordLimit;
         return <div key={q.token} className="space-y-1">
           <label className="block font-medium text-slate-700" htmlFor={id}>{total === 1 && !draft.batch ? `Reply from ${name}` : `Answer ${q.number}: ${q.question}`}</label>
           <Textarea id={id} className="bg-white text-xs" value={answers[q.token] ?? ''} maxLength={20000}
-            placeholder={draft.batch ? `Filled from the whole reply, or paste answer ${q.number} here` : `Paste ${name}’s reply here`}
+            placeholder={draft.batch ? `Filled from the whole reply or paste answer ${q.number} here` : `Paste ${name}’s reply here`}
             onChange={e => setAnswers(current => ({ ...current, [q.token]: e.target.value }))} />
+          {q.characterLimit && <p className={overLimit ? 'text-red-700' : 'text-slate-500'}>{answers[q.token]?.length ?? 0} / {q.characterLimit} characters{overLimit ? ' · shorten this answer before using it' : ''}</p>}
+          {q.wordLimit && <p className={overWordLimit ? 'text-red-700' : 'text-slate-500'}>{countWords(answers[q.token] ?? '')} / {q.wordLimit} words{overWordLimit ? ' · shorten this answer before using it' : ''}</p>}
           {failures[q.token] && <Notice tone="error">{failures[q.token]}</Notice>}
         </div>;
       })}

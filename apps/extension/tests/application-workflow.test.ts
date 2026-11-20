@@ -47,9 +47,10 @@ describe('shared workflow presentation', () => {
 
 describe('fixed Fill recovery control', () => {
   it('normalizes older orders without changing optional section relative order', () => {
-    // 'presets' is a retired section: the preset selector now sits above Fill this page.
+    // 'presets' and 'track' are retired sections: presets sit above Fill this page,
+    // and applied positions can be recorded from the current page.
     expect(readSidebarOrder({ version: 1, order: ['presets', 'history', 'queue', 'fill', 'review', 'setup', 'track'] }))
-      .toEqual(['fill', 'history', 'queue', 'review', 'setup', 'track']);
+      .toEqual(['fill', 'history', 'queue', 'review', 'setup']);
     expect(readSidebarVisibility({ version: 1, categories: { fill: false, history: false } })).toMatchObject({ fill: true, history: false });
   });
 });

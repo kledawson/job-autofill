@@ -38,7 +38,7 @@ import {
 } from './fill';
 import { clearOutline, outline, revealField, type ReviewState } from './highlight';
 import { feedbackPriority, type FieldFeedback } from '../field-feedback';
-import { bestGpaOption, characterLimitFor } from './match';
+import { bestGpaOption, characterLimitFor, detectedCharacterLimit, detectedWordLimit } from './match';
 import { clampToLimit } from '../prompt';
 import { findPostingLink } from '../posting-link';
 import { composedCompare, isHidden, isSignInPage, scanFields, type ScannedField } from './scan';
@@ -296,7 +296,7 @@ export class FillSession {
     await this.loadDescription().catch(() => undefined);
     return {
       question: rec.field.label,
-      characterLimit: characterLimitFor(rec.field.label, rec.field.maxLength),
+      characterLimit: characterLimitFor(`${rec.field.label} ${rec.field.limitHint ?? ''}`, rec.field.maxLength),
       company: this.jobInfo.company,
       role: this.jobInfo.role,
       jobDescription: this.description ?? '',
@@ -317,7 +317,7 @@ export class FillSession {
     const rec = this.liveFreeResponse(token, question);
     if (fieldHasValue(rec.field)) throw new Error('This question already has an answer on the page, so it was kept. Clear it there to use the draft.');
     // A box shorter than the usual minimum still gets a reply cut at a sentence, not mid-word.
-    const limit = Math.min(characterLimitFor(rec.field.label, rec.field.maxLength), rec.field.maxLength || Infinity);
+    const limit = Math.min(characterLimitFor(`${rec.field.label} ${rec.field.limitHint ?? ''}`, rec.field.maxLength), rec.field.maxLength || Infinity);
     const full = clampToLimit(text, Infinity), answer = clampToLimit(text, limit);
     if (!answer) throw new Error('Paste the reply first.');
     rec.outcome = fillText(rec.field, answer);
@@ -1055,7 +1055,7 @@ export class FillSession {
     await this.loadDescription();
     const res = await this.deps.answer({
       question: field.label,
-      characterLimit: characterLimitFor(field.label, field.maxLength),
+      characterLimit: characterLimitFor(`${field.label} ${field.limitHint ?? ''}`, field.maxLength),
       company: this.jobInfo.company,
       role: this.jobInfo.role,
       jobDescription: this.description ?? '',
@@ -1156,7 +1156,10 @@ export class FillSession {
           status === 'review' ? rec.ai ? 'Review this AI draft or interpretation before submitting.' : 'The widget does not expose enough information to verify the complete answer. Check it on the website.' :
           source === 'memory' ? 'An approved Memory was applied and its current selection was verified.' : source === 'preset' ? 'Your prepared preset response was applied and read back.' :
           'Your saved Profile answer was applied and read back. Check that the saved fact is current.');
-        fieldFeedback.push({ token: rec.token!, label: field.label, required: field.required, status, source, reason, kind: field.kind, ...(draftable ? { draft: true as const } : {}) });
+        fieldFeedback.push({ token: rec.token!, label: field.label, required: field.required, status, source, reason, kind: field.kind,
+          ...(detectedCharacterLimit(`${field.label} ${field.limitHint ?? ''}`, field.maxLength) ? { characterLimit: detectedCharacterLimit(`${field.label} ${field.limitHint ?? ''}`, field.maxLength) } : {}),
+          ...(detectedWordLimit(`${field.label} ${field.limitHint ?? ''}`) ? { wordLimit: detectedWordLimit(`${field.label} ${field.limitHint ?? ''}`) } : {}),
+          ...(draftable ? { draft: true as const } : {}) });
         if (status === 'review') state = rec.ai ? 'ai' : 'review';
         else if (status === 'entered') state = 'entered';
         else if (status === 'optional') state = 'optional';

@@ -86,9 +86,12 @@ Pick who writes free responses in the **Free responses** menu above **Fill this 
 Connections): **None** (you answer them; the default for new installs), **Gemini API**, or, to avoid using
 API credits, ChatGPT, Claude, Gemini (website) or Perplexity. Filling then leaves those questions
 empty. They are listed under **Needs your answer** below the fill counts (click a question to jump to it).
-**Draft all N in ChatGPT** asks every free response in one prompt; pasting the whole reply fills a box per
-question for you to check. **Draft in ChatGPT** (for example) on one question copies your prompt (from the Prompt tab) and
-opens a new chat. If you allowed Job Autofill to access that site when choosing it, the prompt is already
+Select the responses to include, then choose **Draft N responses in ChatGPT** to ask those questions in one prompt;
+pasting the whole reply fills a box per question for you to check. Each question has **Max characters** and **Max words** fields.
+Character limits are prefilled when the label, associated help text, or text box exposes a limit; word limits are prefilled
+when the question or help text states a maximum word count. You can edit either value. Leave Max words blank for no word cap.
+Limits are included in the prompt, shown against pasted answers, and enforced before an answer is placed on the page. Select one or more questions and choose
+**Draft N responses in ChatGPT** (for example) to copy the prompt (from the Prompt tab) and open a new chat. If you allowed Job Autofill to access that site when choosing it, the prompt is already
 in the message box; otherwise paste it with ⌘V / Ctrl+V. Read it, press **Send**, copy the reply with
 the chat's copy button, paste it into the **Drafting in …** card and click **Use answer**. The answer goes
 into that question (if it is still empty), outlined amber for review, and you are taken back to the
@@ -353,7 +356,7 @@ The latest saved Profile and Memories are used when each fill begins. Backups do
 open; Review & remember, Presets and Applications start closed, with Applications last by default.
 Missing-question review opens when a fill finishes without moving your focus. Optional sections remember
 your layout. **Settings → Sidebar** has checkboxes for Queue, Review & remember, Setup & connections,
-Track without autofill, Presets and Applications. Setup and Track start hidden. Hiding a category preserves
+Presets and Applications. Setup starts hidden. Hiding a category preserves
 its drafts and data; running queues continue. Manual filling on another tab can run while the queue fills.
 
 Drag a dotted handle to reorder sections, or click it for Move up/down buttons; keyboard Up/Down arrows work on a focused handle. **Reset order** restores the default order without closing sections or losing drafts.

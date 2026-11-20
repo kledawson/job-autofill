@@ -29,6 +29,8 @@ export interface ScannedField {
   /** Option labels for selects and groups (aligned with `members` for groups). */
   options: string[];
   label: string;
+  /** Nearby, field-associated instructions such as "The maximum length is 50 characters." */
+  limitHint?: string;
   id: string;
   name: string;
   /** Ashby's data-field-path or Workday's data-automation-id, when present. */
@@ -450,6 +452,7 @@ function comboboxOutline(input: HTMLElement): HTMLElement {
 function makeField(kind: FieldKind, el: HTMLElement, members: HTMLElement[], options: string[], outlineTarget: HTMLElement): ScannedField {
   const found = findLabel(el, members);
   const { labelEl } = found;
+  const limitHint = fieldLimitHint(el, members, labelEl);
   let text = found.text;
   // An upload inside a component named for its purpose (<oc-resume-upload>) says what it is through that name.
   if (kind === 'file' && !/resume|cv|cover|transcript/i.test(text)) {
@@ -475,6 +478,7 @@ function makeField(kind: FieldKind, el: HTMLElement, members: HTMLElement[], opt
     members,
     options,
     label: text,
+    ...(limitHint ? { limitHint } : {}),
     id: el.id,
     name: el.getAttribute('name') ?? '',
     path: el.closest('[data-field-path]')?.getAttribute('data-field-path') ?? el.getAttribute('data-automation-id') ?? '',
@@ -484,6 +488,42 @@ function makeField(kind: FieldKind, el: HTMLElement, members: HTMLElement[], opt
     maxLength,
     outlineTarget,
   };
+}
+
+/** Reads only help text associated with this control, never the contents of a response or another field. */
+function fieldLimitHint(el: HTMLElement, members: HTMLElement[], labelEl: Element | null): string | undefined {
+  const root = rootOf(el);
+  const describedBy = (el.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+    .map(id => textOf(root.getElementById(id))).filter(Boolean);
+  const ariaDescription = el.getAttribute('aria-description');
+  if (ariaDescription) describedBy.push(cleanLabel(ariaDescription));
+
+  if (labelEl) {
+    for (let container = el.parentElement, depth = 0; container && depth < 6; container = container.parentElement, depth++) {
+      if (!container.contains(labelEl)) continue;
+      const controls = Array.from(container.querySelectorAll<HTMLElement>(CONTROLS));
+      if (controls.some(control => !members.includes(control) && control !== el)) continue;
+      const branch = (node: Element): Element => {
+        let current = node;
+        while (current.parentElement && current.parentElement !== container) current = current.parentElement;
+        return current;
+      };
+      const labelBranch = branch(labelEl), controlBranch = branch(el);
+      const children = Array.from(container.children);
+      const labelIndex = children.indexOf(labelBranch), controlIndex = children.indexOf(controlBranch);
+      if (labelIndex >= 0 && controlIndex > labelIndex) {
+        for (const sibling of children.slice(labelIndex + 1, controlIndex)) {
+          if (!sibling.matches(CONTROLS) && !sibling.querySelector(CONTROLS)) {
+            const text = textOf(sibling);
+            if (text && text.length <= 500) describedBy.push(text);
+          }
+        }
+        break;
+      }
+    }
+  }
+  const unique = [...new Set(describedBy)].filter(Boolean);
+  return unique.length ? unique.join(' ').slice(0, 1000) : undefined;
 }
 
 /** Finds every fillable control under `root`, grouping radios, checkboxes, and Yes/No buttons. */
