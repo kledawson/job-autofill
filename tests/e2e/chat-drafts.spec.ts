@@ -86,8 +86,12 @@ test('a free response is drafted in the chosen chat website and pasted back for 
   // The draft action sits under the fill counts, not in Review & Remember.
   await job.bringToFront();
   const drafts = needs();
-  await expect(drafts.getByRole('button', { name: 'Draft in ChatGPT' })).toHaveCount(1);
+  await expect(drafts.getByRole('button', { name: /Draft 1 response in ChatGPT/ })).toHaveCount(0);
   await expect(drafts.getByRole('button', { name: /Draft all/ })).toHaveCount(0);
+  await drafts.getByRole('checkbox', { name: `Select ${essay.label} for drafting` }).check();
+  await expect(drafts.getByRole('button', { name: 'Draft 1 response in ChatGPT' })).toBeVisible();
+  await drafts.getByRole('checkbox', { name: `Select ${essay.label} for drafting` }).uncheck();
+  await expect(drafts.getByRole('button', { name: /Draft 1 response in ChatGPT/ })).toHaveCount(0);
   await expect(drafts).toContainText('Why do you want to work at Fictional Co?');
   await expect(panel.getByRole('list', { name: 'Questions to review' }).getByRole('button', { name: /Draft in/ })).toHaveCount(0);
   await expect(stat('Need review')).toHaveText('1');
@@ -220,8 +224,12 @@ test('the Free responses menu above Fill this page switches who writes them', as
   await job.bringToFront();
   const menu = panel.getByLabel('Free responses');
   await expect(menu).toHaveValue('chatgpt');
-  // Two free responses: one Draft each plus Draft all.
-  await expect(needs().getByRole('button', { name: /Draft/ })).toHaveCount(3);
+  // Two free responses: Draft all is available until individual questions are selected.
+  await expect(needs().getByRole('button', { name: /Draft/ })).toHaveCount(1);
+  const firstQuestion = needs().getByRole('checkbox', { name: /Select Why do you want to work at Fictional Co\?/ });
+  await firstQuestion.check();
+  await expect(needs().getByRole('button', { name: 'Draft 1 response in ChatGPT' })).toBeVisible();
+  await firstQuestion.uncheck();
   await menu.selectOption('none');
   await expect.poll(() => panel.evaluate(async () => (await chrome.storage.local.get('answerSource')).answerSource)).toBe('none');
   await expect(panel.getByText('Free responses are left for you to answer.')).toBeVisible();
