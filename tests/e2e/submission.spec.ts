@@ -102,7 +102,7 @@ test('validation keeps the tab open; an unfamiliar result retains explicit confi
   await page.locator('#reference').fill('Synthetic review reference'); await page.evaluate(() => { (window as any).outcome = 'unknown'; });
   await page.getByRole('button', { name: 'Submit application', exact: true }).click();
   expect((await appFor(url)).status).toBe('Ready for review');
-  await expect(panel.getByRole('button', { name: 'Add Applied Position to Spreadsheet', exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Add applied position to spreadsheet', exact: true })).toBeVisible();
   const app = await appFor(url);
   expect(await request('markSubmitted', { applicationId: app.id })).toMatchObject({ ok: true });
   const submitted = await appFor(url); expect(submitted.submissionSource).toBe('user');
